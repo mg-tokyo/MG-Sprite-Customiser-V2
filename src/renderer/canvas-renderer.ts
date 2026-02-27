@@ -40,10 +40,17 @@ export async function renderSlot(slot: Slot, gifFrameIndex?: number): Promise<HT
   if (slot.isAnimated && slot.gifFrames && slot.gifFrames.length > 0) {
     const fi = Math.max(0, Math.min(frameIdx, slot.gifFrames.length - 1));
     const src = slot.gifFrames[fi].canvas;
-    canvas = document.createElement('canvas');
-    canvas.width = src.width;
-    canvas.height = src.height;
-    canvas.getContext('2d')!.drawImage(src, 0, 0);
+    // Guard: after JSON undo/redo serialisation the canvas becomes a plain object.
+    // Fall back to spriteUrl so a stale undo/redo entry degrades gracefully instead of crashing.
+    if (src instanceof HTMLCanvasElement && src.width > 0 && src.height > 0) {
+      canvas = document.createElement('canvas');
+      canvas.width = src.width;
+      canvas.height = src.height;
+      canvas.getContext('2d')!.drawImage(src, 0, 0);
+    } else {
+      const img = await spriteLoader.load(slot.spriteUrl);
+      canvas = spriteToCanvas(img);
+    }
   } else {
     const img = await spriteLoader.load(slot.spriteUrl);
     canvas = spriteToCanvas(img);

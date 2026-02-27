@@ -14,6 +14,7 @@ import { CustomDropdown } from './custom-dropdown';
 import { renderThumb } from './thumbnail';
 import type { DropdownItem } from './custom-dropdown';
 import { spriteLoader } from '../api/sprite-loader';
+import type { SpriteFrame } from '../api/types';
 
 // ── Hit-test content bounds ──────────────────────────────────────────────────
 // Cache tight bounding boxes (content only, transparent padding stripped) so
@@ -534,6 +535,9 @@ export class App {
     const restoreId = getActiveSlot().spriteKey || undefined;
     this.spriteDropdown.setItems(items, restoreId);
 
+    // For the cards category, asynchronously generate composited thumbnails for the list
+    if (cat === 'cards') this.generateCardListThumbnails(items);
+
     // Pre-warm SpriteLoader for the entire category at low priority.
     // By the time the user browses and picks a sprite, it will already be in the
     // in-memory LRU cache → zero lag on preview render.
@@ -562,7 +566,16 @@ export class App {
         thumb.width = 34;
         thumb.height = 34;
         btn.appendChild(thumb);
-        renderThumb(slot.spriteUrl, thumb);
+        // Card presets store the composited canvas in gifFrames[0] — render it directly
+        // instead of loading from spriteUrl (which is just the CardBottom layer URL).
+        const gifCanvas = slot.gifFrames?.[0]?.canvas;
+        if (gifCanvas instanceof HTMLCanvasElement && gifCanvas.width > 0) {
+          const ctx = thumb.getContext('2d')!;
+          const scale = Math.min(34 / gifCanvas.width, 34 / gifCanvas.height);
+          ctx.drawImage(gifCanvas, (34 - gifCanvas.width * scale) / 2, (34 - gifCanvas.height * scale) / 2, gifCanvas.width * scale, gifCanvas.height * scale);
+        } else {
+          renderThumb(slot.spriteUrl, thumb);
+        }
       } else {
         btn.textContent = String(i + 1);
       }
@@ -1092,41 +1105,150 @@ export class App {
   }
 
   /**
+   * Asynchronously composite all card preset items and push the results into the
+   * dropdown list thumbnails. Runs in parallel — atlas is fetched once and cached.
+   */
+  private async generateCardListThumbnails(items: DropdownItem[]): Promise<void> {
+    type LayerSrc = HTMLImageElement | HTMLCanvasElement;
+    const getW = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.width : s.naturalWidth;
+    const getH = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.height : s.naturalHeight;
+
+    await Promise.allSettled(
+      items.filter(i => i.cardPresetUrls && i.cardPresetUrls.length > 0).map(async item => {
+        const layerResults = await Promise.allSettled(
+          item.cardPresetUrls!.map(url => {
+            const name = url.split('/').pop()?.split('?')[0].replace('.png', '') ?? '';
+            return this.loadSpriteLayer(name, url);
+          }),
+        );
+        const layers = layerResults
+          .filter((r): r is PromiseFulfilledResult<LayerSrc | null> => r.status === 'fulfilled')
+          .map(r => r.value)
+          .filter((v): v is LayerSrc => v !== null);
+        if (layers.length === 0) return;
+
+        const width  = Math.max(...layers.map(getW));
+        const height = Math.max(...layers.map(getH));
+        const canvas = document.createElement('canvas');
+        canvas.width  = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        for (const layer of layers) {
+          ctx.drawImage(layer as CanvasImageSource, (width - getW(layer)) / 2, (height - getH(layer)) / 2);
+        }
+        this.spriteDropdown.setItemThumbCanvas(item.id, canvas);
+      }),
+    );
+  }
+
+  /**
+   * Load a sprite layer for card compositing.
+   * Primary path: mg-api PNG (fast, cached).
+   * Fallback: if mg-api returns a non-OK response (e.g. 403 for CardMiddle sprites),
+   * locate the SpriteFrame entry in sprite-data and extract the region directly from
+   * the source atlas on the game CDN. The proxy handles magicgarden.gg CORS.
+   */
+  private async loadSpriteLayer(
+    layerName: string,
+    mgApiUrl: string,
+  ): Promise<HTMLImageElement | HTMLCanvasElement | null> {
+    // Primary: mg-api PNG
+    try {
+      return await spriteLoader.load(mgApiUrl);
+    } catch {
+      // Fall through to atlas extraction
+    }
+
+    // Fallback: find the SpriteFrame and slice it from the source atlas
+    const sd = state.spriteData;
+    if (!sd) return null;
+
+    let frameEntry: SpriteFrame | null = null;
+    outer: for (const cat of sd.categories) {
+      for (const item of cat.items) {
+        if (item.type === 'frame' && (item.id.split('/').pop() ?? '') === layerName) {
+          frameEntry = item as SpriteFrame;
+          break outer;
+        }
+      }
+    }
+    if (!frameEntry) return null;
+
+    try {
+      const atlasImg = await spriteLoader.load(frameEntry.url);
+      const { x, y, w, h } = frameEntry.frame;
+      const out = document.createElement('canvas');
+      out.width  = w;
+      out.height = h;
+      const ctx = out.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(atlasImg, x, y, w, h, 0, 0, w, h);
+      return out;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Composite all card layers (Bottom → Middle → Top) into a single canvas and load
-   * the result as one sprite in the active slot.
+   * it into the active slot without any blob-URL or re-fetch roundtrip.
+   *
+   * Each layer is attempted via mg-api first; on 403 it falls back to direct atlas
+   * extraction (loadSpriteLayer). The composited canvas is stored as gifFrames[0] —
+   * the same in-memory path used for uploaded GIFs.
    */
   private async applyCardPreset(urls: string[], label: string): Promise<void> {
     this.stopGifPreview();
 
-    let images: HTMLImageElement[];
-    try {
-      images = await Promise.all(urls.map(url => spriteLoader.load(url)));
-    } catch (err) {
-      console.error('[MG] Failed to load card preset layers:', err);
+    type LayerSrc = HTMLImageElement | HTMLCanvasElement;
+    const layerResults = await Promise.allSettled(
+      urls.map(url => {
+        const layerName = url.split('/').pop()?.split('?')[0].replace('.png', '') ?? '';
+        return this.loadSpriteLayer(layerName, url);
+      }),
+    );
+
+    const getW = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.width : s.naturalWidth;
+    const getH = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.height : s.naturalHeight;
+
+    const layers: LayerSrc[] = layerResults
+      .filter((r): r is PromiseFulfilledResult<LayerSrc | null> => r.status === 'fulfilled')
+      .map(r => r.value)
+      .filter((v): v is LayerSrc => v !== null);
+
+    if (layers.length === 0) {
+      console.error('[MG] Failed to load any card preset layers');
       return;
     }
 
-    // Composite all layers onto a single canvas (centred within the max dimensions)
-    const width  = Math.max(...images.map(img => img.naturalWidth));
-    const height = Math.max(...images.map(img => img.naturalHeight));
-    const canvas = document.createElement('canvas');
-    canvas.width  = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d')!;
-    for (const img of images) {
-      ctx.drawImage(img, (width - img.naturalWidth) / 2, (height - img.naturalHeight) / 2);
+    try {
+      const width  = Math.max(...layers.map(getW));
+      const height = Math.max(...layers.map(getH));
+      const canvas = document.createElement('canvas');
+      canvas.width  = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('No 2d context');
+      for (const layer of layers) {
+        const lw = getW(layer);
+        const lh = getH(layer);
+        ctx.drawImage(layer as CanvasImageSource, (width - lw) / 2, (height - lh) / 2);
+      }
+
+      updateSlot(state.activeSlotIndex, {
+        type: 'custom',
+        spriteKey: label,
+        spriteUrl: urls[0],              // CardBottom URL — slot thumbnail falls back to this
+        gifFrames: [{ canvas, delay: 0 }],
+        isAnimated: true,
+      });
+
+      // Update dropdown trigger thumbnail to show the composited card
+      this.spriteDropdown.setTriggerCanvas(canvas);
+    } catch (err) {
+      console.error('[MG] Failed to composite card preset:', err);
     }
-
-    const blob = await new Promise<Blob>(resolve => canvas.toBlob(b => resolve(b!), 'image/png'));
-    const blobUrl = URL.createObjectURL(blob);
-
-    updateSlot(state.activeSlotIndex, {
-      type: 'custom',
-      spriteKey: label,
-      spriteUrl: blobUrl,
-      gifFrames: undefined,
-      isAnimated: false,
-    });
   }
 
   /**

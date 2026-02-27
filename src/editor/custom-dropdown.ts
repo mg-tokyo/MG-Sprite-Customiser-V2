@@ -225,6 +225,46 @@ export class CustomDropdown {
     this.focusedIndex = firstVisible;
   }
 
+  /**
+   * Overwrite the trigger button thumbnail with a pre-composited canvas.
+   * Called by card presets after all layers are stitched in memory.
+   */
+  setTriggerCanvas(canvas: HTMLCanvasElement): void {
+    if (!this.showThumbs) return;
+    this.triggerThumb.style.display = '';
+    const ctx = this.triggerThumb.getContext('2d');
+    if (!ctx) return;
+    const tw = this.triggerThumb.width;
+    const th = this.triggerThumb.height;
+    ctx.clearRect(0, 0, tw, th);
+    const scale = Math.min(tw / canvas.width, th / canvas.height);
+    const dw = canvas.width * scale;
+    const dh = canvas.height * scale;
+    ctx.drawImage(canvas, (tw - dw) / 2, (th - dh) / 2, dw, dh);
+  }
+
+  /**
+   * Replace the thumbnail of a list item (by id) with a pre-composited canvas.
+   * Works whether the placeholder is still loading or already rendered.
+   */
+  setItemThumbCanvas(itemId: string, canvas: HTMLCanvasElement): void {
+    if (!this.showThumbs) return;
+    const idx = this.items.findIndex(i => i.id === itemId);
+    if (idx < 0) return;
+    const li = this.itemEls[idx];
+    const existing = li.querySelector('.cdd-thumb, .cdd-thumb-placeholder');
+    if (!existing) return;
+    const thumb = document.createElement('canvas');
+    thumb.className = 'cdd-thumb';
+    thumb.width = 36;
+    thumb.height = 36;
+    const scale = Math.min(36 / canvas.width, 36 / canvas.height);
+    const dw = canvas.width * scale;
+    const dh = canvas.height * scale;
+    thumb.getContext('2d')!.drawImage(canvas, (36 - dw) / 2, (36 - dh) / 2, dw, dh);
+    existing.replaceWith(thumb);
+  }
+
   destroy(): void {
     this.observer.disconnect();
     document.removeEventListener('mousedown', this.outsideHandler);
