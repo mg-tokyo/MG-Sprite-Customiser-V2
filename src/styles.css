@@ -696,6 +696,12 @@ button.danger:hover { background: #ff3333; }
   font-size: 12px;
 }
 
+.full-card-locked-wrap {
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+}
+
 .full-card-section {
   border-top: 1px solid var(--border);
   padding-top: 6px;

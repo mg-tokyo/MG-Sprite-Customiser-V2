@@ -8,6 +8,8 @@ export interface DropdownItem {
   animFrameUrls?: string[];
   /** For card presets: sprite URLs to load into consecutive slots [bottom, middle, top]. */
   cardPresetUrls?: string[];
+  /** For full-card presets: the card type to pass to addFullCardPreset(). */
+  fullCardType?: string;
 }
 
 interface DropdownOptions {

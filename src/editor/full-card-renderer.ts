@@ -1,8 +1,10 @@
 /**
  * Full card stats renderer.
- * Draws text/bar overlays in-place on an already-composited 500×720 card canvas.
+ * Draws text/bar overlays AND UI sprite icons in-place on an already-composited
+ * 500×720 card canvas.
  */
 import type { FullCardData, FullCardType, FullCardRarity } from '../state/store';
+import { state } from '../state/store';
 import { MG_FONTS, ensureFontLoaded } from './font-data';
 
 // ── Color constants (from game source) ───────────────────────────────────────
@@ -32,6 +34,27 @@ const STR_COLOR    = '#0067B4';   // Blue.Magic
 const NEUTRAL_GREY = '#A3A3A3';
 const GREYCLIFF    = '"Greycliff CF", sans-serif';
 
+// ── UI sprite image loader ────────────────────────────────────────────────────
+
+const imgCache = new Map<string, HTMLImageElement>();
+
+function loadImg(url: string): Promise<HTMLImageElement | null> {
+  const cached = imgCache.get(url);
+  if (cached) return Promise.resolve(cached);
+  return new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload  = () => { imgCache.set(url, img); resolve(img); };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+function uiUrl(name: string): string {
+  const v = state.gameVersion ?? '49';
+  return `https://mg-api.ariedam.fr/assets/sprites/ui/${name}.png?v=${v}`;
+}
+
 // ── Canvas helpers ────────────────────────────────────────────────────────────
 
 function roundedRect(
@@ -57,13 +80,11 @@ function drawProgressBar(
   progress: number,
   fillColor: string,
 ): void {
-  // Border
   roundedRect(ctx, x, y, w, h, 3);
   ctx.strokeStyle = NEUTRAL_GREY;
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  // Fill — progress = fraction 0..1
   const fillW = Math.max(0, Math.min(progress, 1)) * w;
   if (fillW > 0) {
     roundedRect(ctx, x + 0.5, y + 0.5, fillW - 1, h - 1, 2.5);
@@ -74,7 +95,6 @@ function drawProgressBar(
 
 /**
  * Word-wrap text onto the canvas.
- * Respects ctx.textAlign for positioning.
  * @param maxLines - Maximum lines before truncating with '…'. Default: unlimited.
  * @returns The y position of the last line drawn.
  */
@@ -113,10 +133,36 @@ function wrapText(
 
 // ── Pet card stats (y:390–720) ────────────────────────────────────────────────
 
-function drawPetStats(ctx: CanvasRenderingContext2D, data: FullCardData): void {
+// UI sprite positions on a 500×720 pet card:
+//   Lock icon        — portrait top-right corner:      x=428, y=26
+//   Rarity icon      — portrait/stats boundary left:   x=22,  y=346
+//   StrengthStar     — below weight row, left:         x=32,  y=528
+//   ProgressStar     — right of StrengthStar:          x=90,  y=531
+//   PetSlots         — right column, 68×160:           x=424, y=525
+//   MutationFrame    — lower-left:                     x=32,  y=628
+
+async function drawPetStats(ctx: CanvasRenderingContext2D, data: FullCardData): Promise<void> {
   const rarity  = data.rarity ?? 'Common';
   const bgColor = RARITY_BG[rarity];
   const fgColor = RARITY_FG[rarity];
+
+  // Pre-load all UI sprites in parallel before drawing anything
+  const [lockImg, rarityImg, strStarImg, progStarImg, petSlotsImg, mutFrameImg] = await Promise.all([
+    loadImg(uiUrl(data.isLocked ? 'Locked' : 'Unlocked')),
+    loadImg(uiUrl(`Rarity${rarity}`)),
+    loadImg(uiUrl('StrengthStar')),
+    loadImg(uiUrl('ProgressStar')),
+    loadImg(uiUrl('PetSlots')),
+    loadImg(uiUrl('MutationFrame')),
+  ]);
+
+  // ── Sprite icons (drawn first, text on top) ──
+  if (lockImg)     ctx.drawImage(lockImg,     428, 26);
+  if (rarityImg)   ctx.drawImage(rarityImg,   22,  346);
+  if (strStarImg)  ctx.drawImage(strStarImg,  32,  528);
+  if (progStarImg) ctx.drawImage(progStarImg, 90,  531);
+  if (petSlotsImg) ctx.drawImage(petSlotsImg, 424, 525);
+  if (mutFrameImg) ctx.drawImage(mutFrameImg, 32,  628);
 
   // ── Name banner (y:390, h:44, r:5) ──
   ctx.fillStyle = bgColor;
@@ -146,9 +192,7 @@ function drawPetStats(ctx: CanvasRenderingContext2D, data: FullCardData): void {
   drawProgressBar(ctx, 102, 468, 366, 10, hungerPct, HUNGER_COLOR);
 
   // ── STR bar (y:492) ──
-  // Label shows the current STR level (e.g., "50").
-  // Bar fills with XP progress toward the next STR level (petStrPct / 100).
-  // petMaxStr (header line) is the pet's overall max STR — separate.
+  // Label = current STR level; bar = XP progress toward next level (petStrPct / 100).
   const strLabel = data.petStr ?? '0';
   const strPct   = (data.petStrPct ?? 0) / 100;
   ctx.fillStyle = 'rgba(255,255,255,0.6)';
@@ -170,8 +214,23 @@ function drawPetStats(ctx: CanvasRenderingContext2D, data: FullCardData): void {
 
 // ── Simple card stats (Seed/Tool/Decor/Egg/Plant/Crop, y:390–720) ─────────────
 
-function drawSimpleStats(ctx: CanvasRenderingContext2D, data: FullCardData): void {
+// UI sprite positions on simple cards:
+//   Lock icon    — portrait top-right corner: x=428, y=26
+//   Rarity icon  — Seed only, same position as pet: x=22, y=346
+
+async function drawSimpleStats(ctx: CanvasRenderingContext2D, data: FullCardData): Promise<void> {
   const cardType = data.cardType;
+  const isSeed = cardType === 'Seed';
+
+  // Pre-load sprites
+  const [lockImg, rarityImg] = await Promise.all([
+    loadImg(uiUrl(data.isLocked ? 'Locked' : 'Unlocked')),
+    isSeed && data.seedRarity ? loadImg(uiUrl(`Rarity${data.seedRarity}`)) : Promise.resolve(null),
+  ]);
+
+  // ── Sprite icons ──
+  if (lockImg)   ctx.drawImage(lockImg,   428, 26);
+  if (rarityImg) ctx.drawImage(rarityImg, 22,  346);
 
   // ── Item name (y:408, 26px bold, white, word-wrap, max 2 lines) ──
   ctx.fillStyle = '#ffffff';
@@ -192,7 +251,7 @@ function drawSimpleStats(ctx: CanvasRenderingContext2D, data: FullCardData): voi
   }
 
   // ── Seed rarity chip (Seed only, y:500) ──
-  if (cardType === 'Seed' && data.seedRarity) {
+  if (isSeed && data.seedRarity) {
     const rarityBg = RARITY_BG[data.seedRarity];
     const rarityFg = RARITY_FG[data.seedRarity];
     ctx.font = `700 14px ${GREYCLIFF}`;
@@ -211,7 +270,7 @@ function drawSimpleStats(ctx: CanvasRenderingContext2D, data: FullCardData): voi
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Draw stats overlay in-place on an already-composited 500×720 card canvas.
+ * Draw stats overlay + UI sprite icons in-place on an already-composited 500×720 card canvas.
  * Ensures Greycliff CF is loaded before drawing.
  */
 export async function drawFullCardStats(canvas: HTMLCanvasElement, data: FullCardData): Promise<void> {
@@ -225,9 +284,9 @@ export async function drawFullCardStats(canvas: HTMLCanvasElement, data: FullCar
 
   ctx.save();
   if (data.cardType === 'Pet') {
-    drawPetStats(ctx, data);
+    await drawPetStats(ctx, data);
   } else {
-    drawSimpleStats(ctx, data);
+    await drawSimpleStats(ctx, data);
   }
   ctx.restore();
 }
@@ -236,7 +295,7 @@ export async function drawFullCardStats(canvas: HTMLCanvasElement, data: FullCar
  * Return sensible placeholder values for a given card type.
  */
 export function defaultFullCardData(cardType: FullCardType): FullCardData {
-  const base: FullCardData = { cardType, itemName: 'Item Name' };
+  const base: FullCardData = { cardType, itemName: 'Item Name', isLocked: false };
   switch (cardType) {
     case 'Pet':
       return {
@@ -249,6 +308,7 @@ export function defaultFullCardData(cardType: FullCardType): FullCardData {
         petStr:    '1',
         petStrPct: 50,
         petWeight: '12.5 kg',
+        isLocked:  false,
       };
     case 'Seed':
       return { ...base, itemCount: '5', seedRarity: 'Common' };

@@ -149,9 +149,10 @@ export class App {
   // Crop fields
   private fullCardCropSection!: HTMLElement;
   private fullCardCropWeightInput!: HTMLInputElement;
+  // Shared fields (all card types)
+  private fullCardLockedCheck!: HTMLInputElement;
 
   private fullCardRenderDebounce: ReturnType<typeof setTimeout> | null = null;
-  private addFullCardSelect!: HTMLSelectElement;
 
   constructor(container: HTMLElement) {
     initTheme();
@@ -210,7 +211,9 @@ export class App {
       // clicks, the canvas renderer finds it instantly without re-fetching.
       onThumbVisible: (url) => spriteLoader.preloadUrls([url]),
       onSelect: (item: DropdownItem) => {
-        if (item.cardPresetUrls && item.cardPresetUrls.length > 0) {
+        if (item.fullCardType) {
+          this.addFullCardPreset(item.fullCardType as FullCardType);
+        } else if (item.cardPresetUrls && item.cardPresetUrls.length > 0) {
           this.applyCardPreset(item.cardPresetUrls, item.label);
         } else if (item.animFrameUrls && item.animFrameUrls.length > 0) {
           // Show first frame immediately, then async-load all frames for animated playback
@@ -299,24 +302,6 @@ export class App {
     this.addTextBtn = el('button', { className: 'secondary txt-add-btn', textContent: '+ Text Layer' }) as HTMLButtonElement;
     this.addTextBtn.addEventListener('click', () => this.addTextLayer());
 
-    // Full Card preset selector
-    this.addFullCardSelect = el('select', {}) as HTMLSelectElement;
-    const fcPlaceholder = el('option', { value: '', textContent: 'Full Card +' }) as HTMLOptionElement;
-    fcPlaceholder.disabled = true;
-    fcPlaceholder.selected = true;
-    this.addFullCardSelect.append(fcPlaceholder);
-    const FULL_CARD_TYPES: FullCardType[] = ['Pet', 'Plant', 'Crop', 'Seed', 'Egg', 'Tool', 'Decor'];
-    for (const ct of FULL_CARD_TYPES) {
-      this.addFullCardSelect.append(el('option', { value: ct, textContent: `${ct} Card` }));
-    }
-    this.addFullCardSelect.addEventListener('change', () => {
-      const cardType = this.addFullCardSelect.value as FullCardType;
-      if (cardType) {
-        this.addFullCardPreset(cardType);
-        this.addFullCardSelect.selectedIndex = 0;
-      }
-    });
-
     // Mutations
     this.mutationList = el('div', { className: 'mutations' });
 
@@ -378,7 +363,6 @@ export class App {
       this.fullCardControls,
       el('div', { className: 'upload-controls' }, [
         el('div', { className: 'upload-actions' }, [uploadBtn, fileInput, this.addTextBtn]),
-        el('div', { className: 'full-card-add-row' }, [this.addFullCardSelect]),
       ]),
       el('label', { textContent: 'Mutations' }),
       this.mutationList,
@@ -985,10 +969,18 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Weight (kg)' }), this.fullCardCropWeightInput]),
     ]);
 
+    // ── Shared: locked toggle (applies to all card types) ──
+    this.fullCardLockedCheck = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    this.fullCardLockedCheck.addEventListener('change', () => this.scheduleFullCardRerender());
+
     const section = el('div', { className: 'full-card-controls-section', style: 'display:none' });
     section.append(
       this.fullCardTypeLabel,
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Name' }), this.fullCardNameInput]),
+      el('div', { className: 'full-card-field' }, [
+        el('label', { textContent: 'Locked' }),
+        el('span', { className: 'full-card-locked-wrap' }, [this.fullCardLockedCheck]),
+      ]),
       this.fullCardPetSection,
       this.fullCardSimpleSection,
       this.fullCardCropSection,
@@ -1003,6 +995,7 @@ export class App {
 
     this.fullCardTypeLabel.textContent = `${data.cardType} Card`;
     this.fullCardNameInput.value = data.itemName;
+    this.fullCardLockedCheck.checked = data.isLocked ?? false;
 
     const isPet    = data.cardType === 'Pet';
     const isCrop   = data.cardType === 'Crop';
@@ -1035,7 +1028,8 @@ export class App {
     const cardType = base.cardType;
     const result: FullCardData = {
       cardType,
-      itemName: this.fullCardNameInput.value || base.itemName,
+      itemName:  this.fullCardNameInput.value || base.itemName,
+      isLocked:  this.fullCardLockedCheck.checked,
     };
     if (cardType === 'Pet') {
       result.rarity    = (this.fullCardRaritySelect.value as FullCardRarity) || 'Common';
@@ -1056,12 +1050,11 @@ export class App {
     return result;
   }
 
-  /** Add a new full-card slot for the given card type. */
+  /** Load a full-card preset into the active slot (mirrors applyCardPreset flow). */
   private addFullCardPreset(cardType: FullCardType): void {
-    const emptyIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
-    const targetIdx = emptyIdx >= 0 ? emptyIdx : state.activeSlotIndex;
+    this.stopGifPreview();
     const data = defaultFullCardData(cardType);
-    updateSlot(targetIdx, {
+    updateSlot(state.activeSlotIndex, {
       type:         'full-card',
       spriteKey:    `full-card/${cardType}`,
       spriteUrl:    'full-card:',
@@ -1072,8 +1065,7 @@ export class App {
       customTint:   { color: '#ffffff', opacity: 0 },
       mutations:    [],
     });
-    setActiveSlot(targetIdx);
-    this.syncTextSlotUI(state.slots[targetIdx]);
+    this.syncTextSlotUI(state.slots[state.activeSlotIndex]);
     this.scheduleFullCardRerender();
   }
 
@@ -1158,9 +1150,10 @@ export class App {
       for (const cat of sd.categories) {
         items.push({ id: cat.cat, label: cat.cat });
       }
-      // Card preset combo-category — only shown when the ui atlas is available
+      // Card preset categories — only shown when the ui atlas is available
       if (sd.categories.some(c => c.cat === 'ui')) {
-        items.push({ id: 'cards', label: 'Cards (preset)' });
+        items.push({ id: 'cards',      label: 'Cards (preset)' });
+        items.push({ id: 'full-cards', label: 'Full Cards (stats)' });
       }
     }
 
@@ -1192,8 +1185,8 @@ export class App {
     const sd = state.spriteData;
     const items: DropdownItem[] = [];
 
-    // Card presets — stitch Bottom + Middle + Top layers into consecutive slots
-    if (cat === 'cards') {
+    // Card preset / Full Card categories — build layer URLs from ui atlas
+    if (cat === 'cards' || cat === 'full-cards') {
       const version = this.getUiSpriteVersion();
       const v = version ? `?v=${version}` : '';
       const base = 'https://mg-api.ariedam.fr/assets/sprites/ui';
@@ -1210,12 +1203,23 @@ export class App {
       for (const cardType of CARD_TYPES) {
         const bottomUrl = `${base}/${cardType.key}CardBottom.png${v}`;
         const middleUrl = `${base}/${cardType.key}CardMiddle.png${v}`;
-        items.push({
-          id: `cardpreset/${cardType.key}`,
-          label: cardType.label,
-          thumbUrl: bottomUrl,
-          cardPresetUrls: [bottomUrl, middleUrl, topUrl],
-        });
+        if (cat === 'cards') {
+          items.push({
+            id: `cardpreset/${cardType.key}`,
+            label: cardType.label,
+            thumbUrl: bottomUrl,
+            cardPresetUrls: [bottomUrl, middleUrl, topUrl],
+          });
+        } else {
+          // full-cards: same layer URLs for thumbnail, but fullCardType signals onSelect
+          items.push({
+            id: `full-card/${cardType.key}`,
+            label: cardType.label,
+            thumbUrl: bottomUrl,
+            cardPresetUrls: [bottomUrl, middleUrl, topUrl],
+            fullCardType: cardType.key,
+          });
+        }
       }
     }
 
@@ -1288,8 +1292,8 @@ export class App {
     const restoreId = getActiveSlot().spriteKey || undefined;
     this.spriteDropdown.setItems(items, restoreId);
 
-    // For the cards category, asynchronously generate composited thumbnails for the list
-    if (cat === 'cards') this.generateCardListThumbnails(items);
+    // Asynchronously generate composited thumbnails for card categories
+    if (cat === 'cards' || cat === 'full-cards') this.generateCardListThumbnails(items);
 
     // Pre-warm SpriteLoader for the entire category at low priority.
     // By the time the user browses and picks a sprite, it will already be in the

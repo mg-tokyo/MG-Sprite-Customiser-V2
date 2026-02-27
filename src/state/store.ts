@@ -21,6 +21,8 @@ export interface FullCardData {
   cropWeight?: string;
   // Seed rarity chip
   seedRarity?: FullCardRarity;
+  // Whether the game item shows as locked (padlock icon on portrait)
+  isLocked?: boolean;
 }
 
 export interface TextData {
