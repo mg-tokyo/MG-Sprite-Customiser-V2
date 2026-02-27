@@ -34,7 +34,7 @@ export interface FontDef {
 export const MG_FONTS: FontDef[] = [
   {
     id: 'mg-body',
-    label: 'Body',
+    label: 'Body (light text)',
     family: 'Greycliff CF',
     weight: '400',
     style: 'normal',
@@ -43,7 +43,7 @@ export const MG_FONTS: FontDef[] = [
   },
   {
     id: 'mg-subheading',
-    label: 'Subheading',
+    label: 'Subheading (chat, menus)',
     family: 'Greycliff CF',
     weight: '500',
     style: 'normal',
@@ -52,7 +52,7 @@ export const MG_FONTS: FontDef[] = [
   },
   {
     id: 'mg-heading',
-    label: 'Heading',
+    label: 'Heading (inventory, names)',
     family: 'Greycliff CF',
     weight: '600',
     style: 'normal',
@@ -61,7 +61,7 @@ export const MG_FONTS: FontDef[] = [
   },
   {
     id: 'mg-bold-heading',
-    label: 'Bold Heading',
+    label: 'Bold Heading (shops, pets)',
     family: 'Greycliff CF',
     weight: '700',
     style: 'normal',
@@ -70,7 +70,7 @@ export const MG_FONTS: FontDef[] = [
   },
   {
     id: 'mg-display',
-    label: 'Display',
+    label: 'Display (modal headings)',
     family: 'Greycliff CF',
     weight: '800',
     style: 'normal',
@@ -79,7 +79,7 @@ export const MG_FONTS: FontDef[] = [
   },
   {
     id: 'mg-heavy',
-    label: 'Heavy',
+    label: 'Heavy (chat button)',
     family: 'Greycliff CF',
     weight: '900',
     style: 'normal',
@@ -88,7 +88,7 @@ export const MG_FONTS: FontDef[] = [
   },
   {
     id: 'mg-text-slapper',
-    label: 'textSlapper ★',
+    label: 'Shrikhand (textSlapper)',
     family: 'Shrikhand',
     weight: '400',
     style: 'normal',

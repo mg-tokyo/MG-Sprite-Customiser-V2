@@ -159,7 +159,7 @@ export function defaultTextData(): TextData {
   return {
     content: '',
     fontFamily: 'Shrikhand',
-    fontLabel: 'textSlapper ★',
+    fontLabel: 'Shrikhand (textSlapper)',
     fontWeight: '400',
     fontStyle: 'normal',
     fontSize: 60,

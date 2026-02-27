@@ -659,7 +659,7 @@ export class App {
       ]),
       this.wordWrapWidthRow,
       el('div', { className: 'text-preset-row' }, [
-        this.makeCheckLabel('textSlapper shadow', this.mgShadowToggle),
+        this.makeCheckLabel('MG drop shadow', this.mgShadowToggle),
         this.makeCheckLabel('Outline/Stroke', this.strokeToggle),
       ]),
       this.strokeControls,
