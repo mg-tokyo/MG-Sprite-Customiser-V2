@@ -104,7 +104,7 @@ export class App {
   private frameScheduler = new FrameScheduler();
 
   // ── Text layer UI ──
-  private spriteControls!: HTMLElement;   // category + sprite dropdowns section
+  private spriteControls!: HTMLElement;   // search + sprite dropdown section (category is separate)
   private textControls!: HTMLElement;     // text-layer-specific section
   private textArea!: HTMLTextAreaElement;
   private fontGroupDropdown!: CustomDropdown; // font category (MG / System / Google / Unicode)
@@ -240,6 +240,7 @@ export class App {
     });
 
     // ── Sprite controls section (hidden when text slot is active) ──
+    // Category dropdown lives OUTSIDE spriteControls so it is always visible.
     this.spriteControls = el('div', { className: 'sprite-controls-section' });
 
     // ── Text Layer Controls (hidden when sprite slot active) ──
@@ -249,10 +250,8 @@ export class App {
     // ── Full Card Controls (hidden unless full-card slot active) ──
     this.fullCardControls = this.buildFullCardControls();
 
-    // Populate sprite controls contents
+    // Populate sprite controls contents (search + sprite list only — no category here)
     this.spriteControls.append(
-      el('label', { textContent: 'Category' }),
-      this.categoryDropdown.element,
       el('label', { textContent: 'Search' }),
       this.searchInput,
       el('label', { textContent: 'Sprite' }),
@@ -358,6 +357,9 @@ export class App {
       el('h2', { textContent: 'Controls' }),
       this.metaLabel('Layers', '(drag to reorder)'),
       this.slotContainer,
+      // Category dropdown is always visible regardless of slot type
+      el('label', { textContent: 'Category' }),
+      this.categoryDropdown.element,
       this.spriteControls,
       this.textControls,
       this.fullCardControls,
@@ -795,7 +797,10 @@ export class App {
     const isText     = slot.type === 'text';
     const isFullCard = slot.type === 'full-card';
 
-    this.spriteControls.style.display   = (isText || isFullCard) ? 'none' : '';
+    // Category dropdown is always visible (lives above spriteControls in the DOM).
+    // Only hide the sprite list for text slots — full-card slots keep it so the user
+    // can still browse categories and switch card types.
+    this.spriteControls.style.display   = isText ? 'none' : '';
     this.textControls.style.display     = isText     ? '' : 'none';
     this.fullCardControls.style.display = isFullCard ? '' : 'none';
     this.tintLabel.textContent = isText ? 'Text Color' : (isFullCard ? 'Card Tint' : 'Custom Tint');
@@ -1287,9 +1292,18 @@ export class App {
       }
     }
 
-    // Pass active slot's spriteKey as restoreId — if found, selects silently.
-    // If not found (different category or empty slot), auto-selects first item.
-    const restoreId = getActiveSlot().spriteKey || undefined;
+    // Pass restoreId so setItems selects silently rather than firing onSelect.
+    // For full-cards: restore the active slot's card type if it's a full-card slot,
+    // otherwise force a silent-select of the first item to avoid auto-triggering addFullCardPreset.
+    const slot = getActiveSlot();
+    let restoreId: string | undefined;
+    if (cat === 'full-cards') {
+      restoreId = slot.type === 'full-card'
+        ? `full-card/${slot.fullCardData?.cardType}`
+        : (items[0]?.id ?? undefined);
+    } else {
+      restoreId = slot.spriteKey || undefined;
+    }
     this.spriteDropdown.setItems(items, restoreId);
 
     // Asynchronously generate composited thumbnails for card categories
@@ -1330,7 +1344,7 @@ export class App {
           const ctx = thumb.getContext('2d')!;
           const scale = Math.min(34 / gifCanvas.width, 34 / gifCanvas.height);
           ctx.drawImage(gifCanvas, (34 - gifCanvas.width * scale) / 2, (34 - gifCanvas.height * scale) / 2, gifCanvas.width * scale, gifCanvas.height * scale);
-        } else {
+        } else if (slot.type !== 'full-card' && slot.type !== 'text') {
           renderThumb(slot.spriteUrl, thumb);
         }
       } else {

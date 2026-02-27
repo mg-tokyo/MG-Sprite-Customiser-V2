@@ -2,6 +2,13 @@
  * Full card stats renderer.
  * Draws text/bar overlays AND UI sprite icons in-place on an already-composited
  * 500×720 card canvas.
+ *
+ * Pixel-accurate layout (from card-analyze.cjs, all 7 types identical):
+ *   Portrait window:  x:28-470, y:42-379  (442×337px, center 249,211)
+ *   Name ribbon:      y:380-458  (Middle layer opaque band, text center y:419)
+ *   Stats area:       y:459-679  (Middle layer transparent, 221px tall)
+ *   Lock/Unlock:      draw at x:423, y:12
+ *   Rarity badge:     draw RarityXxx (55×55) at x:41, y:609
  */
 import type { FullCardData, FullCardType, FullCardRarity } from '../state/store';
 import { state } from '../state/store';
@@ -131,126 +138,154 @@ function wrapText(
   return lineY;
 }
 
-// ── Pet card stats (y:390–720) ────────────────────────────────────────────────
-
-// UI sprite positions on a 500×720 pet card:
-//   Lock icon        — portrait top-right corner:      x=428, y=26
-//   Rarity icon      — portrait/stats boundary left:   x=22,  y=346
-//   StrengthStar     — below weight row, left:         x=32,  y=528
-//   ProgressStar     — right of StrengthStar:          x=90,  y=531
-//   PetSlots         — right column, 68×160:           x=424, y=525
-//   MutationFrame    — lower-left:                     x=32,  y=628
+// ── Pet card stats ────────────────────────────────────────────────────────────
+//
+// Ribbon (y:380-458, h:79): rarity-colored roundRect overlaid on card ribbon.
+//   Name text centered at y:419.
+//
+// Stats area (y:459-679, h:221):
+//   Age icon (25×32):      x=32,  y=471  — text at x=62, mid y=487
+//   Hunger bar:            x=102, y=500, w=366, h=10
+//   Hunger label:          right-align x=96, mid y=505
+//   STR bar:               x=102, y=520, w=366, h=10
+//   STR label:             right-align x=96, mid y=525
+//   Weight icon (29×32):   x=32,  y=540  — text at x=66, mid y=556
+//   StrengthStar (47×52):  x=32,  y=570
+//   ProgressStar (34×33):  x=90,  y=574
+//   PetSlots (68×160):     x=420, y=505  (right column)
+//   MutationFrame (56×49): x=32,  y=624
+//   Stats icon (56×74):    x=215, y=602
+//
+// Fixed anchors (drawn on top of all stats):
+//   Lock/Unlock (64×84):   x=423, y=12
+//   RarityXxx (55×55):     x=41,  y=609
 
 async function drawPetStats(ctx: CanvasRenderingContext2D, data: FullCardData): Promise<void> {
   const rarity  = data.rarity ?? 'Common';
   const bgColor = RARITY_BG[rarity];
   const fgColor = RARITY_FG[rarity];
 
-  // Pre-load all UI sprites in parallel before drawing anything
-  const [lockImg, rarityImg, strStarImg, progStarImg, petSlotsImg, mutFrameImg] = await Promise.all([
+  // Pre-load all UI sprites in parallel
+  const [
+    lockImg, rarityImg, ageImg, weightImg,
+    strStarImg, progStarImg, petSlotsImg, mutFrameImg, statsImg,
+  ] = await Promise.all([
     loadImg(uiUrl(data.isLocked ? 'Locked' : 'Unlocked')),
     loadImg(uiUrl(`Rarity${rarity}`)),
+    loadImg(uiUrl('Age')),
+    loadImg(uiUrl('Weight')),
     loadImg(uiUrl('StrengthStar')),
     loadImg(uiUrl('ProgressStar')),
     loadImg(uiUrl('PetSlots')),
     loadImg(uiUrl('MutationFrame')),
+    loadImg(uiUrl('Stats')),
   ]);
 
-  // ── Sprite icons (drawn first, text on top) ──
-  if (lockImg)     ctx.drawImage(lockImg,     428, 26);
-  if (rarityImg)   ctx.drawImage(rarityImg,   22,  346);
-  if (strStarImg)  ctx.drawImage(strStarImg,  32,  528);
-  if (progStarImg) ctx.drawImage(progStarImg, 90,  531);
-  if (petSlotsImg) ctx.drawImage(petSlotsImg, 424, 525);
-  if (mutFrameImg) ctx.drawImage(mutFrameImg, 32,  628);
-
-  // ── Name banner (y:390, h:44, r:5) ──
+  // ── Ribbon: rarity-colored band over the card's ribbon section ──
   ctx.fillStyle = bgColor;
-  roundedRect(ctx, 32, 390, 436, 44, 5);
+  roundedRect(ctx, 32, 380, 436, 79, 5);
   ctx.fill();
 
+  // ── Name text (centered in ribbon, y:419) ──
   ctx.fillStyle = fgColor;
-  ctx.font = `700 18px ${GREYCLIFF}`;
+  ctx.font = `700 20px ${GREYCLIFF}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(data.itemName, 249, 390 + 22, 420);
+  ctx.fillText(data.itemName, 249, 419, 400);
 
-  // ── Age + Max STR line (y:448) ──
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  // ── Stats area sprites (drawn before text, text renders on top) ──
+  if (strStarImg)  ctx.drawImage(strStarImg,  32,  570);
+  if (progStarImg) ctx.drawImage(progStarImg, 90,  574);
+  if (petSlotsImg) ctx.drawImage(petSlotsImg, 420, 505);
+  if (mutFrameImg) ctx.drawImage(mutFrameImg, 32,  624);
+  if (statsImg)    ctx.drawImage(statsImg,    215, 602);
+  if (ageImg)      ctx.drawImage(ageImg,      32,  471);
+  if (weightImg)   ctx.drawImage(weightImg,   32,  540);
+
+  // ── Age + MAX STR (x:62, mid y:487) ──
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
   ctx.font = `700 13px ${GREYCLIFF}`;
   ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillText(`Age: ${data.petAge ?? '\u2014'}   \u00b7   MAX STR: ${data.petMaxStr ?? '\u2014'}`, 32, 448);
+  ctx.textBaseline = 'middle';
+  ctx.fillText(
+    `${data.petAge ?? '\u2014'}   \u00b7   MAX STR: ${data.petMaxStr ?? '\u2014'}`,
+    62, 487,
+  );
 
-  // ── Hunger bar (y:468) ──
+  // ── Hunger bar (bar y:500, label mid y:505) ──
   const hungerPct = (data.petHunger ?? 100) / 100;
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = `700 12px ${GREYCLIFF}`;
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
-  ctx.fillText('Hunger', 96, 468 + 5);
-  drawProgressBar(ctx, 102, 468, 366, 10, hungerPct, HUNGER_COLOR);
+  ctx.fillText('Hunger', 96, 505);
+  drawProgressBar(ctx, 102, 500, 366, 10, hungerPct, HUNGER_COLOR);
 
-  // ── STR bar (y:492) ──
-  // Label = current STR level; bar = XP progress toward next level (petStrPct / 100).
+  // ── STR bar (bar y:520, label mid y:525) ──
   const strLabel = data.petStr ?? '0';
   const strPct   = (data.petStrPct ?? 0) / 100;
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
   ctx.font = `700 12px ${GREYCLIFF}`;
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
-  ctx.fillText(`STR ${strLabel}`, 96, 492 + 5);
-  drawProgressBar(ctx, 102, 492, 366, 10, strPct, STR_COLOR);
+  ctx.fillText(`STR ${strLabel}`, 96, 525);
+  drawProgressBar(ctx, 102, 520, 366, 10, strPct, STR_COLOR);
 
-  // ── Weight (y:515) ──
+  // ── Weight (x:66, mid y:556) ──
   if (data.petWeight) {
     ctx.fillStyle = NEUTRAL_GREY;
-    ctx.font = `400 12px ${GREYCLIFF}`;
+    ctx.font = `400 13px ${GREYCLIFF}`;
     ctx.textAlign = 'left';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillText(data.petWeight, 32, 515);
+    ctx.textBaseline = 'middle';
+    ctx.fillText(data.petWeight, 66, 556);
   }
+
+  // ── Fixed anchors (drawn last / on top) ──
+  if (lockImg)   ctx.drawImage(lockImg,   423, 12);
+  if (rarityImg) ctx.drawImage(rarityImg, 41,  609);
 }
 
-// ── Simple card stats (Seed/Tool/Decor/Egg/Plant/Crop, y:390–720) ─────────────
-
-// UI sprite positions on simple cards:
-//   Lock icon    — portrait top-right corner: x=428, y=26
-//   Rarity icon  — Seed only, same position as pet: x=22, y=346
+// ── Simple card stats (Seed/Plant/Crop/Egg/Tool/Decor) ───────────────────────
+//
+// Ribbon (y:380-458): card-layer ribbon is already the correct type color.
+//   Name text (white, bold) centered at y:419.
+//
+// Stats area (y:459-679):
+//   Count or weight: centered at x=249, y=490
+//   Seed rarity chip: centered at x=249, y=520 (Seed only)
+//   Rarity badge (Seed only): x=41, y=609
+//
+// Fixed anchors:
+//   Lock/Unlock: x=423, y=12
 
 async function drawSimpleStats(ctx: CanvasRenderingContext2D, data: FullCardData): Promise<void> {
   const cardType = data.cardType;
   const isSeed = cardType === 'Seed';
 
-  // Pre-load sprites
   const [lockImg, rarityImg] = await Promise.all([
     loadImg(uiUrl(data.isLocked ? 'Locked' : 'Unlocked')),
     isSeed && data.seedRarity ? loadImg(uiUrl(`Rarity${data.seedRarity}`)) : Promise.resolve(null),
   ]);
 
-  // ── Sprite icons ──
-  if (lockImg)   ctx.drawImage(lockImg,   428, 26);
-  if (rarityImg) ctx.drawImage(rarityImg, 22,  346);
-
-  // ── Item name (y:408, 26px bold, white, word-wrap, max 2 lines) ──
+  // ── Name text (ribbon center y:419, white, word-wrap max 2 lines) ──
   ctx.fillStyle = '#ffffff';
-  ctx.font = `700 26px ${GREYCLIFF}`;
+  ctx.font = `700 22px ${GREYCLIFF}`;
   ctx.textAlign = 'center';
-  ctx.textBaseline = 'alphabetic';
-  wrapText(ctx, data.itemName, 249, 408, 400, 34, 2);
+  ctx.textBaseline = 'middle';
+  wrapText(ctx, data.itemName, 249, 408, 400, 30, 2);
 
-  // ── Count / weight (y:470) ──
+  // ── Count / weight (y:490) ──
   ctx.font = `700 18px ${GREYCLIFF}`;
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
-  ctx.textBaseline = 'alphabetic';
+  ctx.textBaseline = 'middle';
   if (cardType === 'Crop' && data.cropWeight) {
-    ctx.fillText(`${data.cropWeight} kg`, 249, 470);
+    ctx.fillText(`${data.cropWeight} kg`, 249, 490);
   } else if (data.itemCount) {
-    ctx.fillText(`\u00d7${data.itemCount}`, 249, 470);
+    ctx.fillText(`\u00d7${data.itemCount}`, 249, 490);
   }
 
-  // ── Seed rarity chip (Seed only, y:500) ──
+  // ── Seed rarity chip (Seed only, y:520) ──
   if (isSeed && data.seedRarity) {
     const rarityBg = RARITY_BG[data.seedRarity];
     const rarityFg = RARITY_FG[data.seedRarity];
@@ -258,13 +293,17 @@ async function drawSimpleStats(ctx: CanvasRenderingContext2D, data: FullCardData
     const chipW = Math.min(ctx.measureText(data.seedRarity).width + 32, 200);
     const chipX = 249 - chipW / 2;
     ctx.fillStyle = rarityBg;
-    roundedRect(ctx, chipX, 500, chipW, 28, 6);
+    roundedRect(ctx, chipX, 520, chipW, 28, 6);
     ctx.fill();
     ctx.fillStyle = rarityFg;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(data.seedRarity, 249, 500 + 14);
+    ctx.fillText(data.seedRarity, 249, 534);
   }
+
+  // ── Fixed anchors ──
+  if (lockImg)   ctx.drawImage(lockImg,   423, 12);
+  if (rarityImg) ctx.drawImage(rarityImg, 41,  609);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -305,7 +344,7 @@ export function defaultFullCardData(cardType: FullCardType): FullCardData {
         petAge:    '1',
         petMaxStr: '10',
         petHunger: 75,
-        petStr:    '1',
+        petStr:    '3',
         petStrPct: 50,
         petWeight: '12.5 kg',
         isLocked:  false,
