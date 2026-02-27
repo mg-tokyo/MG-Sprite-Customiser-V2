@@ -155,7 +155,9 @@ export class App {
       // clicks, the canvas renderer finds it instantly without re-fetching.
       onThumbVisible: (url) => spriteLoader.preloadUrls([url]),
       onSelect: (item: DropdownItem) => {
-        if (item.animFrameUrls && item.animFrameUrls.length > 0) {
+        if (item.cardPresetUrls && item.cardPresetUrls.length > 0) {
+          this.applyCardPreset(item.cardPresetUrls, item.label);
+        } else if (item.animFrameUrls && item.animFrameUrls.length > 0) {
           // Show first frame immediately, then async-load all frames for animated playback
           updateSlot(state.activeSlotIndex, {
             type: 'sprite',
@@ -402,6 +404,10 @@ export class App {
       for (const cat of sd.categories) {
         items.push({ id: cat.cat, label: cat.cat });
       }
+      // Card preset combo-category — only shown when the ui atlas is available
+      if (sd.categories.some(c => c.cat === 'ui')) {
+        items.push({ id: 'cards', label: 'Cards (preset)' });
+      }
     }
 
     if (state.gameData) {
@@ -431,6 +437,33 @@ export class App {
     const cat = state.selectedCategory;
     const sd = state.spriteData;
     const items: DropdownItem[] = [];
+
+    // Card presets — stitch Bottom + Middle + Top layers into consecutive slots
+    if (cat === 'cards') {
+      const version = this.getUiSpriteVersion();
+      const v = version ? `?v=${version}` : '';
+      const base = 'https://mg-api.ariedam.fr/assets/sprites/ui';
+      const topUrl = `${base}/CardTop.png${v}`;
+      const CARD_TYPES: { key: string; label: string }[] = [
+        { key: 'Plant', label: 'Plant Card' },
+        { key: 'Pet',   label: 'Pet Card' },
+        { key: 'Crop',  label: 'Crop Card' },
+        { key: 'Decor', label: 'Decor Card' },
+        { key: 'Egg',   label: 'Egg Card' },
+        { key: 'Seed',  label: 'Seed Card' },
+        { key: 'Tool',  label: 'Tool Card' },
+      ];
+      for (const cardType of CARD_TYPES) {
+        const bottomUrl = `${base}/${cardType.key}CardBottom.png${v}`;
+        const middleUrl = `${base}/${cardType.key}CardMiddle.png${v}`;
+        items.push({
+          id: `cardpreset/${cardType.key}`,
+          label: cardType.label,
+          thumbUrl: bottomUrl,
+          cardPresetUrls: [bottomUrl, middleUrl, topUrl],
+        });
+      }
+    }
 
     // Blobling / cosmetics categories
     if (cat.startsWith('cosmetic:')) {
@@ -1038,6 +1071,53 @@ export class App {
       this.frameScheduler.play();
       this.timelinePlayBtn.textContent = 'Pause';
     }
+  }
+
+  /**
+   * Return the version string from the ui sprite-data category URLs (e.g. "49").
+   * Falls back to state.gameVersion if the category or its URLs aren't available yet.
+   */
+  private getUiSpriteVersion(): string {
+    const sd = state.spriteData;
+    if (sd) {
+      const uiCat = sd.categories.find(c => c.cat === 'ui');
+      if (uiCat) {
+        for (const item of uiCat.items) {
+          const vMatch = item.url.match(/\/version\/([a-f0-9]+)\//i);
+          if (vMatch) return vMatch[1];
+        }
+      }
+    }
+    return state.gameVersion ?? '';
+  }
+
+  /**
+   * Fill slots 0/1/2 with a card's Bottom → Middle → Top layers (all centred, scale 1, rotation 0).
+   * Uses updateSlot for slot 0 (one undo snapshot) and updateSlotSilent for the rest,
+   * so a single Ctrl+Z undoes the entire preset. Activates slot 0 after.
+   */
+  private applyCardPreset(urls: string[], label: string): void {
+    this.stopGifPreview();
+    const LAYER_NAMES = ['Bottom', 'Middle', 'Top'];
+    const count = Math.min(urls.length, state.slots.length);
+    for (let i = 0; i < count; i++) {
+      const shortName = urls[i].split('/').pop()?.split('?')[0].replace('.png', '')
+        ?? `${label} ${LAYER_NAMES[i] ?? i}`;
+      const slotData: Partial<import('../state/store').Slot> = {
+        type: 'sprite',
+        spriteKey: `ui/${shortName}`,
+        spriteUrl: urls[i],
+        gifFrames: undefined,
+        isAnimated: false,
+        position: { x: 0, y: 0 },
+        scale: 1,
+        rotation: 0,
+      };
+      // Slot 0 pushes the undo snapshot; remaining layers are silent (single Ctrl+Z undoes all)
+      if (i === 0) updateSlot(0, slotData);
+      else updateSlotSilent(i, slotData);
+    }
+    setActiveSlot(0);
   }
 
   /**
