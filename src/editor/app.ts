@@ -1,5 +1,5 @@
 import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlot, reorderSlots } from '../state/store';
-import type { Slot, TextData } from '../state/store';
+import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity } from '../state/store';
 import { initTheme, toggleTheme } from './theme';
 import { FILTERS } from '../renderer/mutation-defs';
 import { renderAll, renderSlot } from '../renderer/canvas-renderer';
@@ -16,6 +16,7 @@ import type { DropdownItem } from './custom-dropdown';
 import { spriteLoader } from '../api/sprite-loader';
 import type { SpriteFrame } from '../api/types';
 import { renderTextToCanvas, defaultTextData } from './text-renderer';
+import { drawFullCardStats, defaultFullCardData } from './full-card-renderer';
 import { MG_FONTS, SYSTEM_FONTS, GOOGLE_FONTS_CURATED, UNICODE_STYLES, ensureFontLoaded } from './font-data';
 
 // ── Hit-test content bounds ──────────────────────────────────────────────────
@@ -123,9 +124,34 @@ export class App {
   private strokeWidthInput!: HTMLInputElement;
   private unicodeRow!: HTMLElement;
   private unicodeDropdown!: CustomDropdown;
-  private tintLabel!: HTMLElement;       // relabelled when text slot active
+  private tintLabel!: HTMLElement;       // relabelled when text/full-card slot active
   private addTextBtn!: HTMLButtonElement;
   private textRenderDebounce: ReturnType<typeof setTimeout> | null = null;
+
+  // ── Full Card layer UI ──
+  private fullCardControls!: HTMLElement;
+  private fullCardTypeLabel!: HTMLElement;
+  private fullCardNameInput!: HTMLInputElement;
+  // Pet fields
+  private fullCardPetSection!: HTMLElement;
+  private fullCardRaritySelect!: HTMLSelectElement;
+  private fullCardAgeInput!: HTMLInputElement;
+  private fullCardMaxStrInput!: HTMLInputElement;   // overall max STR (header label)
+  private fullCardHungerInput!: HTMLInputElement;   // 0–100 range
+  private fullCardStrInput!: HTMLInputElement;      // current STR level (text)
+  private fullCardStrPctInput!: HTMLInputElement;   // 0–100 range (XP bar fill)
+  private fullCardWeightInput!: HTMLInputElement;
+  // Simple / count fields
+  private fullCardSimpleSection!: HTMLElement;
+  private fullCardCountInput!: HTMLInputElement;
+  private fullCardSeedRarityRow!: HTMLElement;
+  private fullCardSeedRaritySelect!: HTMLSelectElement;
+  // Crop fields
+  private fullCardCropSection!: HTMLElement;
+  private fullCardCropWeightInput!: HTMLInputElement;
+
+  private fullCardRenderDebounce: ReturnType<typeof setTimeout> | null = null;
+  private addFullCardSelect!: HTMLSelectElement;
 
   constructor(container: HTMLElement) {
     initTheme();
@@ -217,6 +243,9 @@ export class App {
     this.textControls = el('div', { className: 'text-controls-section', style: 'display:none' });
     this.buildTextControls();
 
+    // ── Full Card Controls (hidden unless full-card slot active) ──
+    this.fullCardControls = this.buildFullCardControls();
+
     // Populate sprite controls contents
     this.spriteControls.append(
       el('label', { textContent: 'Category' }),
@@ -269,6 +298,24 @@ export class App {
     // Add text layer button
     this.addTextBtn = el('button', { className: 'secondary txt-add-btn', textContent: '+ Text Layer' }) as HTMLButtonElement;
     this.addTextBtn.addEventListener('click', () => this.addTextLayer());
+
+    // Full Card preset selector
+    this.addFullCardSelect = el('select', {}) as HTMLSelectElement;
+    const fcPlaceholder = el('option', { value: '', textContent: 'Full Card +' }) as HTMLOptionElement;
+    fcPlaceholder.disabled = true;
+    fcPlaceholder.selected = true;
+    this.addFullCardSelect.append(fcPlaceholder);
+    const FULL_CARD_TYPES: FullCardType[] = ['Pet', 'Plant', 'Crop', 'Seed', 'Egg', 'Tool', 'Decor'];
+    for (const ct of FULL_CARD_TYPES) {
+      this.addFullCardSelect.append(el('option', { value: ct, textContent: `${ct} Card` }));
+    }
+    this.addFullCardSelect.addEventListener('change', () => {
+      const cardType = this.addFullCardSelect.value as FullCardType;
+      if (cardType) {
+        this.addFullCardPreset(cardType);
+        this.addFullCardSelect.selectedIndex = 0;
+      }
+    });
 
     // Mutations
     this.mutationList = el('div', { className: 'mutations' });
@@ -328,8 +375,10 @@ export class App {
       this.slotContainer,
       this.spriteControls,
       this.textControls,
+      this.fullCardControls,
       el('div', { className: 'upload-controls' }, [
         el('div', { className: 'upload-actions' }, [uploadBtn, fileInput, this.addTextBtn]),
+        el('div', { className: 'full-card-add-row' }, [this.addFullCardSelect]),
       ]),
       el('label', { textContent: 'Mutations' }),
       this.mutationList,
@@ -399,6 +448,7 @@ export class App {
         customTint: { color: this.customColor.value, opacity: parseFloat(this.customOpacity.value) },
       });
       if (slot.type === 'text') this.scheduleTextRerender();
+      // Full-card: tint is applied by renderSlot, no canvas rerender needed
     };
     this.customColor.addEventListener('input', updateTint);
     this.customOpacity.addEventListener('input', updateTint);
@@ -435,7 +485,7 @@ export class App {
       this.syncDownloadBtn();
       const slot = getActiveSlot();
       // Sync dropdown selection to the newly active slot's sprite (silent — no reload)
-      if (slot.type !== 'text') this.spriteDropdown.selectById(slot.spriteKey);
+      if (slot.type !== 'text' && slot.type !== 'full-card') this.spriteDropdown.selectById(slot.spriteKey);
       this.syncTextSlotUI(slot);
     });
     bus.on(Events.RENDER_REQUEST, () => this.render());
@@ -756,12 +806,15 @@ export class App {
     }
   }
 
-  /** Sync visible/hidden and slider range when switching to/from a text slot. */
+  /** Sync visible/hidden and slider range when switching between slot types. */
   private syncTextSlotUI(slot: Slot): void {
-    const isText = slot.type === 'text';
-    this.spriteControls.style.display = isText ? 'none' : '';
-    this.textControls.style.display   = isText ? '' : 'none';
-    this.tintLabel.textContent = isText ? 'Text Color' : 'Custom Tint';
+    const isText     = slot.type === 'text';
+    const isFullCard = slot.type === 'full-card';
+
+    this.spriteControls.style.display   = (isText || isFullCard) ? 'none' : '';
+    this.textControls.style.display     = isText     ? '' : 'none';
+    this.fullCardControls.style.display = isFullCard ? '' : 'none';
+    this.tintLabel.textContent = isText ? 'Text Color' : (isFullCard ? 'Card Tint' : 'Custom Tint');
 
     if (isText) {
       // Switch scale slider → font size mode
@@ -788,12 +841,16 @@ export class App {
         this.unicodeDropdown.selectById(slot.textData.unicodeStyle ?? 'none');
       }
     } else {
-      // Restore scale slider → sprite scale mode
+      // Sprite or full-card: scale slider stays in sprite scale mode (0.1–4)
       this.scaleLabel.textContent = 'Scale';
       this.scaleInput.min  = '0.1';
       this.scaleInput.max  = '4';
       this.scaleInput.step = '0.1';
       this.scaleInput.value = String(slot.scale);
+
+      if (isFullCard) {
+        this.syncFullCardUI(slot);
+      }
     }
   }
 
@@ -852,6 +909,242 @@ export class App {
     currentSlot.spriteUrl  = 'text:'; // keep sentinel URL
     bus.emit(Events.RENDER_REQUEST, null);
     // Also refresh the slot button thumbnail
+    this.refreshSlots();
+  }
+
+  // ── Full Card Layer ──────────────────────────────────────────────────────────
+
+  /** Build the compact full-card control panel (called once in buildUI). */
+  private buildFullCardControls(): HTMLElement {
+    const RARITIES: FullCardRarity[] = ['Common', 'Uncommon', 'Rare', 'Legendary', 'Mythic', 'Divine', 'Celestial'];
+
+    this.fullCardTypeLabel = el('div', { className: 'full-card-type-label', textContent: 'Full Card' }) as HTMLElement;
+
+    this.fullCardNameInput = el('input', { type: 'text', placeholder: 'Item name…' }) as HTMLInputElement;
+    this.fullCardNameInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    // ── Pet section ──
+    this.fullCardRaritySelect = el('select') as HTMLSelectElement;
+    for (const r of RARITIES) {
+      this.fullCardRaritySelect.append(el('option', { value: r, textContent: r }));
+    }
+    this.fullCardRaritySelect.addEventListener('change', () => this.scheduleFullCardRerender());
+
+    this.fullCardAgeInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
+    this.fullCardAgeInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardMaxStrInput = el('input', { type: 'text', placeholder: '10' }) as HTMLInputElement;
+    this.fullCardMaxStrInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardHungerInput = el('input', { type: 'range', min: '0', max: '100', step: '1', value: '75' }) as HTMLInputElement;
+    this.fullCardHungerInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardStrInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
+    this.fullCardStrInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardStrPctInput = el('input', { type: 'range', min: '0', max: '100', step: '1', value: '50' }) as HTMLInputElement;
+    this.fullCardStrPctInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardWeightInput = el('input', { type: 'text', placeholder: '12.5 kg' }) as HTMLInputElement;
+    this.fullCardWeightInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardPetSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Rarity' }), this.fullCardRaritySelect]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Age' }), this.fullCardAgeInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Max STR' }), this.fullCardMaxStrInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Hunger' }), this.fullCardHungerInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'STR level' }), this.fullCardStrInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'STR XP %' }), this.fullCardStrPctInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Weight' }), this.fullCardWeightInput]),
+    ]);
+
+    // ── Simple section (Plant, Egg, Tool, Decor, Seed) ──
+    this.fullCardCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
+    this.fullCardCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardSeedRaritySelect = el('select') as HTMLSelectElement;
+    for (const r of RARITIES) {
+      this.fullCardSeedRaritySelect.append(el('option', { value: r, textContent: r }));
+    }
+    this.fullCardSeedRaritySelect.addEventListener('change', () => this.scheduleFullCardRerender());
+
+    this.fullCardSeedRarityRow = el('div', { className: 'full-card-field', style: 'display:none' }, [
+      el('label', { textContent: 'Rarity' }), this.fullCardSeedRaritySelect,
+    ]);
+
+    this.fullCardSimpleSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Count' }), this.fullCardCountInput]),
+      this.fullCardSeedRarityRow,
+    ]);
+
+    // ── Crop section ──
+    this.fullCardCropWeightInput = el('input', { type: 'text', placeholder: '1.0' }) as HTMLInputElement;
+    this.fullCardCropWeightInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardCropSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Weight (kg)' }), this.fullCardCropWeightInput]),
+    ]);
+
+    const section = el('div', { className: 'full-card-controls-section', style: 'display:none' });
+    section.append(
+      this.fullCardTypeLabel,
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Name' }), this.fullCardNameInput]),
+      this.fullCardPetSection,
+      this.fullCardSimpleSection,
+      this.fullCardCropSection,
+    );
+    return section;
+  }
+
+  /** Populate full-card form fields from a slot's fullCardData. */
+  private syncFullCardUI(slot: Slot): void {
+    const data = slot.fullCardData;
+    if (!data) return;
+
+    this.fullCardTypeLabel.textContent = `${data.cardType} Card`;
+    this.fullCardNameInput.value = data.itemName;
+
+    const isPet    = data.cardType === 'Pet';
+    const isCrop   = data.cardType === 'Crop';
+    const isSimple = !isPet && !isCrop;
+
+    this.fullCardPetSection.style.display    = isPet    ? '' : 'none';
+    this.fullCardSimpleSection.style.display = isSimple ? '' : 'none';
+    this.fullCardCropSection.style.display   = isCrop   ? '' : 'none';
+
+    if (isPet) {
+      this.fullCardRaritySelect.value = data.rarity    ?? 'Common';
+      this.fullCardAgeInput.value     = data.petAge    ?? '';
+      this.fullCardMaxStrInput.value  = data.petMaxStr ?? '';
+      this.fullCardHungerInput.value  = String(data.petHunger ?? 75);
+      this.fullCardStrInput.value     = data.petStr    ?? '';
+      this.fullCardStrPctInput.value  = String(data.petStrPct ?? 50);
+      this.fullCardWeightInput.value  = data.petWeight ?? '';
+    } else if (isSimple) {
+      this.fullCardCountInput.value = data.itemCount ?? '';
+      const isSeed = data.cardType === 'Seed';
+      this.fullCardSeedRarityRow.style.display = isSeed ? '' : 'none';
+      if (isSeed) this.fullCardSeedRaritySelect.value = data.seedRarity ?? 'Common';
+    } else if (isCrop) {
+      this.fullCardCropWeightInput.value = data.cropWeight ?? '';
+    }
+  }
+
+  /** Read current form state into a FullCardData object (cardType is immutable). */
+  private readFullCardDataFromUI(base: FullCardData): FullCardData {
+    const cardType = base.cardType;
+    const result: FullCardData = {
+      cardType,
+      itemName: this.fullCardNameInput.value || base.itemName,
+    };
+    if (cardType === 'Pet') {
+      result.rarity    = (this.fullCardRaritySelect.value as FullCardRarity) || 'Common';
+      result.petAge    = this.fullCardAgeInput.value;
+      result.petMaxStr = this.fullCardMaxStrInput.value;
+      result.petHunger = parseInt(this.fullCardHungerInput.value) || 0;
+      result.petStr    = this.fullCardStrInput.value;
+      result.petStrPct = parseInt(this.fullCardStrPctInput.value) || 0;
+      result.petWeight = this.fullCardWeightInput.value;
+    } else if (cardType === 'Crop') {
+      result.cropWeight = this.fullCardCropWeightInput.value;
+    } else {
+      result.itemCount = this.fullCardCountInput.value;
+      if (cardType === 'Seed') {
+        result.seedRarity = (this.fullCardSeedRaritySelect.value as FullCardRarity) || 'Common';
+      }
+    }
+    return result;
+  }
+
+  /** Add a new full-card slot for the given card type. */
+  private addFullCardPreset(cardType: FullCardType): void {
+    const emptyIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
+    const targetIdx = emptyIdx >= 0 ? emptyIdx : state.activeSlotIndex;
+    const data = defaultFullCardData(cardType);
+    updateSlot(targetIdx, {
+      type:         'full-card',
+      spriteKey:    `full-card/${cardType}`,
+      spriteUrl:    'full-card:',
+      fullCardData: data,
+      gifFrames:    undefined,
+      isAnimated:   true,
+      scale:        1,
+      customTint:   { color: '#ffffff', opacity: 0 },
+      mutations:    [],
+    });
+    setActiveSlot(targetIdx);
+    this.syncTextSlotUI(state.slots[targetIdx]);
+    this.scheduleFullCardRerender();
+  }
+
+  /** Debounce full-card re-renders (same pattern as text layer). */
+  private scheduleFullCardRerender(): void {
+    if (this.fullCardRenderDebounce !== null) clearTimeout(this.fullCardRenderDebounce);
+    this.fullCardRenderDebounce = setTimeout(() => {
+      this.fullCardRenderDebounce = null;
+      this.rerenderFullCard().catch(err => console.error('[MG] Full card render failed:', err));
+    }, 80);
+  }
+
+  /** Re-composite the card layers, overlay stats, and store result in gifFrames[0]. */
+  private async rerenderFullCard(): Promise<void> {
+    const slot = getActiveSlot();
+    if (slot.type !== 'full-card' || !slot.fullCardData) return;
+
+    const data = this.readFullCardDataFromUI(slot.fullCardData);
+    const idx  = state.activeSlotIndex;
+    // Update slot data silently (no undo push — visual refresh only)
+    state.slots[idx].fullCardData = data;
+
+    // Build layer URLs
+    const version = this.getUiSpriteVersion();
+    const v       = version ? `?v=${version}` : '';
+    const apiBase = 'https://mg-api.ariedam.fr/assets/sprites/ui';
+    const cardType = data.cardType;
+
+    type LayerSrc = HTMLImageElement | HTMLCanvasElement;
+    const getW = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.width  : s.naturalWidth;
+    const getH = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.height : s.naturalHeight;
+
+    const layerResults = await Promise.allSettled([
+      this.loadSpriteLayer(`${cardType}CardBottom`, `${apiBase}/${cardType}CardBottom.png${v}`),
+      this.loadSpriteLayer(`${cardType}CardMiddle`, `${apiBase}/${cardType}CardMiddle.png${v}`),
+      this.loadSpriteLayer('CardTop',               `${apiBase}/CardTop.png${v}`),
+    ]);
+
+    const layers: LayerSrc[] = layerResults
+      .filter((r): r is PromiseFulfilledResult<LayerSrc | null> => r.status === 'fulfilled')
+      .map(r => r.value)
+      .filter((v): v is LayerSrc => v !== null);
+
+    if (layers.length === 0) {
+      console.error('[MG] Full card: failed to load any card layers');
+      return;
+    }
+
+    const width  = Math.max(...layers.map(getW));
+    const height = Math.max(...layers.map(getH));
+    const canvas = document.createElement('canvas');
+    canvas.width  = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    for (const layer of layers) {
+      ctx.drawImage(layer as CanvasImageSource, (width - getW(layer)) / 2, (height - getH(layer)) / 2);
+    }
+
+    // Draw stats overlay in-place
+    await drawFullCardStats(canvas, data);
+
+    // Guard: bail if the user switched away while awaiting
+    const currentSlot = state.slots[idx];
+    if (currentSlot.type !== 'full-card') return;
+
+    currentSlot.gifFrames  = [{ canvas, delay: 0 }];
+    currentSlot.isAnimated = true;
+    currentSlot.spriteUrl  = 'full-card:';
+    bus.emit(Events.RENDER_REQUEST, null);
     this.refreshSlots();
   }
 
@@ -1127,7 +1420,7 @@ export class App {
 
   private updateMeta(): void {
     const slot = getActiveSlot();
-    if (!slot.spriteUrl && slot.type !== 'text') {
+    if (!slot.spriteUrl && slot.type !== 'text' && slot.type !== 'full-card') {
       this.metaEl.textContent = '';
       return;
     }
@@ -1135,6 +1428,9 @@ export class App {
     if (slot.type === 'text') {
       const td = slot.textData;
       this.metaEl.innerHTML = `<strong>Text Layer</strong> &middot; Slot ${state.activeSlotIndex + 1} &middot; Font: ${td?.fontLabel ?? '—'} &middot; ${td?.fontSize ?? 0}px`;
+    } else if (slot.type === 'full-card') {
+      const fcd = slot.fullCardData;
+      this.metaEl.innerHTML = `<strong>Full Card</strong> &middot; ${fcd?.cardType ?? '?'} Card &middot; Slot ${state.activeSlotIndex + 1}`;
     } else {
       const displayName = slot.spriteKey.split('/').pop() ?? slot.spriteKey;
       this.metaEl.innerHTML = `<strong>${displayName}</strong> &middot; Slot ${state.activeSlotIndex + 1} &middot; Mutations: ${muts} &middot; Scale: ${slot.scale}x`;

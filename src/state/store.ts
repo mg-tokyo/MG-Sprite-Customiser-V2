@@ -1,6 +1,28 @@
 import type { GameData, SpriteDataResponse, CosmeticsResponse } from '../api/types';
 import { bus, Events } from '../utils/events';
 
+export type FullCardType   = 'Pet' | 'Plant' | 'Crop' | 'Seed' | 'Egg' | 'Tool' | 'Decor';
+export type FullCardRarity = 'Common' | 'Uncommon' | 'Rare' | 'Legendary' | 'Mythic' | 'Divine' | 'Celestial';
+
+export interface FullCardData {
+  cardType:   FullCardType;
+  itemName:   string;
+  // Pet-specific
+  rarity?:    FullCardRarity;
+  petAge?:    string;
+  petMaxStr?: string;    // displayed in header "MAX STR: {n}"
+  petHunger?: number;    // 0–100
+  petStr?:    string;    // current STR level shown in label (e.g. "50")
+  petStrPct?: number;    // 0–100; XP progress within current STR level (bar fill)
+  petWeight?: string;    // e.g. "12.5 kg"
+  // Count-based (Seed, Tool, Decor, Egg, Plant)
+  itemCount?: string;
+  // Crop
+  cropWeight?: string;
+  // Seed rarity chip
+  seedRarity?: FullCardRarity;
+}
+
 export interface TextData {
   content: string;
   /** CSS font-family string (e.g. 'Greycliff CF', 'Impact') */
@@ -32,7 +54,7 @@ export interface TextData {
 
 export interface Slot {
   id: string;
-  type: 'sprite' | 'custom' | 'cosmetic' | 'text';
+  type: 'sprite' | 'custom' | 'cosmetic' | 'text' | 'full-card';
   spriteKey: string;
   spriteUrl: string;
   mutations: string[];
@@ -46,6 +68,7 @@ export interface Slot {
   locked: boolean;
   cosmeticLayers?: Record<string, string>;
   textData?: TextData;
+  fullCardData?: FullCardData;
   // GIF animation data (not persisted)
   gifFrames?: { canvas: HTMLCanvasElement; delay: number }[];
   isAnimated?: boolean;

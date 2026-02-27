@@ -652,6 +652,71 @@ button.danger:hover { background: #ff3333; }
   white-space: nowrap;
 }
 
+/* ── Full Card Controls ── */
+.full-card-controls-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.full-card-type-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 10px;
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 6px;
+  text-align: center;
+}
+
+.full-card-field {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.full-card-field label {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+  text-align: right;
+}
+
+.full-card-field input,
+.full-card-field select {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.full-card-section {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+  margin-top: 2px;
+}
+
+.full-card-add-row {
+  margin-top: 6px;
+}
+
+.full-card-add-row select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--ink);
+  font-size: 13px;
+  cursor: pointer;
+  width: 100%;
+}
+
 /* ── Mobile ── */
 @media (max-width: 600px) {
   header { padding: 10px 14px 8px; }
