@@ -1408,7 +1408,13 @@ export async function drawFullCardStats(
     }
   }
 
-  
+  // Stack count row (Seed / Tool / Decor)
+  if (data.cardType === 'Seed' || data.cardType === 'Tool' || data.cardType === 'Decor') {
+    const count = (data.itemCount ?? '').trim();
+    if (count) {
+      drawCountRow(ctx, detailsY + bottomOffset, ' ', count, rowWidth);
+    }
+  }
 
   // Pet rows
   if (data.cardType === 'Pet') {
