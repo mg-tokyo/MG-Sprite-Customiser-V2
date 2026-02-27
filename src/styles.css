@@ -694,6 +694,13 @@ button.danger:hover { background: #ff3333; }
   font-size: 13px;
 }
 
+.full-card-field input[type="range"] {
+  padding: 0;
+  border: none;
+  background: none;
+  height: 20px;
+}
+
 /* --stack is now identical to regular field; keep for HTML compat */
 .full-card-field--stack { }
 .full-card-field--stack label { }
@@ -807,16 +814,16 @@ button.danger:hover { background: #ff3333; }
   opacity: 1;
 }
 
-/* Diet checkboxes */
+/* Diet checkboxes with sprite previews */
 .full-card-diet-wrap {
-  max-height: 90px;
+  max-height: 160px;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 4px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 .full-card-diet-item {
   display: flex;
@@ -825,11 +832,19 @@ button.danger:hover { background: #ff3333; }
   font-size: 12px;
   color: var(--ink);
   padding: 2px 4px;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
+  transition: background 0.1s;
 }
 .full-card-diet-item:hover { background: var(--hover-bg); }
-.full-card-diet-item input[type="checkbox"] { margin: 0; }
+.full-card-diet-item input[type="checkbox"] { margin: 0; flex-shrink: 0; }
+.full-card-diet-preview {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  image-rendering: pixelated;
+  border-radius: 4px;
+}
 
 /* Abilities wrap */
 .full-card-abilities-wrap {

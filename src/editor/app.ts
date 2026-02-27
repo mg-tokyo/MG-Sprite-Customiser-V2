@@ -101,9 +101,19 @@ function formatXpTime(seconds: number): string {
   return `${h}h ${m}m`;
 }
 
-// ── Card middle-layer tint (matches game's per-type colour multiply) ──────────
-// The ${type}CardMiddle layer is a grayscale ribbon; the game multiplies it by
-// the card type colour at runtime. We replicate that with canvas multiply.
+// ── Card middle-layer tint: rarity-based, falling back to type-based ─────────
+// The ${type}CardMiddle layer is a grayscale ribbon that gets a colour multiply.
+// The game uses rarity to colour the banner; type tints are a fallback.
+const RARITY_BANNER_TINTS: Record<string, string> = {
+  Common:    '#8090A0',  // silver-grey
+  Uncommon:  '#3CA050',  // green
+  Rare:      '#2870E8',  // blue
+  Legendary: '#CC8A00',  // gold
+  Mythic:    '#A030E0',  // purple/violet
+  Divine:    '#20A0CC',  // teal/cyan
+  Celestial: '#CC60F0',  // light violet
+};
+
 const CARD_MIDDLE_TINTS: Partial<Record<FullCardType, string>> = {
   Pet:   '#9040D8',  // purple
   Plant: '#4A8A30',  // forest green
@@ -113,6 +123,21 @@ const CARD_MIDDLE_TINTS: Partial<Record<FullCardType, string>> = {
   Tool:  '#2888D8',  // sky blue
   Decor: '#E0B020',  // gold
 };
+
+function resolveCardRarity(data: FullCardData): string | null {
+  const gd = state.gameData;
+  if (!gd) return (data.rarity ?? data.seedRarity) ?? null;
+  switch (data.cardType) {
+    case 'Pet':    return (data.rarity ?? gd.pets?.[data.itemId ?? '']?.rarity) ?? null;
+    case 'Seed':   return (data.seedRarity ?? gd.plants?.[data.itemId ?? '']?.seed?.rarity) ?? null;
+    case 'Plant':
+    case 'Crop':   return gd.plants?.[data.itemId ?? '']?.seed?.rarity ?? null;
+    case 'Tool':   return gd.items?.[data.itemId ?? '']?.rarity ?? null;
+    case 'Decor':  return gd.decor?.[data.itemId ?? '']?.rarity ?? null;
+    case 'Egg':    return gd.eggs?.[data.itemId ?? '']?.rarity ?? null;
+    default:       return null;
+  }
+}
 
 function tintLayer(
   src: HTMLImageElement | HTMLCanvasElement,
@@ -1361,41 +1386,65 @@ export class App {
       return;
     }
 
-    let items: Array<{ id: string; label: string }> = [];
-    switch (cardType) {
-      case 'Pet':
-        items = Object.entries(gd.pets).map(([id, p]) => ({ id, label: p.name }));
-        break;
-      case 'Plant':
-        items = Object.entries(gd.plants).map(([id, p]) => ({ id, label: p.plant.name }));
-        break;
-      case 'Crop':
-        items = Object.entries(gd.plants).map(([id, p]) => ({ id, label: p.crop.name }));
-        break;
-      case 'Seed':
-        items = Object.entries(gd.plants).map(([id, p]) => ({ id, label: p.seed.name }));
-        break;
-      case 'Egg':
-        items = Object.entries(gd.eggs).map(([id, p]) => ({ id, label: p.name }));
-        break;
-      case 'Tool':
-        items = Object.entries(gd.items).map(([id, p]) => ({ id, label: p.name }));
-        break;
-      case 'Decor':
-        items = Object.entries(gd.decor).map(([id, p]) => ({ id, label: p.name }));
-        break;
-      default:
-        items = [];
+    type ItemEntry = { id: string; label: string };
+    const allGroups: Array<{ groupLabel: string; primary: boolean; items: ItemEntry[] }> = [
+      {
+        groupLabel: 'Pets',
+        primary: cardType === 'Pet',
+        items: Object.entries(gd.pets).map(([id, p]) => ({ id, label: p.name })),
+      },
+      {
+        groupLabel: 'Plants',
+        primary: cardType === 'Plant',
+        items: Object.entries(gd.plants).map(([id, p]) => ({ id, label: p.plant.name })),
+      },
+      {
+        groupLabel: 'Crops',
+        primary: cardType === 'Crop',
+        items: Object.entries(gd.plants).map(([id, p]) => ({ id, label: p.crop.name })),
+      },
+      {
+        groupLabel: 'Seeds',
+        primary: cardType === 'Seed',
+        items: Object.entries(gd.plants).map(([id, p]) => ({ id, label: p.seed.name })),
+      },
+      {
+        groupLabel: 'Eggs',
+        primary: cardType === 'Egg',
+        items: Object.entries(gd.eggs).map(([id, p]) => ({ id, label: p.name })),
+      },
+      {
+        groupLabel: 'Tools',
+        primary: cardType === 'Tool',
+        items: Object.entries(gd.items).map(([id, p]) => ({ id, label: p.name })),
+      },
+      {
+        groupLabel: 'Decor',
+        primary: cardType === 'Decor',
+        items: Object.entries(gd.decor).map(([id, p]) => ({ id, label: p.name })),
+      },
+    ];
+
+    // Primary group first, then all others
+    allGroups.sort((a, b) => (b.primary ? 1 : 0) - (a.primary ? 1 : 0));
+
+    let firstItem: ItemEntry | null = null;
+    for (const group of allGroups) {
+      group.items.sort((a, b) => a.label.localeCompare(b.label));
+      if (group.items.length === 0) continue;
+      const optgroup = document.createElement('optgroup');
+      optgroup.label = group.groupLabel;
+      for (const item of group.items) {
+        optgroup.append(el('option', { value: item.id, textContent: item.label }));
+      }
+      select.append(optgroup);
+      if (!firstItem) firstItem = group.items[0];
     }
 
-    items.sort((a, b) => a.label.localeCompare(b.label));
-    for (const item of items) {
-      select.append(el('option', { value: item.id, textContent: item.label }));
-    }
-    if (selectedId && items.some(i => i.id === selectedId)) {
+    if (selectedId) {
       select.value = selectedId;
-    } else if (items.length > 0) {
-      select.value = items[0].id;
+    } else if (firstItem) {
+      select.value = firstItem.id;
     }
   }
 
@@ -1449,6 +1498,19 @@ export class App {
     select.value = selectedId ?? '';
   }
 
+  private buildSpriteUrl(spriteId: string): string | null {
+    if (!spriteId) return null;
+    if (spriteId.startsWith('sprite/')) {
+      const [, cat, ...rest] = spriteId.split('/');
+      const name = rest.join('/');
+      if (cat && name) {
+        const version = state.gameVersion ?? '';
+        return `https://mg-api.ariedam.fr/assets/sprites/${cat}/${name}.png${version ? `?v=${version}` : ''}`;
+      }
+    }
+    return null;
+  }
+
   private populateDietOptions(selectedIds: string[] = []): void {
     const container = this.fullCardPetDietContainer;
     container.innerHTML = '';
@@ -1460,6 +1522,7 @@ export class App {
     const plants = Object.entries(gd.plants).map(([id, p]) => ({
       id,
       name: p?.crop?.name ?? id,
+      spriteId: p?.crop?.sprite ?? null as string | null,
     }));
     plants.sort((a, b) => a.name.localeCompare(b.name));
     const selected = new Set(selectedIds);
@@ -1468,7 +1531,28 @@ export class App {
       checkbox.dataset.dietId = plant.id;
       checkbox.checked = selected.has(plant.id);
       checkbox.addEventListener('change', () => this.scheduleFullCardRerender());
+
+      const preview = document.createElement('canvas');
+      preview.width = 32;
+      preview.height = 32;
+      preview.className = 'full-card-diet-preview';
+
+      if (plant.spriteId) {
+        const url = this.buildSpriteUrl(plant.spriteId);
+        if (url) {
+          spriteLoader.load(url).then(img => {
+            const pCtx = preview.getContext('2d');
+            if (!pCtx) return;
+            const scale = Math.min(32 / img.naturalWidth, 32 / img.naturalHeight);
+            const dw = img.naturalWidth * scale;
+            const dh = img.naturalHeight * scale;
+            pCtx.drawImage(img, (32 - dw) / 2, (32 - dh) / 2, dw, dh);
+          }).catch(() => {});
+        }
+      }
+
       const label = el('label', { className: 'full-card-diet-item' }, [
+        preview,
         checkbox,
         document.createTextNode(plant.name),
       ]);
@@ -1840,13 +1924,13 @@ export class App {
       this.loadSpriteLayer('CardTop',               `${apiBase}/CardTop.png${v}`),
     ]);
 
-    // The middle layer (index 1) is a grayscale ribbon sprite; the game engine
-    // applies a per-type colour multiply at runtime — replicate that here.
-    const middleTint = CARD_MIDDLE_TINTS[cardType];
+    // The middle layer (index 1) is a grayscale ribbon; tint by rarity, fallback to type.
+    const rarity = resolveCardRarity(data);
+    const bannerTint = (rarity && RARITY_BANNER_TINTS[rarity]) ?? CARD_MIDDLE_TINTS[cardType];
     const layers: LayerSrc[] = layerResults.flatMap((r, idx) => {
       if (r.status !== 'fulfilled' || r.value === null) return [];
       const src = r.value;
-      return [idx === 1 && middleTint ? tintLayer(src, middleTint) : src];
+      return [idx === 1 && bannerTint ? tintLayer(src, bannerTint) : src];
     });
 
     if (layers.length === 0) {

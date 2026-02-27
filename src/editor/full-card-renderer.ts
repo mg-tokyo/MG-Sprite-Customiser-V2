@@ -1408,13 +1408,7 @@ export async function drawFullCardStats(
     }
   }
 
-  // Stack count row (Seed / Tool / Decor)
-  if (data.cardType === 'Seed' || data.cardType === 'Tool' || data.cardType === 'Decor') {
-    const count = (data.itemCount ?? '').trim();
-    if (count) {
-      drawCountRow(ctx, detailsY + bottomOffset, 'Count', count, rowWidth);
-    }
-  }
+  
 
   // Pet rows
   if (data.cardType === 'Pet') {
@@ -1444,11 +1438,11 @@ export async function drawFullCardStats(
         currentLabelValue: String(strength),
         fullyGrown: isMax,
       }, { progressStar, strengthStar });
-      cursorY += 32 + 8;
+      cursorY += 32 + 14;
 
       const dietIds = data.petDietIds ?? pet.diet ?? [];
       const leftPad = rowWidth * 0.35 - 55;
-      const rightPad = dietIds.length * 40 + 12;
+      const rightPad = dietIds.length * 22 + 12; // step = iconSize(40) + overlap(-18) = 22
       drawProgressBarRow(ctx, {
         label: 'Hunger',
         value: hunger,
@@ -1494,7 +1488,7 @@ export async function drawFullCardStats(
             id: `custom:${name}`,
             name,
             color,
-            disabled: hunger <= 0,
+            disabled: false,
           };
         }
         const id = entry.id ?? '';
@@ -1507,7 +1501,7 @@ export async function drawFullCardStats(
           id,
           name: def?.name ?? id,
           color: abilityColor(id),
-          disabled: hunger <= 0 || weatherMismatch,
+          disabled: weatherMismatch,
         };
       }).filter((def): def is { id: string; name: string; color: string; disabled: boolean } => !!def);
       if (abilityDefs.length > 0) {
