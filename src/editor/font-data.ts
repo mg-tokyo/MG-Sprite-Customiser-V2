@@ -11,6 +11,73 @@
 // These are served as static Vite assets; the hash is baked into the filename.
 const MG_CDN = 'https://magicgarden.gg/assets';
 
+const IS_DEV = import.meta.env.DEV;
+const BUILD_CORS_PROXY = import.meta.env.VITE_CORS_PROXY ?? '';
+
+function isLocalhostHost(hostname: string): boolean {
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return true;
+  return hostname.endsWith('.localhost');
+}
+
+function getRuntimeCorsProxy(): string {
+  if (typeof window === 'undefined') return '';
+
+  const params = new URLSearchParams(window.location.search);
+  const qp = params.get('proxy')?.trim() ?? '';
+  if (qp) {
+    try {
+      const parsed = new URL(qp);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        try {
+          localStorage.setItem('mg_sprite_proxy', qp);
+        } catch {
+          // ignore storage errors
+        }
+        return qp;
+      }
+    } catch {
+      // ignore invalid query param
+    }
+  }
+
+  try {
+    return localStorage.getItem('mg_sprite_proxy') ?? '';
+  } catch {
+    return '';
+  }
+}
+
+const RUNTIME_CORS_PROXY = getRuntimeCorsProxy();
+
+function buildProxyUrl(prefix: string, target: string): string {
+  if (!prefix) return target;
+  if (prefix.includes('{url}')) return prefix.replace('{url}', encodeURIComponent(target));
+  return `${prefix}${encodeURIComponent(target)}`;
+}
+
+function proxyUrl(url: string): string {
+  if (IS_DEV) {
+    if (url.startsWith('https://magicgarden.gg/')) {
+      return url.replace('https://magicgarden.gg/', '/mggg-proxy/');
+    }
+    return url;
+  }
+
+  const isLocalhost =
+    typeof window !== 'undefined' && isLocalhostHost(window.location.hostname);
+
+  if (isLocalhost && url.startsWith('https://magicgarden.gg/')) {
+    return url.replace('https://magicgarden.gg/', '/mggg-proxy/');
+  }
+
+  const corsProxy = RUNTIME_CORS_PROXY || BUILD_CORS_PROXY;
+  if (corsProxy && url.startsWith('https://magicgarden.gg/')) {
+    return buildProxyUrl(corsProxy, url);
+  }
+
+  return url;
+}
+
 export interface FontDef {
   id: string;
   label: string;
@@ -259,7 +326,8 @@ export async function ensureFontLoaded(font: FontDef): Promise<void> {
   // MG CDN woff2 via FontFace API
   if (font.woff2Url) {
     try {
-      const face = new FontFace(font.family, `url(${font.woff2Url})`, {
+      const fetchUrl = proxyUrl(font.woff2Url);
+      const face = new FontFace(font.family, `url(${fetchUrl})`, {
         weight: font.weight,
         style: font.style,
       });

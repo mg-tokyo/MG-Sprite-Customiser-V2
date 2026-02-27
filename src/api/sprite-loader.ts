@@ -14,7 +14,48 @@ const IS_DEV = import.meta.env.DEV;
  * Optional CORS proxy prefix for production builds (set via VITE_CORS_PROXY env var).
  * e.g. "https://corsproxy.io/?url=" — appended with encodeURIComponent(targetUrl).
  */
-const CORS_PROXY = import.meta.env.VITE_CORS_PROXY ?? '';
+const BUILD_CORS_PROXY = import.meta.env.VITE_CORS_PROXY ?? '';
+
+function isLocalhostHost(hostname: string): boolean {
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return true;
+  return hostname.endsWith('.localhost');
+}
+
+function getRuntimeCorsProxy(): string {
+  if (typeof window === 'undefined') return '';
+
+  const params = new URLSearchParams(window.location.search);
+  const qp = params.get('proxy')?.trim() ?? '';
+  if (qp) {
+    try {
+      const parsed = new URL(qp);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        try {
+          localStorage.setItem('mg_sprite_proxy', qp);
+        } catch {
+          // ignore storage errors
+        }
+        return qp;
+      }
+    } catch {
+      // ignore invalid query param
+    }
+  }
+
+  try {
+    return localStorage.getItem('mg_sprite_proxy') ?? '';
+  } catch {
+    return '';
+  }
+}
+
+const RUNTIME_CORS_PROXY = getRuntimeCorsProxy();
+
+function buildProxyUrl(prefix: string, target: string): string {
+  if (!prefix) return target;
+  if (prefix.includes('{url}')) return prefix.replace('{url}', encodeURIComponent(target));
+  return `${prefix}${encodeURIComponent(target)}`;
+}
 
 /**
  * Rewrite external URLs to a CORS-safe form.
@@ -35,12 +76,26 @@ function proxyUrl(url: string): string {
     return url;
   }
 
+  const isLocalhost =
+    typeof window !== 'undefined' && isLocalhostHost(window.location.hostname);
+
+  // Local preview: use the same Vite proxy paths even in production builds.
+  if (isLocalhost) {
+    if (url.startsWith('https://mg-api.ariedam.fr/')) {
+      return url.replace('https://mg-api.ariedam.fr/', '/api/');
+    }
+    if (url.startsWith('https://magicgarden.gg/')) {
+      return url.replace('https://magicgarden.gg/', '/mggg-proxy/');
+    }
+  }
+
+  const corsProxy = RUNTIME_CORS_PROXY || BUILD_CORS_PROXY;
   // Production: proxy both game asset domains directly (no URL rewriting)
   if (
-    CORS_PROXY &&
+    corsProxy &&
     (url.startsWith('https://mg-api.ariedam.fr/') || url.startsWith('https://magicgarden.gg/'))
   ) {
-    return `${CORS_PROXY}${encodeURIComponent(url)}`;
+    return buildProxyUrl(corsProxy, url);
   }
 
   return url;

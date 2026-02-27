@@ -24,4 +24,19 @@ export default defineConfig({
       },
     },
   },
+  preview: {
+    proxy: {
+      '/api': {
+        target: 'https://mg-api.ariedam.fr',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+      '/mggg-proxy': {
+        target: 'https://magicgarden.gg',
+        changeOrigin: true,
+        followRedirects: true,
+        rewrite: (path) => path.replace(/^\/mggg-proxy/, ''),
+      },
+    },
+  },
 });
