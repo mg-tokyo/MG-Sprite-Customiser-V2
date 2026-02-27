@@ -1,5 +1,5 @@
 import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlot, reorderSlots } from '../state/store';
-import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity } from '../state/store';
+import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity, FullCardAbilityEntry } from '../state/store';
 import { initTheme, toggleTheme } from './theme';
 import { FILTERS } from '../renderer/mutation-defs';
 import { renderAll, renderSlot } from '../renderer/canvas-renderer';
@@ -16,7 +16,7 @@ import type { DropdownItem } from './custom-dropdown';
 import { spriteLoader } from '../api/sprite-loader';
 import type { SpriteFrame } from '../api/types';
 import { renderTextToCanvas, defaultTextData } from './text-renderer';
-import { drawFullCardStats, defaultFullCardData } from './full-card-renderer';
+import { drawFullCardStats, defaultFullCardData, abilityColor } from './full-card-renderer';
 import { MG_FONTS, SYSTEM_FONTS, GOOGLE_FONTS_CURATED, UNICODE_STYLES, ensureFontLoaded } from './font-data';
 
 // ── Hit-test content bounds ──────────────────────────────────────────────────
@@ -79,6 +79,58 @@ function scanContentBounds(
   return { cx: bx + bw / 2, cy: by + bh / 2, hw: bw / 2, hv: bh / 2 };
 }
 
+// ── Mutation chip colors (for toggle-chip UI) ────────────────────────────────
+const MUTATION_CHIP_COLORS: Record<string, string> = {
+  Gold:          '#EBC800',
+  Rainbow:       'linear-gradient(90deg, #FF1744, #FF9100, #FFEA00, #00E676, #2979FF, #D500F9)',
+  Wet:           '#32B4C8',
+  Chilled:       '#64A0D2',
+  Frozen:        '#6482DC',
+  Thunderstruck: '#FFD700',
+  Dawnlit:       '#D146E7',
+  Ambershine:    '#BE6428',
+  Dawncharged:   '#8C50C8',
+  Ambercharged:  '#AA3C19',
+};
+
+function formatXpTime(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
+// ── Card middle-layer tint (matches game's per-type colour multiply) ──────────
+// The ${type}CardMiddle layer is a grayscale ribbon; the game multiplies it by
+// the card type colour at runtime. We replicate that with canvas multiply.
+const CARD_MIDDLE_TINTS: Partial<Record<FullCardType, string>> = {
+  Pet:   '#9040D8',  // purple
+  Plant: '#4A8A30',  // forest green
+  Crop:  '#509030',  // olive green
+  Seed:  '#90C020',  // lime green
+  Egg:   '#D03880',  // magenta-pink
+  Tool:  '#2888D8',  // sky blue
+  Decor: '#E0B020',  // gold
+};
+
+function tintLayer(
+  src: HTMLImageElement | HTMLCanvasElement,
+  color: string,
+): HTMLCanvasElement {
+  const w = src instanceof HTMLCanvasElement ? src.width  : src.naturalWidth;
+  const h = src instanceof HTMLCanvasElement ? src.height : src.naturalHeight;
+  const tmp = document.createElement('canvas');
+  tmp.width  = w;
+  tmp.height = h;
+  const tc = tmp.getContext('2d')!;
+  tc.drawImage(src as CanvasImageSource, 0, 0);
+  tc.globalCompositeOperation = 'multiply';
+  tc.fillStyle = color;
+  tc.fillRect(0, 0, w, h);
+  return tmp;
+}
+
 export class App {
   private categoryDropdown!: CustomDropdown;
   private spriteDropdown!: CustomDropdown;
@@ -132,27 +184,57 @@ export class App {
   private fullCardControls!: HTMLElement;
   private fullCardTypeLabel!: HTMLElement;
   private fullCardNameInput!: HTMLInputElement;
+  private fullCardItemLabel!: HTMLElement;
+  private fullCardItemSelect!: HTMLSelectElement;
   // Pet fields
   private fullCardPetSection!: HTMLElement;
   private fullCardRaritySelect!: HTMLSelectElement;
-  private fullCardAgeInput!: HTMLInputElement;
-  private fullCardMaxStrInput!: HTMLInputElement;   // overall max STR (header label)
-  private fullCardHungerInput!: HTMLInputElement;   // 0–100 range
-  private fullCardStrInput!: HTMLInputElement;      // current STR level (text)
-  private fullCardStrPctInput!: HTMLInputElement;   // 0–100 range (XP bar fill)
-  private fullCardWeightInput!: HTMLInputElement;
+  private fullCardPetXpInput!: HTMLInputElement;
+  private fullCardPetXpDisplay!: HTMLElement;
+  private fullCardPetScaleInput!: HTMLInputElement;
+  private fullCardPetMaxStrDisplay!: HTMLElement;
+  private fullCardPetHungerInput!: HTMLInputElement;
+  private fullCardPetHungerDisplay!: HTMLElement;
+  private fullCardPetWeatherSelect!: HTMLSelectElement;
+  private fullCardPetDietContainer!: HTMLElement;
+  private fullCardPetAbilityChips!: HTMLElement;
+  private fullCardPetAbilityAddSelect!: HTMLSelectElement;
+  private fullCardPetAbilityAddBtn!: HTMLButtonElement;
+  private fullCardPetAbilityList!: HTMLElement;
+  private fullCardAddCustomAbilityBtn!: HTMLButtonElement;
+  // Mutations section (standalone, all card types)
+  private fullCardItemMutationsContainer!: HTMLElement;
+  // Item style fields
+  private fullCardItemStyleDetails!: HTMLDetailsElement;
+  private fullCardItemSpriteInput!: HTMLInputElement;
+  private fullCardItemSpriteUseBtn!: HTMLButtonElement;
+  private fullCardItemSpriteClearBtn!: HTMLButtonElement;
+  private fullCardItemSpriteUploadBtn!: HTMLButtonElement;
+  private fullCardItemSpriteFileInput!: HTMLInputElement;
+  private fullCardItemTintColor!: HTMLInputElement;
+  private fullCardItemTintOpacity!: HTMLInputElement;
+  private fullCardItemScaleInput!: HTMLInputElement;
+  private fullCardItemRotationInput!: HTMLInputElement;
+  private fullCardItemIconsCheck!: HTMLInputElement;
+  private fullCardItemOverlaysCheck!: HTMLInputElement;
+  // Plant fields
+  private fullCardPlantSection!: HTMLElement;
+  private fullCardPlantSlotCountInput!: HTMLInputElement;
+  private fullCardPlantMaturedSlotsInput!: HTMLInputElement;
+  private fullCardPlantMaturityInput!: HTMLInputElement;
+  // Scale fields (Crop / Plant single-slot)
+  private fullCardCropSection!: HTMLElement;
+  private fullCardScaleInput!: HTMLInputElement;
   // Simple / count fields
   private fullCardSimpleSection!: HTMLElement;
   private fullCardCountInput!: HTMLInputElement;
   private fullCardSeedRarityRow!: HTMLElement;
   private fullCardSeedRaritySelect!: HTMLSelectElement;
-  // Crop fields
-  private fullCardCropSection!: HTMLElement;
-  private fullCardCropWeightInput!: HTMLInputElement;
   // Shared fields (all card types)
   private fullCardLockedCheck!: HTMLInputElement;
 
   private fullCardRenderDebounce: ReturnType<typeof setTimeout> | null = null;
+  private lastSpriteSelection: { id: string; url: string } | null = null;
 
   constructor(container: HTMLElement) {
     initTheme();
@@ -195,6 +277,10 @@ export class App {
       showThumbs: false,
       placeholder: 'Select category\u2026',
       onSelect: (item: DropdownItem) => {
+        if (!item.fullCardType && !item.cardPresetUrls) {
+          const url = item.thumbUrl ?? item.animFrameUrls?.[0] ?? '';
+          if (url) this.lastSpriteSelection = { id: item.id, url };
+        }
         state.selectedCategory = item.id;
         // Clear search when changing category
         this.searchInput.value = '';
@@ -478,6 +564,8 @@ export class App {
     bus.on(Events.DATA_LOADED, () => {
       this.populateCategories();
       this.refreshMutations();
+      const slot = getActiveSlot();
+      if (slot.type === 'full-card') this.syncFullCardUI(slot);
     });
 
     // Keyboard shortcuts
@@ -903,51 +991,149 @@ export class App {
 
   // ── Full Card Layer ──────────────────────────────────────────────────────────
 
-  /** Build the compact full-card control panel (called once in buildUI). */
+    /** Build the compact full-card control panel (called once in buildUI). */
   private buildFullCardControls(): HTMLElement {
     const RARITIES: FullCardRarity[] = ['Common', 'Uncommon', 'Rare', 'Legendary', 'Mythic', 'Divine', 'Celestial'];
 
     this.fullCardTypeLabel = el('div', { className: 'full-card-type-label', textContent: 'Full Card' }) as HTMLElement;
 
-    this.fullCardNameInput = el('input', { type: 'text', placeholder: 'Item name…' }) as HTMLInputElement;
+    this.fullCardNameInput = el('input', { type: 'text', placeholder: 'Item name...' }) as HTMLInputElement;
     this.fullCardNameInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
-    // ── Pet section ──
+    this.fullCardItemLabel = el('label', { textContent: 'Item' }) as HTMLElement;
+    this.fullCardItemSelect = el('select') as HTMLSelectElement;
+    this.fullCardItemSelect.addEventListener('change', () => {
+      this.syncFullCardItemDefaults();
+      this.scheduleFullCardRerender();
+    });
+
+    // -- Pet section --
     this.fullCardRaritySelect = el('select') as HTMLSelectElement;
     for (const r of RARITIES) {
       this.fullCardRaritySelect.append(el('option', { value: r, textContent: r }));
     }
     this.fullCardRaritySelect.addEventListener('change', () => this.scheduleFullCardRerender());
 
-    this.fullCardAgeInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
-    this.fullCardAgeInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    // XP slider
+    this.fullCardPetXpDisplay = el('span', { className: 'full-card-slider-val', textContent: '0h 0m' });
+    this.fullCardPetXpInput = el('input', { type: 'range', min: '0', max: '108000', step: '1000', value: '0' }) as HTMLInputElement;
+    this.fullCardPetXpInput.addEventListener('input', () => {
+      this.fullCardPetXpDisplay.textContent = formatXpTime(Number(this.fullCardPetXpInput.value));
+      this.scheduleFullCardRerender();
+    });
 
-    this.fullCardMaxStrInput = el('input', { type: 'text', placeholder: '10' }) as HTMLInputElement;
-    this.fullCardMaxStrInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    // Max STR slider (80–100 → converts to targetScale internally)
+    this.fullCardPetMaxStrDisplay = el('span', { className: 'full-card-slider-val', textContent: '80' });
+    this.fullCardPetScaleInput = el('input', { type: 'range', min: '80', max: '100', step: '1', value: '80' }) as HTMLInputElement;
+    this.fullCardPetScaleInput.addEventListener('input', () => {
+      this.fullCardPetMaxStrDisplay.textContent = this.fullCardPetScaleInput.value;
+      this.scheduleFullCardRerender();
+    });
 
-    this.fullCardHungerInput = el('input', { type: 'range', min: '0', max: '100', step: '1', value: '75' }) as HTMLInputElement;
-    this.fullCardHungerInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    // Hunger slider
+    this.fullCardPetHungerDisplay = el('span', { className: 'full-card-slider-val', textContent: '0' });
+    this.fullCardPetHungerInput = el('input', { type: 'range', min: '0', max: '1000', step: '1', value: '0' }) as HTMLInputElement;
+    this.fullCardPetHungerInput.addEventListener('input', () => {
+      this.fullCardPetHungerDisplay.textContent = this.fullCardPetHungerInput.value;
+      this.scheduleFullCardRerender();
+    });
 
-    this.fullCardStrInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
-    this.fullCardStrInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    this.fullCardPetWeatherSelect = el('select') as HTMLSelectElement;
+    this.fullCardPetWeatherSelect.addEventListener('change', () => this.scheduleFullCardRerender());
 
-    this.fullCardStrPctInput = el('input', { type: 'range', min: '0', max: '100', step: '1', value: '50' }) as HTMLInputElement;
-    this.fullCardStrPctInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    // Diet checkbox container
+    this.fullCardPetDietContainer = el('div', { className: 'full-card-diet-wrap' });
 
-    this.fullCardWeightInput = el('input', { type: 'text', placeholder: '12.5 kg' }) as HTMLInputElement;
-    this.fullCardWeightInput.addEventListener('input', () => this.scheduleFullCardRerender());
-
-    this.fullCardPetSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Rarity' }), this.fullCardRaritySelect]),
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Age' }), this.fullCardAgeInput]),
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Max STR' }), this.fullCardMaxStrInput]),
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Hunger' }), this.fullCardHungerInput]),
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'STR level' }), this.fullCardStrInput]),
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'STR XP %' }), this.fullCardStrPctInput]),
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Weight' }), this.fullCardWeightInput]),
+    // Ability chips
+    this.fullCardPetAbilityChips = el('div', { className: 'full-card-ability-chips' });
+    this.fullCardPetAbilityAddSelect = el('select') as HTMLSelectElement;
+    this.fullCardPetAbilityAddBtn = el('button', {
+      type: 'button',
+      className: 'full-card-item-btn',
+      textContent: 'Add',
+    }) as HTMLButtonElement;
+    this.fullCardPetAbilityAddBtn.addEventListener('click', () => {
+      const id = this.fullCardPetAbilityAddSelect.value;
+      if (!id) return;
+      const existing = Array.from(this.fullCardPetAbilityChips.querySelectorAll<HTMLElement>('[data-ability-id]'))
+        .map(c => c.dataset.abilityId);
+      if (existing.includes(id)) return;
+      const name = this.fullCardPetAbilityAddSelect.selectedOptions[0]?.textContent ?? id;
+      this.fullCardPetAbilityChips.append(this.createAbilityChip(id, name));
+      this.scheduleFullCardRerender();
+    });
+    const abilityAddRow = el('div', { className: 'full-card-ability-add-row' }, [
+      this.fullCardPetAbilityAddSelect,
+      this.fullCardPetAbilityAddBtn,
     ]);
 
-    // ── Simple section (Plant, Egg, Tool, Decor, Seed) ──
+    this.fullCardPetAbilityList = el('div', { className: 'full-card-abilities-list' });
+    this.fullCardAddCustomAbilityBtn = el('button', {
+      type: 'button',
+      className: 'full-card-ability-add',
+      textContent: '+',
+      title: 'Add custom ability',
+    }) as HTMLButtonElement;
+    this.fullCardAddCustomAbilityBtn.addEventListener('click', () => {
+      this.fullCardPetAbilityList.append(this.createCustomAbilityRow());
+      this.scheduleFullCardRerender();
+    });
+    const abilityWrap = el('div', { className: 'full-card-abilities-wrap' }, [
+      this.fullCardPetAbilityChips,
+      abilityAddRow,
+      el('div', { className: 'full-card-abilities-custom' }, [
+        this.fullCardPetAbilityList,
+        this.fullCardAddCustomAbilityBtn,
+      ]),
+    ]);
+
+    this.fullCardPetSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
+      el('div', { className: 'full-card-section-title', textContent: 'Pet Stats' }),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Rarity' }), this.fullCardRaritySelect]),
+      el('div', { className: 'full-card-field' }, [
+        el('label', { textContent: 'XP' }),
+        el('div', { className: 'full-card-slider-row' }, [this.fullCardPetXpInput, this.fullCardPetXpDisplay]),
+      ]),
+      el('div', { className: 'full-card-field' }, [
+        el('label', { textContent: 'Max STR' }),
+        el('div', { className: 'full-card-slider-row' }, [this.fullCardPetScaleInput, this.fullCardPetMaxStrDisplay]),
+      ]),
+      el('div', { className: 'full-card-field' }, [
+        el('label', { textContent: 'Hunger' }),
+        el('div', { className: 'full-card-slider-row' }, [this.fullCardPetHungerInput, this.fullCardPetHungerDisplay]),
+      ]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Weather' }), this.fullCardPetWeatherSelect]),
+      el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Diet' }), this.fullCardPetDietContainer]),
+      el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Abilities' }), abilityWrap]),
+    ]);
+
+    // -- Plant section --
+    this.fullCardPlantSlotCountInput = el('input', { type: 'number', min: '1', step: '1', value: '1' }) as HTMLInputElement;
+    this.fullCardPlantSlotCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardPlantMaturedSlotsInput = el('input', { type: 'number', min: '0', step: '1', value: '0' }) as HTMLInputElement;
+    this.fullCardPlantMaturedSlotsInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardPlantMaturityInput = el('input', { type: 'range', min: '0', max: '100', step: '1', value: '0' }) as HTMLInputElement;
+    this.fullCardPlantMaturityInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardPlantSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
+      el('div', { className: 'full-card-section-title', textContent: 'Growth' }),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Total Slots' }), this.fullCardPlantSlotCountInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Mature Slots' }), this.fullCardPlantMaturedSlotsInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Maturity %' }), this.fullCardPlantMaturityInput]),
+    ]);
+
+    // -- Scale section (Crop / Plant single-slot) --
+    this.fullCardScaleInput = el('input', { type: 'number', min: '0.1', step: '0.01', value: '1' }) as HTMLInputElement;
+    this.fullCardScaleInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardCropSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
+      el('div', { className: 'full-card-section-title', textContent: 'Size' }),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Scale' }), this.fullCardScaleInput]),
+    ]);
+
+    // -- Simple section (Seed / Egg / Tool / Decor) --
     this.fullCardCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
     this.fullCardCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
@@ -962,36 +1148,469 @@ export class App {
     ]);
 
     this.fullCardSimpleSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Count' }), this.fullCardCountInput]),
+      el('div', { className: 'full-card-section-title', textContent: 'Stack' }),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Count (optional)' }), this.fullCardCountInput]),
       this.fullCardSeedRarityRow,
     ]);
 
-    // ── Crop section ──
-    this.fullCardCropWeightInput = el('input', { type: 'text', placeholder: '1.0' }) as HTMLInputElement;
-    this.fullCardCropWeightInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    // -- Item style (collapsible) --
+    this.fullCardItemSpriteInput = el('input', { type: 'text', placeholder: 'sprite id or URL' }) as HTMLInputElement;
+    this.fullCardItemSpriteInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
-    this.fullCardCropSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Weight (kg)' }), this.fullCardCropWeightInput]),
+    this.fullCardItemSpriteUseBtn = el('button', {
+      type: 'button',
+      className: 'full-card-item-btn',
+      textContent: 'Use selected',
+    }) as HTMLButtonElement;
+    this.fullCardItemSpriteUseBtn.addEventListener('click', () => {
+      const last = this.lastSpriteSelection;
+      if (!last) return;
+      const value = last.id.startsWith('sprite/') ? last.id : (last.url || last.id);
+      this.fullCardItemSpriteInput.value = value;
+      this.scheduleFullCardRerender();
+    });
+
+    this.fullCardItemSpriteClearBtn = el('button', {
+      type: 'button',
+      className: 'full-card-item-btn',
+      textContent: 'Clear',
+    }) as HTMLButtonElement;
+    this.fullCardItemSpriteClearBtn.addEventListener('click', () => {
+      this.fullCardItemSpriteInput.value = '';
+      this.scheduleFullCardRerender();
+    });
+
+    this.fullCardItemSpriteFileInput = el('input', {
+      type: 'file',
+      accept: 'image/png,image/jpeg,image/gif',
+    }) as HTMLInputElement;
+    this.fullCardItemSpriteFileInput.style.display = 'none';
+    this.fullCardItemSpriteUploadBtn = el('button', {
+      type: 'button',
+      className: 'full-card-item-btn',
+      textContent: 'Upload',
+    }) as HTMLButtonElement;
+    this.fullCardItemSpriteUploadBtn.addEventListener('click', () => this.fullCardItemSpriteFileInput.click());
+    this.fullCardItemSpriteFileInput.addEventListener('change', async () => {
+      const file = this.fullCardItemSpriteFileInput.files?.[0];
+      if (!file) return;
+      if (file.type === 'image/gif' || file.name.toLowerCase().endsWith('.gif')) {
+        const buffer = await file.arrayBuffer();
+        const decoded = decodeGif(buffer);
+        const firstFrameBlob = await new Promise<Blob>((resolve) =>
+          decoded.frames[0].canvas.toBlob((b) => resolve(b!), 'image/png'),
+        );
+        const url = URL.createObjectURL(firstFrameBlob);
+        this.fullCardItemSpriteInput.value = url;
+      } else {
+        const url = URL.createObjectURL(file);
+        this.fullCardItemSpriteInput.value = url;
+      }
+      this.fullCardItemSpriteFileInput.value = '';
+      this.scheduleFullCardRerender();
+    });
+
+    // Mutations toggle-chip container (standalone section, all card types)
+    this.fullCardItemMutationsContainer = el('div', { className: 'full-card-mutations-wrap' });
+    for (const id of Object.keys(FILTERS)) {
+      const chip = el('span', {
+        className: 'full-card-mutation-chip',
+        textContent: id,
+      }) as HTMLElement;
+      chip.dataset.mutationId = id;
+      chip.style.background = MUTATION_CHIP_COLORS[id] ?? '#555';
+      chip.addEventListener('click', () => {
+        chip.classList.toggle('active');
+        this.scheduleFullCardRerender();
+      });
+      this.fullCardItemMutationsContainer.append(chip);
+    }
+
+    this.fullCardItemTintColor = el('input', { type: 'color', value: '#ffffff' }) as HTMLInputElement;
+    this.fullCardItemTintOpacity = el('input', { type: 'range', min: '0', max: '1', step: '0.05', value: '0' }) as HTMLInputElement;
+    this.fullCardItemTintColor.addEventListener('input', () => this.scheduleFullCardRerender());
+    this.fullCardItemTintOpacity.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardItemScaleInput = el('input', { type: 'number', min: '0.1', step: '0.01', value: '1' }) as HTMLInputElement;
+    this.fullCardItemScaleInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardItemRotationInput = el('input', { type: 'number', min: '-180', max: '180', step: '1', value: '0' }) as HTMLInputElement;
+    this.fullCardItemRotationInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardItemIconsCheck = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    this.fullCardItemIconsCheck.addEventListener('change', () => this.scheduleFullCardRerender());
+
+    this.fullCardItemOverlaysCheck = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    this.fullCardItemOverlaysCheck.addEventListener('change', () => this.scheduleFullCardRerender());
+
+    this.fullCardItemStyleDetails = document.createElement('details');
+    this.fullCardItemStyleDetails.className = 'full-card-item-style';
+    const itemSummary = el('summary', { textContent: 'Item Appearance' });
+    const itemStyleBody = el('div', { className: 'full-card-item-style-body' }, [
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Item Sprite' }), this.fullCardItemSpriteInput]),
+      el('div', { className: 'full-card-item-actions' }, [
+        this.fullCardItemSpriteUseBtn,
+        this.fullCardItemSpriteUploadBtn,
+        this.fullCardItemSpriteClearBtn,
+        this.fullCardItemSpriteFileInput,
+      ]),
+      el('div', { className: 'full-card-field' }, [
+        el('label', { textContent: 'Item Tint' }),
+        el('div', { className: 'full-card-item-tint' }, [this.fullCardItemTintColor, this.fullCardItemTintOpacity]),
+      ]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Item Scale' }), this.fullCardItemScaleInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Item Rotation' }), this.fullCardItemRotationInput]),
+      el('div', { className: 'full-card-field full-card-field--stack' }, [
+        el('label', { textContent: 'Item Options' }),
+        el('div', { className: 'full-card-item-options' }, [
+          el('label', { className: 'full-card-item-option' }, [this.fullCardItemIconsCheck, document.createTextNode(' Icons')]),
+          el('label', { className: 'full-card-item-option' }, [this.fullCardItemOverlaysCheck, document.createTextNode(' Overlays')]),
+        ]),
+      ]),
     ]);
+    this.fullCardItemStyleDetails.append(itemSummary, itemStyleBody);
 
-    // ── Shared: locked toggle (applies to all card types) ──
+    // -- Shared: locked toggle (applies to all card types) --
     this.fullCardLockedCheck = el('input', { type: 'checkbox' }) as HTMLInputElement;
     this.fullCardLockedCheck.addEventListener('change', () => this.scheduleFullCardRerender());
 
     const section = el('div', { className: 'full-card-controls-section', style: 'display:none' });
+    const mutationsSection = el('div', { className: 'full-card-section' }, [
+      el('div', { className: 'full-card-section-title', textContent: 'Mutations' }),
+      this.fullCardItemMutationsContainer,
+    ]);
+
     section.append(
       this.fullCardTypeLabel,
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Name' }), this.fullCardNameInput]),
-      el('div', { className: 'full-card-field' }, [
-        el('label', { textContent: 'Locked' }),
-        el('span', { className: 'full-card-locked-wrap' }, [this.fullCardLockedCheck]),
-      ]),
+      el('div', { className: 'full-card-field' }, [this.fullCardItemLabel, this.fullCardItemSelect]),
+      el('label', { className: 'full-card-locked-wrap' }, [this.fullCardLockedCheck, document.createTextNode(' Locked')]),
       this.fullCardPetSection,
-      this.fullCardSimpleSection,
+      this.fullCardPlantSection,
       this.fullCardCropSection,
+      this.fullCardSimpleSection,
+      mutationsSection,
+      this.fullCardItemStyleDetails,
     );
     return section;
   }
+
+  private getFullCardItemLabel(cardType: FullCardType): string {
+    switch (cardType) {
+      case 'Pet': return 'Pet Species';
+      case 'Plant': return 'Plant';
+      case 'Crop': return 'Crop';
+      case 'Seed': return 'Seed';
+      case 'Egg': return 'Egg';
+      case 'Tool': return 'Tool';
+      case 'Decor': return 'Decor';
+      default: return 'Item';
+    }
+  }
+
+  private getDefaultItemName(cardType: FullCardType, itemId: string): string | undefined {
+    const gd = state.gameData;
+    if (!gd) return undefined;
+    switch (cardType) {
+      case 'Pet': return gd.pets[itemId]?.name;
+      case 'Plant': return gd.plants[itemId]?.plant?.name;
+      case 'Crop': return gd.plants[itemId]?.crop?.name;
+      case 'Seed': return gd.plants[itemId]?.seed?.name;
+      case 'Egg': return gd.eggs[itemId]?.name;
+      case 'Tool': return gd.items[itemId]?.name;
+      case 'Decor': return gd.decor[itemId]?.name;
+      default: return undefined;
+    }
+  }
+
+  private resolveFullCardItemId(cardType: FullCardType, itemName: string): string | undefined {
+    const gd = state.gameData;
+    if (!gd) return undefined;
+    const target = itemName.trim().toLowerCase();
+    if (!target) return undefined;
+    const matchByName = (name: string | undefined) =>
+      name && name.trim().toLowerCase() === target;
+    switch (cardType) {
+      case 'Pet':
+        return Object.keys(gd.pets).find(id => matchByName(gd.pets[id]?.name));
+      case 'Plant':
+        return Object.keys(gd.plants).find(id => matchByName(gd.plants[id]?.plant?.name));
+      case 'Crop':
+        return Object.keys(gd.plants).find(id => matchByName(gd.plants[id]?.crop?.name));
+      case 'Seed':
+        return Object.keys(gd.plants).find(id => matchByName(gd.plants[id]?.seed?.name));
+      case 'Egg':
+        return Object.keys(gd.eggs).find(id => matchByName(gd.eggs[id]?.name));
+      case 'Tool':
+        return Object.keys(gd.items).find(id => matchByName(gd.items[id]?.name));
+      case 'Decor':
+        return Object.keys(gd.decor).find(id => matchByName(gd.decor[id]?.name));
+      default:
+        return undefined;
+    }
+  }
+
+  private populateFullCardItemOptions(cardType: FullCardType, selectedId?: string): void {
+    const gd = state.gameData;
+    const select = this.fullCardItemSelect;
+    this.fullCardItemLabel.textContent = this.getFullCardItemLabel(cardType);
+    select.innerHTML = '';
+
+    if (!gd) {
+      select.append(el('option', { value: '', textContent: '(loading...)' }));
+      return;
+    }
+
+    let items: Array<{ id: string; label: string }> = [];
+    switch (cardType) {
+      case 'Pet':
+        items = Object.entries(gd.pets).map(([id, p]) => ({ id, label: p.name }));
+        break;
+      case 'Plant':
+        items = Object.entries(gd.plants).map(([id, p]) => ({ id, label: p.plant.name }));
+        break;
+      case 'Crop':
+        items = Object.entries(gd.plants).map(([id, p]) => ({ id, label: p.crop.name }));
+        break;
+      case 'Seed':
+        items = Object.entries(gd.plants).map(([id, p]) => ({ id, label: p.seed.name }));
+        break;
+      case 'Egg':
+        items = Object.entries(gd.eggs).map(([id, p]) => ({ id, label: p.name }));
+        break;
+      case 'Tool':
+        items = Object.entries(gd.items).map(([id, p]) => ({ id, label: p.name }));
+        break;
+      case 'Decor':
+        items = Object.entries(gd.decor).map(([id, p]) => ({ id, label: p.name }));
+        break;
+      default:
+        items = [];
+    }
+
+    items.sort((a, b) => a.label.localeCompare(b.label));
+    for (const item of items) {
+      select.append(el('option', { value: item.id, textContent: item.label }));
+    }
+    if (selectedId && items.some(i => i.id === selectedId)) {
+      select.value = selectedId;
+    } else if (items.length > 0) {
+      select.value = items[0].id;
+    }
+  }
+
+  private populateAbilityOptions(selectedIds: string[] = []): void {
+    const gd = state.gameData;
+    // Populate the add-select dropdown
+    const addSelect = this.fullCardPetAbilityAddSelect;
+    addSelect.innerHTML = '';
+    if (!gd) {
+      addSelect.append(el('option', { value: '', textContent: '(loading...)' }));
+    } else {
+      const abilities = Object.entries(gd.abilities).map(([id, def]) => ({
+        id,
+        name: def?.name ?? id,
+      }));
+      abilities.sort((a, b) => a.name.localeCompare(b.name));
+      for (const ability of abilities) {
+        const label = ability.name && ability.name !== ability.id
+          ? `${ability.name} (${ability.id})`
+          : ability.id;
+        addSelect.append(el('option', { value: ability.id, textContent: label, title: ability.id }));
+      }
+    }
+    // Render chips for selected IDs
+    this.fullCardPetAbilityChips.innerHTML = '';
+    for (const id of selectedIds) {
+      if (!id) continue;
+      const optEl = Array.from(addSelect.options).find(o => o.value === id);
+      const name = optEl?.textContent ?? id;
+      this.fullCardPetAbilityChips.append(this.createAbilityChip(id, name));
+    }
+  }
+
+  private populateWeatherOptions(selectedId?: string): void {
+    const select = this.fullCardPetWeatherSelect;
+    select.innerHTML = '';
+    const gd = state.gameData;
+    if (!gd) {
+      select.append(el('option', { value: '', textContent: '(loading...)' }));
+      return;
+    }
+    select.append(el('option', { value: '', textContent: 'None' }));
+    const weathers = Object.entries(gd.weathers).map(([id, w]) => ({
+      id,
+      name: w?.name ?? id,
+    }));
+    weathers.sort((a, b) => a.name.localeCompare(b.name));
+    for (const weather of weathers) {
+      select.append(el('option', { value: weather.id, textContent: weather.name }));
+    }
+    select.value = selectedId ?? '';
+  }
+
+  private populateDietOptions(selectedIds: string[] = []): void {
+    const container = this.fullCardPetDietContainer;
+    container.innerHTML = '';
+    const gd = state.gameData;
+    if (!gd) {
+      container.append(el('span', { textContent: '(loading...)', style: 'font-size:12px;color:var(--muted)' }));
+      return;
+    }
+    const plants = Object.entries(gd.plants).map(([id, p]) => ({
+      id,
+      name: p?.crop?.name ?? id,
+    }));
+    plants.sort((a, b) => a.name.localeCompare(b.name));
+    const selected = new Set(selectedIds);
+    for (const plant of plants) {
+      const checkbox = el('input', { type: 'checkbox', value: plant.id }) as HTMLInputElement;
+      checkbox.dataset.dietId = plant.id;
+      checkbox.checked = selected.has(plant.id);
+      checkbox.addEventListener('change', () => this.scheduleFullCardRerender());
+      const label = el('label', { className: 'full-card-diet-item' }, [
+        checkbox,
+        document.createTextNode(plant.name),
+      ]);
+      container.append(label);
+    }
+  }
+
+  private createAbilityChip(id: string, name: string): HTMLElement {
+    const removeBtn = el('button', {
+      type: 'button',
+      className: 'full-card-chip-remove',
+      textContent: '×',
+    }) as HTMLButtonElement;
+    const chip = el('span', { className: 'full-card-ability-chip' }, [
+      document.createTextNode(name),
+      removeBtn,
+    ]) as HTMLElement;
+    chip.dataset.abilityId = id;
+    chip.style.background = abilityColor(id);
+    removeBtn.addEventListener('click', () => {
+      chip.remove();
+      this.scheduleFullCardRerender();
+    });
+    return chip;
+  }
+
+  private createCustomAbilityRow(entry?: FullCardAbilityEntry): HTMLElement {
+    const nameInput = el('input', {
+      type: 'text',
+      placeholder: 'Custom ability',
+      value: entry?.name ?? '',
+    }) as HTMLInputElement;
+    nameInput.dataset.role = 'name';
+    nameInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    const colorInput = el('input', {
+      type: 'color',
+      value: entry?.color ?? '#969696',
+      className: 'full-card-ability-color',
+    }) as HTMLInputElement;
+    colorInput.dataset.role = 'color';
+    colorInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    const removeBtn = el('button', {
+      type: 'button',
+      className: 'full-card-ability-remove',
+      textContent: '×',
+      title: 'Remove ability',
+    }) as HTMLButtonElement;
+
+    const row = el('div', { className: 'full-card-ability-row' }, [
+      nameInput,
+      colorInput,
+      removeBtn,
+    ]) as HTMLElement;
+
+    removeBtn.addEventListener('click', () => {
+      row.remove();
+      this.scheduleFullCardRerender();
+    });
+
+    return row;
+  }
+
+  private renderCustomAbilityRows(entries: FullCardAbilityEntry[]): void {
+    this.fullCardPetAbilityList.innerHTML = '';
+    const customs = entries.filter(entry => entry.kind === 'custom');
+    for (const entry of customs) {
+      this.fullCardPetAbilityList.append(this.createCustomAbilityRow(entry));
+    }
+  }
+
+  private readCustomAbilityEntries(): FullCardAbilityEntry[] {
+    const entries: FullCardAbilityEntry[] = [];
+    const rows = Array.from(this.fullCardPetAbilityList.children) as HTMLElement[];
+    for (const row of rows) {
+      const nameInput = row.querySelector('input[data-role="name"]') as HTMLInputElement | null;
+      const colorInput = row.querySelector('input[data-role="color"]') as HTMLInputElement | null;
+      const name = nameInput?.value.trim() ?? '';
+      if (!name) continue;
+      entries.push({
+        kind: 'custom',
+        name,
+        color: colorInput?.value ?? '#969696',
+      });
+    }
+    return entries;
+  }
+
+  private syncFullCardItemDefaults(): void {
+    const slot = getActiveSlot();
+    if (slot.type !== 'full-card' || !slot.fullCardData) return;
+    const cardType = slot.fullCardData.cardType;
+    const itemId = this.fullCardItemSelect.value;
+    if (!itemId) return;
+
+    const defaultName = this.getDefaultItemName(cardType, itemId);
+    const currentName = this.fullCardNameInput.value.trim();
+    if (!currentName || currentName === slot.fullCardData.itemName) {
+      if (defaultName) this.fullCardNameInput.value = defaultName;
+    }
+
+    if (cardType === 'Pet') {
+      const pet = state.gameData?.pets?.[itemId];
+      if (pet) {
+        const hungerMax = pet.coinsToFullyReplenishHunger;
+        this.fullCardPetHungerInput.max = String(hungerMax);
+        if (!this.fullCardPetHungerInput.value || Number(this.fullCardPetHungerInput.value) === 0) {
+          this.fullCardPetHungerInput.value = String(hungerMax);
+          this.fullCardPetHungerDisplay.textContent = String(hungerMax);
+        }
+        const xpMax = Math.round((pet.hoursToMature ?? 30) * 3600);
+        this.fullCardPetXpInput.max = String(xpMax);
+        const currentChipIds = Array.from(this.fullCardPetAbilityChips.querySelectorAll<HTMLElement>('[data-ability-id]'))
+          .map(c => c.dataset.abilityId as string)
+          .filter(Boolean);
+        const hasCustom = this.fullCardPetAbilityList.childElementCount > 0;
+        const fallback = Object.keys(pet.innateAbilityWeights ?? {});
+        this.populateAbilityOptions((currentChipIds.length > 0 || hasCustom) ? currentChipIds : fallback);
+        if (!this.fullCardRaritySelect.value) {
+          this.fullCardRaritySelect.value = pet.rarity as FullCardRarity;
+        }
+        this.populateWeatherOptions(this.fullCardPetWeatherSelect.value || '');
+        if (!this.fullCardPetWeatherSelect.value) {
+          this.fullCardPetWeatherSelect.value = '';
+        }
+        const dietChecked = Array.from(this.fullCardPetDietContainer.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked'))
+          .map(cb => cb.dataset.dietId as string)
+          .filter(Boolean);
+        const dietFallback = pet.diet ?? [];
+        this.populateDietOptions(dietChecked.length > 0 ? dietChecked : dietFallback);
+      }
+    }
+
+    if (cardType === 'Seed') {
+      const seed = state.gameData?.plants?.[itemId]?.seed;
+      if (seed && !this.fullCardSeedRaritySelect.value) {
+        this.fullCardSeedRaritySelect.value = seed.rarity as FullCardRarity;
+      }
+    }
+  }
+
 
   /** Populate full-card form fields from a slot's fullCardData. */
   private syncFullCardUI(slot: Slot): void {
@@ -999,33 +1618,103 @@ export class App {
     if (!data) return;
 
     this.fullCardTypeLabel.textContent = `${data.cardType} Card`;
+    this.populateFullCardItemOptions(data.cardType, data.itemId);
+    if (!data.itemId) {
+      const resolved = this.resolveFullCardItemId(data.cardType, data.itemName);
+      if (resolved) data.itemId = resolved;
+    }
+    if (data.itemId) this.fullCardItemSelect.value = data.itemId;
     this.fullCardNameInput.value = data.itemName;
     this.fullCardLockedCheck.checked = data.isLocked ?? false;
 
     const isPet    = data.cardType === 'Pet';
+    const isPlant  = data.cardType === 'Plant';
     const isCrop   = data.cardType === 'Crop';
-    const isSimple = !isPet && !isCrop;
+    const isSimple = data.cardType === 'Seed' || data.cardType === 'Egg' || data.cardType === 'Tool' || data.cardType === 'Decor';
 
     this.fullCardPetSection.style.display    = isPet    ? '' : 'none';
+    this.fullCardPlantSection.style.display  = isPlant  ? '' : 'none';
     this.fullCardSimpleSection.style.display = isSimple ? '' : 'none';
-    this.fullCardCropSection.style.display   = isCrop   ? '' : 'none';
+    this.fullCardCropSection.style.display   = isCrop || isPlant ? '' : 'none';
 
     if (isPet) {
-      this.fullCardRaritySelect.value = data.rarity    ?? 'Common';
-      this.fullCardAgeInput.value     = data.petAge    ?? '';
-      this.fullCardMaxStrInput.value  = data.petMaxStr ?? '';
-      this.fullCardHungerInput.value  = String(data.petHunger ?? 75);
-      this.fullCardStrInput.value     = data.petStr    ?? '';
-      this.fullCardStrPctInput.value  = String(data.petStrPct ?? 50);
-      this.fullCardWeightInput.value  = data.petWeight ?? '';
-    } else if (isSimple) {
+      const pet = state.gameData?.pets?.[data.itemId ?? ''];
+      this.fullCardRaritySelect.value = data.rarity ?? (pet?.rarity as FullCardRarity) ?? 'Common';
+
+      // XP slider
+      const xpMax = Math.round((pet?.hoursToMature ?? 30) * 3600);
+      this.fullCardPetXpInput.max = String(xpMax);
+      const xpVal = data.petXp ?? 0;
+      this.fullCardPetXpInput.value = String(xpVal);
+      this.fullCardPetXpDisplay.textContent = formatXpTime(xpVal);
+
+      // Max STR slider (convert targetScale → 80–100)
+      const maxScale = pet?.maxScale ?? 1;
+      const targetScale = data.petTargetScale ?? 1;
+      const t = maxScale > 1 ? Math.max(0, Math.min(1, (targetScale - 1) / (maxScale - 1))) : 0;
+      const displayStr = Math.floor(80 + 20 * t);
+      this.fullCardPetScaleInput.value = String(displayStr);
+      this.fullCardPetMaxStrDisplay.textContent = String(displayStr);
+
+      // Hunger slider
+      const hungerMax = pet?.coinsToFullyReplenishHunger ?? 1000;
+      this.fullCardPetHungerInput.max = String(hungerMax);
+      const hungerVal = data.petHunger ?? hungerMax;
+      this.fullCardPetHungerInput.value = String(hungerVal);
+      this.fullCardPetHungerDisplay.textContent = String(hungerVal);
+
+      const entryFallback: FullCardAbilityEntry[] = data.petAbilityEntries
+        ?? (data.petAbilities
+          ? data.petAbilities.map(id => ({ kind: 'game', id }))
+          : (pet ? Object.keys(pet.innateAbilityWeights ?? {}).map(id => ({ kind: 'game', id })) : []));
+      const gameIds = entryFallback
+        .filter(entry => entry.kind === 'game' && entry.id)
+        .map(entry => entry.id as string);
+      this.populateAbilityOptions(gameIds);
+      this.renderCustomAbilityRows(entryFallback);
+      this.populateWeatherOptions(data.petWeatherId ?? '');
+      this.fullCardPetWeatherSelect.value = data.petWeatherId ?? '';
+      const dietIds = data.petDietIds ?? (pet?.diet ?? []);
+      this.populateDietOptions(dietIds);
+    }
+
+    if (isPlant) {
+      this.fullCardPlantSlotCountInput.value = String(data.plantSlotCount ?? 1);
+      this.fullCardPlantMaturedSlotsInput.value = String(data.plantMaturedSlots ?? 0);
+      this.fullCardPlantMaturityInput.value = String(data.plantMaturityPct ?? 0);
+    }
+
+    if (isCrop || isPlant) {
+      this.fullCardScaleInput.value = String(data.itemScale ?? 1);
+    }
+
+    if (isSimple) {
       this.fullCardCountInput.value = data.itemCount ?? '';
       const isSeed = data.cardType === 'Seed';
       this.fullCardSeedRarityRow.style.display = isSeed ? '' : 'none';
-      if (isSeed) this.fullCardSeedRaritySelect.value = data.seedRarity ?? 'Common';
-    } else if (isCrop) {
-      this.fullCardCropWeightInput.value = data.cropWeight ?? '';
+      if (isSeed) {
+        const seedRarity = data.seedRarity
+          ?? (state.gameData?.plants?.[data.itemId ?? '']?.seed?.rarity as FullCardRarity | undefined)
+          ?? 'Common';
+        this.fullCardSeedRaritySelect.value = seedRarity;
+      }
     }
+
+    // Item style
+    this.fullCardItemSpriteInput.value = data.itemSpriteOverride ?? '';
+    const itemMutations = data.itemMutations ?? slot.mutations ?? [];
+    const mutationSet = new Set(itemMutations);
+    for (const chip of Array.from(this.fullCardItemMutationsContainer.querySelectorAll<HTMLElement>('[data-mutation-id]'))) {
+      chip.classList.toggle('active', mutationSet.has(chip.dataset.mutationId ?? ''));
+    }
+    const itemTint = data.itemTint ?? { color: '#ffffff', opacity: 0 };
+    this.fullCardItemTintColor.value = itemTint.color ?? '#ffffff';
+    this.fullCardItemTintOpacity.value = String(itemTint.opacity ?? 0);
+    this.fullCardItemScaleInput.value = String(data.itemVisualScale ?? 1);
+    this.fullCardItemRotationInput.value = String(data.itemRotation ?? 0);
+    const itemOptions = data.itemOptions ?? { icons: true, overlays: true };
+    this.fullCardItemIconsCheck.checked = itemOptions.icons ?? true;
+    this.fullCardItemOverlaysCheck.checked = itemOptions.overlays ?? true;
   }
 
   /** Read current form state into a FullCardData object (cardType is immutable). */
@@ -1034,24 +1723,66 @@ export class App {
     const result: FullCardData = {
       cardType,
       itemName:  this.fullCardNameInput.value || base.itemName,
+      itemId:    this.fullCardItemSelect.value || base.itemId,
       isLocked:  this.fullCardLockedCheck.checked,
     };
     if (cardType === 'Pet') {
-      result.rarity    = (this.fullCardRaritySelect.value as FullCardRarity) || 'Common';
-      result.petAge    = this.fullCardAgeInput.value;
-      result.petMaxStr = this.fullCardMaxStrInput.value;
-      result.petHunger = parseInt(this.fullCardHungerInput.value) || 0;
-      result.petStr    = this.fullCardStrInput.value;
-      result.petStrPct = parseInt(this.fullCardStrPctInput.value) || 0;
-      result.petWeight = this.fullCardWeightInput.value;
-    } else if (cardType === 'Crop') {
-      result.cropWeight = this.fullCardCropWeightInput.value;
+      result.rarity = (this.fullCardRaritySelect.value as FullCardRarity) || 'Common';
+      result.petXp = parseFloat(this.fullCardPetXpInput.value) || 0;
+      // Convert Max STR slider (80–100) back to targetScale
+      const petId = this.fullCardItemSelect.value;
+      const maxScale = state.gameData?.pets?.[petId]?.maxScale ?? 1;
+      const strVal = parseInt(this.fullCardPetScaleInput.value) || 80;
+      const t = (strVal - 80) / 20;
+      result.petTargetScale = 1 + t * (maxScale - 1);
+      result.petHunger = parseFloat(this.fullCardPetHungerInput.value) || 0;
+      result.petWeatherId = this.fullCardPetWeatherSelect.value || '';
+      const dietIds = Array.from(this.fullCardPetDietContainer.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked'))
+        .map(cb => cb.dataset.dietId as string)
+        .filter(Boolean);
+      if (dietIds.length > 0) result.petDietIds = dietIds;
+      const selectedGameIds = Array.from(this.fullCardPetAbilityChips.querySelectorAll<HTMLElement>('[data-ability-id]'))
+        .map(c => c.dataset.abilityId as string)
+        .filter(Boolean);
+      const customEntries = this.readCustomAbilityEntries();
+      result.petAbilities = selectedGameIds;
+      result.petAbilityEntries = [
+        ...selectedGameIds.map(id => ({ kind: 'game' as const, id })),
+        ...customEntries,
+      ];
+    } else if (cardType === 'Crop' || cardType === 'Plant') {
+      result.itemScale = parseFloat(this.fullCardScaleInput.value) || 1;
+      if (cardType === 'Plant') {
+        const slotCount = Math.max(1, parseInt(this.fullCardPlantSlotCountInput.value) || 1);
+        const maturedSlots = Math.max(0, Math.min(slotCount, parseInt(this.fullCardPlantMaturedSlotsInput.value) || 0));
+        const maturityPct = Math.max(0, Math.min(100, parseInt(this.fullCardPlantMaturityInput.value) || 0));
+        result.plantSlotCount = slotCount;
+        result.plantMaturedSlots = maturedSlots;
+        result.plantMaturityPct = maturityPct;
+      }
     } else {
       result.itemCount = this.fullCardCountInput.value;
       if (cardType === 'Seed') {
         result.seedRarity = (this.fullCardSeedRaritySelect.value as FullCardRarity) || 'Common';
       }
     }
+
+    const spriteOverride = this.fullCardItemSpriteInput.value.trim();
+    if (spriteOverride) result.itemSpriteOverride = spriteOverride;
+    const itemMutations = Array.from(this.fullCardItemMutationsContainer.querySelectorAll<HTMLElement>('.full-card-mutation-chip.active'))
+      .map(chip => chip.dataset.mutationId as string)
+      .filter(Boolean);
+    result.itemMutations = itemMutations;
+    result.itemTint = {
+      color: this.fullCardItemTintColor.value || '#ffffff',
+      opacity: parseFloat(this.fullCardItemTintOpacity.value) || 0,
+    };
+    result.itemVisualScale = parseFloat(this.fullCardItemScaleInput.value) || 1;
+    result.itemRotation = parseFloat(this.fullCardItemRotationInput.value) || 0;
+    result.itemOptions = {
+      icons: this.fullCardItemIconsCheck.checked,
+      overlays: this.fullCardItemOverlaysCheck.checked,
+    };
     return result;
   }
 
@@ -1109,10 +1840,14 @@ export class App {
       this.loadSpriteLayer('CardTop',               `${apiBase}/CardTop.png${v}`),
     ]);
 
-    const layers: LayerSrc[] = layerResults
-      .filter((r): r is PromiseFulfilledResult<LayerSrc | null> => r.status === 'fulfilled')
-      .map(r => r.value)
-      .filter((v): v is LayerSrc => v !== null);
+    // The middle layer (index 1) is a grayscale ribbon sprite; the game engine
+    // applies a per-type colour multiply at runtime — replicate that here.
+    const middleTint = CARD_MIDDLE_TINTS[cardType];
+    const layers: LayerSrc[] = layerResults.flatMap((r, idx) => {
+      if (r.status !== 'fulfilled' || r.value === null) return [];
+      const src = r.value;
+      return [idx === 1 && middleTint ? tintLayer(src, middleTint) : src];
+    });
 
     if (layers.length === 0) {
       console.error('[MG] Full card: failed to load any card layers');
@@ -1132,7 +1867,7 @@ export class App {
     }
 
     // Draw stats overlay in-place
-    await drawFullCardStats(canvas, data);
+    await drawFullCardStats(canvas, data, slot.mutations);
 
     // Guard: bail if the user switched away while awaiting
     const currentSlot = state.slots[idx];

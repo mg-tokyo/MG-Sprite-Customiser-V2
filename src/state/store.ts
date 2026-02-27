@@ -4,17 +4,63 @@ import { bus, Events } from '../utils/events';
 export type FullCardType   = 'Pet' | 'Plant' | 'Crop' | 'Seed' | 'Egg' | 'Tool' | 'Decor';
 export type FullCardRarity = 'Common' | 'Uncommon' | 'Rare' | 'Legendary' | 'Mythic' | 'Divine' | 'Celestial';
 
+export interface FullCardAbilityEntry {
+  kind: 'game' | 'custom';
+  /** Ability id (for game abilities). */
+  id?: string;
+  /** Display name (for custom abilities). */
+  name?: string;
+  /** Custom color (hex) for custom abilities. */
+  color?: string;
+}
+
 export interface FullCardData {
   cardType:   FullCardType;
   itemName:   string;
+  /** Species or item id from game data (pet species, plant species, egg id, tool id, decor id). */
+  itemId?:    string;
+  /** Scale for crop / single-slot plant produce (1.0 = base). */
+  itemScale?: number;
+  /** Override the item sprite (sprite id or URL). */
+  itemSpriteOverride?: string;
+  /** Item-only mutation ids (defaults to slot mutations when unset). */
+  itemMutations?: string[];
+  /** Item-only tint override. */
+  itemTint?: { color: string; opacity: number };
+  /** Visual-only item scale multiplier inside the card. */
+  itemVisualScale?: number;
+  /** Visual-only item rotation (degrees) inside the card. */
+  itemRotation?: number;
+  /** Item-only mutation options (icons/overlays). */
+  itemOptions?: { icons: boolean; overlays: boolean };
+  /** Plant card: total slot count (>= 1). */
+  plantSlotCount?: number;
+  /** Plant card: number of mature slots (0..plantSlotCount). */
+  plantMaturedSlots?: number;
+  /** Plant card: maturity progress percent (0..100). */
+  plantMaturityPct?: number;
   // Pet-specific
   rarity?:    FullCardRarity;
+  /** Pet XP (seconds). Used to derive strength, age, weight, and sell price. */
+  petXp?:     number;
+  /** Pet target scale (1.0 .. maxScale). */
+  petTargetScale?: number;
+  /** Pet hunger value (coins; 0..coinsToFullyReplenishHunger). */
+  petHunger?: number;
+  /** Pet weather override (matches GameData.weathers keys). */
+  petWeatherId?: string;
+  /** Pet diet override (plant species ids). */
+  petDietIds?: string[];
+  /** Pet abilities (stored as ids). */
+  petAbilities?: string[];
+  /** Pet ability rows (game/custom). Prefer this over petAbilities when present. */
+  petAbilityEntries?: FullCardAbilityEntry[];
   petAge?:    string;
   petMaxStr?: string;    // displayed in header "MAX STR: {n}"
-  petHunger?: number;    // 0–100
   petStr?:    string;    // current STR level shown in label (e.g. "50")
   petStrPct?: number;    // 0–100; XP progress within current STR level (bar fill)
   petWeight?: string;    // e.g. "12.5 kg"
+  petSellPrice?: string; // displayed coin sell price (e.g. "1,000")
   // Count-based (Seed, Tool, Decor, Egg, Plant)
   itemCount?: string;
   // Crop

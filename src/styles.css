@@ -660,52 +660,311 @@ button.danger:hover { background: #ff3333; }
 }
 
 .full-card-type-label {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
   color: var(--accent);
-  margin-bottom: 10px;
-  padding: 4px 8px;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  border-radius: 6px;
-  text-align: center;
+  margin: 0 0 10px;
 }
 
+/* Fields: label above input — matches the standard controls style */
 .full-card-field {
-  display: grid;
-  grid-template-columns: 80px 1fr;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-bottom: 2px;
 }
 
 .full-card-field label {
+  display: block;
   font-size: 12px;
   color: var(--muted);
-  margin: 0;
-  text-align: right;
+  margin: 10px 0 6px;
 }
 
 .full-card-field input,
 .full-card-field select {
   width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+/* --stack is now identical to regular field; keep for HTML compat */
+.full-card-field--stack { }
+.full-card-field--stack label { }
+
+/* Inline toggle (Locked checkbox) matching existing toggle labels */
+.full-card-locked-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink);
+  margin: 10px 0 6px;
+  cursor: pointer;
+}
+
+/* Section separator with a small heading — matches .panel h2 rhythm */
+.full-card-section {
+  border-top: 1px solid var(--border);
+  padding-top: 2px;
+  margin-top: 6px;
+}
+
+.full-card-section-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  margin: 10px 0 0;
+}
+
+/* Slider rows */
+.full-card-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.full-card-slider-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+}
+.full-card-slider-val {
+  font-size: 12px;
+  color: var(--ink);
+  min-width: 36px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* Ability chips */
+.full-card-ability-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 28px;
+}
+.full-card-ability-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+}
+.full-card-chip-remove {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+}
+.full-card-ability-add-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.full-card-ability-add-row select {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: 8px;
+}
+
+/* Mutation toggle chips */
+.full-card-mutations-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 6px 0;
+}
+.full-card-mutation-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  opacity: 0.35;
+  transition: opacity 0.15s;
+  user-select: none;
+  background: #555;
+}
+.full-card-mutation-chip.active {
+  opacity: 1;
+}
+
+/* Diet checkboxes */
+.full-card-diet-wrap {
+  max-height: 90px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.full-card-diet-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink);
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.full-card-diet-item:hover { background: var(--hover-bg); }
+.full-card-diet-item input[type="checkbox"] { margin: 0; }
+
+/* Abilities wrap */
+.full-card-abilities-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.full-card-abilities-custom {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.full-card-abilities-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+/* Custom ability row */
+.full-card-ability-row {
+  display: grid;
+  grid-template-columns: 1fr 36px 28px;
+  gap: 6px;
+  align-items: center;
+}
+
+.full-card-ability-row input[type="text"] {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--input-bg);
   color: var(--ink);
   font-size: 12px;
 }
 
-.full-card-locked-wrap {
-  display: flex;
-  align-items: center;
-  padding: 4px 0;
+.full-card-ability-row input[type="color"] {
+  width: 36px;
+  height: 30px;
+  padding: 2px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  cursor: pointer;
 }
 
-.full-card-section {
+.full-card-ability-remove,
+.full-card-ability-add {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent-2);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.full-card-ability-remove { background: #b94b4b; }
+
+/* Item Style collapsible — styled like a secondary panel section */
+.full-card-item-style {
+  margin-top: 6px;
   border-top: 1px solid var(--border);
-  padding-top: 6px;
-  margin-top: 2px;
+  padding-top: 2px;
+}
+
+.full-card-item-style summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--muted);
+  margin: 10px 0 4px;
+  list-style: none;
+  user-select: none;
+}
+.full-card-item-style summary::after {
+  content: ' ▸';
+  font-size: 10px;
+}
+.full-card-item-style[open] summary::after {
+  content: ' ▾';
+}
+
+.full-card-item-style-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.full-card-item-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+/* Item style buttons: match secondary button look */
+.full-card-item-btn {
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent-2);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.full-card-item-tint {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.full-card-item-options {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.full-card-item-option {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
 }
 
 .full-card-add-row {
