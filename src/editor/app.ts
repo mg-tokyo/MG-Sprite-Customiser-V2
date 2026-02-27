@@ -444,6 +444,22 @@ export class App {
         }
       }
 
+      // CDN-only extras — assets that exist on the game CDN but are not in the sprite atlas.
+      // The sprite-loader proxy handles magicgarden.gg URLs identically to cosmetics.
+      if (cat === 'ui' && state.gameVersion) {
+        const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
+        const cdnExtras: { id: string; label: string; file: string }[] = [
+          { id: 'cdn/GardenJournal',  label: 'GardenJournal',          file: 'ui/GardenJournal.webp' },
+          { id: 'cdn/AllRestocked',   label: 'AllRestocked (banner)',   file: 'ui/all-restocked.webp' },
+          { id: 'cdn/EggsRestocked',  label: 'EggsRestocked (banner)',  file: 'ui/eggs-restocked.webp' },
+          { id: 'cdn/SeedsRestocked', label: 'SeedsRestocked (banner)', file: 'ui/seeds-restocked.webp' },
+          { id: 'cdn/ToolsRestocked', label: 'ToolsRestocked (banner)', file: 'ui/tools-restocked.webp' },
+        ];
+        for (const extra of cdnExtras) {
+          items.push({ id: extra.id, label: extra.label, thumbUrl: `${cdnBase}/${extra.file}` });
+        }
+      }
+
       // Fallback to game data if sprite-data has no entries for this cat
       if (items.length === 0 && state.gameData) {
         const gd = state.gameData;
