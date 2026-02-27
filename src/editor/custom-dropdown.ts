@@ -4,6 +4,8 @@ export interface DropdownItem {
   id: string;
   label: string;
   thumbUrl?: string;
+  /** Pre-resolved frame URLs for sprite atlas animations. When set, selecting this item loads all frames and starts animated preview. */
+  animFrameUrls?: string[];
 }
 
 interface DropdownOptions {

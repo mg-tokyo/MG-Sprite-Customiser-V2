@@ -155,14 +155,27 @@ export class App {
       // clicks, the canvas renderer finds it instantly without re-fetching.
       onThumbVisible: (url) => spriteLoader.preloadUrls([url]),
       onSelect: (item: DropdownItem) => {
-        updateSlot(state.activeSlotIndex, {
-          type: 'sprite',
-          spriteKey: item.id,
-          spriteUrl: item.thumbUrl ?? '',
-          gifFrames: undefined,
-          isAnimated: false,
-        });
-        this.stopGifPreview();
+        if (item.animFrameUrls && item.animFrameUrls.length > 0) {
+          // Show first frame immediately, then async-load all frames for animated playback
+          updateSlot(state.activeSlotIndex, {
+            type: 'sprite',
+            spriteKey: item.id,
+            spriteUrl: item.animFrameUrls[0],
+            gifFrames: undefined,
+            isAnimated: false,
+          });
+          this.stopGifPreview();
+          this.loadAtlasAnimation(state.activeSlotIndex, item.id, item.animFrameUrls);
+        } else {
+          updateSlot(state.activeSlotIndex, {
+            type: 'sprite',
+            spriteKey: item.id,
+            spriteUrl: item.thumbUrl ?? '',
+            gifFrames: undefined,
+            isAnimated: false,
+          });
+          this.stopGifPreview();
+        }
       },
     });
 
@@ -435,12 +448,18 @@ export class App {
       const category = sd.categories.find(c => c.cat === cat);
       if (category) {
         for (const item of category.items) {
-          if (item.type !== 'frame') continue;
-          const name = item.id.split('/').pop() ?? item.name;
           const vMatch = item.url.match(/\/version\/([a-f0-9]+)\//i);
           const version = vMatch?.[1] ?? state.gameVersion ?? '';
-          const url = `https://mg-api.ariedam.fr/assets/sprites/${cat}/${name}.png${version ? `?v=${version}` : ''}`;
-          items.push({ id: item.id, label: item.name, thumbUrl: url });
+          if (item.type === 'frame') {
+            const name = item.id.split('/').pop() ?? item.name;
+            const url = `https://mg-api.ariedam.fr/assets/sprites/${cat}/${name}.png${version ? `?v=${version}` : ''}`;
+            items.push({ id: item.id, label: item.name, thumbUrl: url });
+          } else if (item.type === 'animation' && item.frames.length > 0) {
+            const frameUrls = this.resolveAnimFrameUrls(item.frames, version);
+            if (frameUrls.length > 0) {
+              items.push({ id: item.id, label: `${item.name} (animated)`, thumbUrl: frameUrls[0], animFrameUrls: frameUrls });
+            }
+          }
         }
       }
 
@@ -757,6 +776,90 @@ export class App {
         this.previewCanvas.classList.remove('dragging');
       }
     });
+
+    // ── Touch: single-finger drag + two-finger pinch-scale / twist-rotate ──
+
+    let pinchStartDist = 0;
+    let pinchStartScale = 1;
+    let pinchStartAngle = 0;
+    let pinchStartRotation = 0;
+
+    this.previewCanvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        const rect = this.previewCanvas.getBoundingClientRect();
+        const cssScale = rect.width / this.previewCanvas.width;
+        const canvasX = (touch.clientX - rect.left) / cssScale;
+        const canvasY = (touch.clientY - rect.top) / cssScale;
+
+        const hitIdx = hitTestSlot(canvasX, canvasY);
+        if (hitIdx === null) return;
+        if (hitIdx !== state.activeSlotIndex) setActiveSlot(hitIdx);
+
+        const slot = getActiveSlot();
+        if (slot.locked) return;
+        isDragging = true;
+        startX = touch.clientX;
+        startY = touch.clientY;
+        slotStartX = slot.position.x;
+        slotStartY = slot.position.y;
+        this.previewCanvas.classList.add('dragging');
+      } else if (e.touches.length === 2) {
+        // Second finger down: cancel any active drag, begin pinch/twist
+        isDragging = false;
+        this.previewCanvas.classList.remove('dragging');
+        const t0 = e.touches[0];
+        const t1 = e.touches[1];
+        pinchStartDist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+        pinchStartScale = getActiveSlot().scale;
+        pinchStartAngle = Math.atan2(t1.clientY - t0.clientY, t1.clientX - t0.clientX);
+        pinchStartRotation = getActiveSlot().rotation;
+      }
+    }, { passive: false });
+
+    this.previewCanvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (e.touches.length === 1 && isDragging) {
+        const touch = e.touches[0];
+        const rect = this.previewCanvas.getBoundingClientRect();
+        const cssScale = rect.width / this.previewCanvas.width;
+        const slot = getActiveSlot();
+        slot.position.x = slotStartX + (touch.clientX - startX) / cssScale;
+        slot.position.y = slotStartY + (touch.clientY - startY) / cssScale;
+        this.render();
+      } else if (e.touches.length === 2) {
+        const t0 = e.touches[0];
+        const t1 = e.touches[1];
+        const dx = t1.clientX - t0.clientX;
+        const dy = t1.clientY - t0.clientY;
+        const slot = getActiveSlot();
+
+        // Pinch → scale (clamped to slider range)
+        const dist = Math.hypot(dx, dy);
+        slot.scale = Math.max(0.1, Math.min(4, pinchStartScale * (dist / pinchStartDist)));
+        this.scaleInput.value = slot.scale.toFixed(1);
+
+        // Twist → rotation
+        const angle = Math.atan2(dy, dx);
+        slot.rotation = ((pinchStartRotation + (angle - pinchStartAngle) * (180 / Math.PI)) % 360 + 360) % 360;
+        this.rotationInput.value = String(Math.round(slot.rotation));
+
+        this.render();
+      }
+    }, { passive: false });
+
+    window.addEventListener('touchend', () => {
+      if (isDragging) {
+        isDragging = false;
+        this.previewCanvas.classList.remove('dragging');
+      }
+    });
+
+    window.addEventListener('touchcancel', () => {
+      isDragging = false;
+      this.previewCanvas.classList.remove('dragging');
+    });
   }
 
   // ── Download ──
@@ -934,6 +1037,58 @@ export class App {
     } else {
       this.frameScheduler.play();
       this.timelinePlayBtn.textContent = 'Pause';
+    }
+  }
+
+  /**
+   * Resolve animation frame IDs to mg-api PNG URLs by searching all sprite-data categories.
+   * Handles both prefixed IDs ('animations/CelestialActive-0') and short names ('CelestialActive-0').
+   */
+  private resolveAnimFrameUrls(frameIds: string[], version: string): string[] {
+    const sd = state.spriteData;
+    if (!sd) return [];
+
+    // Build a lookup keyed by both full frame ID and short name (last path segment)
+    const frameMap = new Map<string, { cat: string; name: string }>();
+    for (const category of sd.categories) {
+      for (const entry of category.items) {
+        if (entry.type !== 'frame') continue;
+        const name = entry.id.split('/').pop() ?? entry.id;
+        if (!frameMap.has(entry.id)) frameMap.set(entry.id, { cat: category.cat, name });
+        if (!frameMap.has(name)) frameMap.set(name, { cat: category.cat, name });
+      }
+    }
+
+    const v = version ? `?v=${version}` : '';
+    return frameIds.flatMap(frameId => {
+      const shortName = frameId.split('/').pop() ?? frameId;
+      const match = frameMap.get(frameId) ?? frameMap.get(shortName);
+      if (!match) return [];
+      return [`https://mg-api.ariedam.fr/assets/sprites/${match.cat}/${match.name}.png${v}`];
+    });
+  }
+
+  /**
+   * Load all frames of a sprite-atlas animation and switch the slot to animated playback.
+   * Shows the first frame immediately (already set by onSelect) while loading in the background.
+   */
+  private async loadAtlasAnimation(slotIndex: number, spriteKey: string, frameUrls: string[]): Promise<void> {
+    const FRAME_DELAY = 100; // ms — ~10fps; sprite-data carries no timing metadata
+    try {
+      const images = await Promise.all(frameUrls.map(url => spriteLoader.load(url)));
+      const gifFrames = images.map(img => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        canvas.getContext('2d')!.drawImage(img, 0, 0);
+        return { canvas, delay: FRAME_DELAY };
+      });
+      // Guard: abort if the user already switched to a different sprite
+      if (state.slots[slotIndex].spriteKey !== spriteKey) return;
+      updateSlot(slotIndex, { spriteUrl: frameUrls[0], gifFrames, isAnimated: true });
+      if (slotIndex === state.activeSlotIndex) this.startGifPreview();
+    } catch (err) {
+      console.error('[MG] Failed to load animation frames:', err);
     }
   }
 

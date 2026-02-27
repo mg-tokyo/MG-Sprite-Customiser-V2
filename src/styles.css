@@ -318,6 +318,7 @@ button.danger:hover { background: #ff3333; }
   object-fit: contain;
   image-rendering: auto;
   cursor: grab;
+  touch-action: none;
 }
 #previewCanvas canvas.dragging {
   cursor: grabbing;
@@ -509,6 +510,18 @@ button.danger:hover { background: #ff3333; }
   color: var(--muted);
   text-align: center;
   list-style: none;
+}
+
+/* ── Mobile ── */
+@media (max-width: 600px) {
+  header { padding: 10px 14px 8px; }
+  header h1 { font-size: 17px; }
+  main { padding: 10px 12px 16px; gap: 10px; }
+  .panel { padding: 10px; }
+  .slots { grid-template-columns: repeat(auto-fit, minmax(38px, 1fr)); gap: 4px; }
+  .mutations, .toggles { grid-template-columns: 1fr 1fr; }
+  .actions { flex-wrap: wrap; }
+  .actions button { flex: 1; min-width: 80px; }
 }
 
 /* ── Scrollbar ── */
