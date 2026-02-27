@@ -7,9 +7,11 @@
  *   4. Unicode   — LingoJam-style character substitutions (no font loading)
  */
 
+import { state } from '../state/store';
+
 // ── MG font CDN base URL (Vite content-hashed filenames from magicgarden.gg build) ──
 // These are served as static Vite assets; the hash is baked into the filename.
-const MG_CDN = 'https://magicgarden.gg/assets';
+const MG_CDN_FALLBACK = 'https://magicgarden.gg/assets';
 
 const IS_DEV = import.meta.env.DEV;
 const BUILD_CORS_PROXY = import.meta.env.VITE_CORS_PROXY ?? '';
@@ -78,6 +80,22 @@ function proxyUrl(url: string): string {
   return url;
 }
 
+function getMgCdnBases(): string[] {
+  const version = state.gameVersion ?? '';
+  if (version) {
+    return [`https://magicgarden.gg/version/${version}/assets`, MG_CDN_FALLBACK];
+  }
+  return [MG_CDN_FALLBACK];
+}
+
+function resolveFontUrls(font: FontDef): string[] {
+  if (font.woff2Url) return [font.woff2Url];
+  if (font.woff2File) {
+    return getMgCdnBases().map(base => `${base}/${font.woff2File}`);
+  }
+  return [];
+}
+
 export interface FontDef {
   id: string;
   label: string;
@@ -89,6 +107,8 @@ export interface FontDef {
   style: string;
   /** Remote woff2 URL to load via FontFace API (undefined = no loading needed) */
   woff2Url?: string;
+  /** Remote woff2 filename (used with magicgarden.gg asset base) */
+  woff2File?: string;
   /** Google Fonts family query param for on-demand loading (e.g. 'Bebas+Neue') */
   gfFamily?: string;
   /** This font requires FontFace loading before it can be used */
@@ -105,7 +125,7 @@ export const MG_FONTS: FontDef[] = [
     family: 'Greycliff CF',
     weight: '400',
     style: 'normal',
-    woff2Url: `${MG_CDN}/GreycliffCF-Regular-D0Q0G3H6.woff2`,
+    woff2File: 'GreycliffCF-Regular-D0Q0G3H6.woff2',
     needsLoad: true,
   },
   {
@@ -114,7 +134,7 @@ export const MG_FONTS: FontDef[] = [
     family: 'Greycliff CF',
     weight: '500',
     style: 'normal',
-    woff2Url: `${MG_CDN}/GreycliffCF-Medium-Bq7MO2Nh.woff2`,
+    woff2File: 'GreycliffCF-Medium-Bq7MO2Nh.woff2',
     needsLoad: true,
   },
   {
@@ -123,7 +143,7 @@ export const MG_FONTS: FontDef[] = [
     family: 'Greycliff CF',
     weight: '600',
     style: 'normal',
-    woff2Url: `${MG_CDN}/GreycliffCF-DemiBold-YCEdFtJd.woff2`,
+    woff2File: 'GreycliffCF-DemiBold-YCEdFtJd.woff2',
     needsLoad: true,
   },
   {
@@ -132,7 +152,7 @@ export const MG_FONTS: FontDef[] = [
     family: 'Greycliff CF',
     weight: '700',
     style: 'normal',
-    woff2Url: `${MG_CDN}/GreycliffCF-Bold-DYxkH0oV.woff2`,
+    woff2File: 'GreycliffCF-Bold-DYxkH0oV.woff2',
     needsLoad: true,
   },
   {
@@ -141,7 +161,7 @@ export const MG_FONTS: FontDef[] = [
     family: 'Greycliff CF',
     weight: '800',
     style: 'normal',
-    woff2Url: `${MG_CDN}/GreycliffCF-ExtraBold-B6VqhyJG.woff2`,
+    woff2File: 'GreycliffCF-ExtraBold-B6VqhyJG.woff2',
     needsLoad: true,
   },
   {
@@ -150,7 +170,7 @@ export const MG_FONTS: FontDef[] = [
     family: 'Greycliff CF',
     weight: '900',
     style: 'normal',
-    woff2Url: `${MG_CDN}/GreycliffCF-Heavy-CrhSKyyL.woff2`,
+    woff2File: 'GreycliffCF-Heavy-CrhSKyyL.woff2',
     needsLoad: true,
   },
   {
@@ -324,17 +344,19 @@ export async function ensureFontLoaded(font: FontDef): Promise<void> {
   }
 
   // MG CDN woff2 via FontFace API
-  if (font.woff2Url) {
+  const urls = resolveFontUrls(font);
+  for (const url of urls) {
     try {
-      const fetchUrl = proxyUrl(font.woff2Url);
+      const fetchUrl = proxyUrl(url);
       const face = new FontFace(font.family, `url(${fetchUrl})`, {
         weight: font.weight,
         style: font.style,
       });
       const loaded = await face.load();
       document.fonts.add(loaded);
+      return;
     } catch {
-      // CORS or network issue — font unavailable; canvas will fall back to system sans-serif
+      // Try the next candidate
     }
   }
 }

@@ -316,13 +316,14 @@ export async function renderAll(output: HTMLCanvasElement): Promise<void> {
     const rendered = await renderSlot(slot, gifIdx);
     if (!rendered) continue;
 
+    const scale = slot.type === 'text' ? 1 : slot.scale;
     ctx.save();
     ctx.translate(
       output.width / 2 + slot.position.x,
       output.height / 2 + slot.position.y,
     );
     ctx.rotate((slot.rotation * Math.PI) / 180);
-    ctx.scale(slot.scale, slot.scale);
+    ctx.scale(scale, scale);
     ctx.drawImage(rendered, -rendered.width / 2, -rendered.height / 2);
     ctx.restore();
   }

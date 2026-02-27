@@ -162,7 +162,7 @@ export function defaultTextData(): TextData {
     fontLabel: 'Shrikhand (textSlapper)',
     fontWeight: '400',
     fontStyle: 'normal',
-    fontSize: 60,
+    fontSize: 36,
     align: 'center',
     wordWrap: false,
     wordWrapWidth: 400,

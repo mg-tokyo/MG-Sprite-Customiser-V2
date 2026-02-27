@@ -1132,6 +1132,18 @@ function resolveItemSpriteId(cardType: FullCardType, data: FullCardData): string
   }
 }
 
+function resolvePetStatsId(data: FullCardData): string | null {
+  if (data.cardType !== 'Pet') return data.itemId ?? null;
+  if (data.itemId) return data.itemId;
+  const gd = state.gameData;
+  if (!gd) return null;
+  const entries = Object.entries(gd.pets);
+  if (entries.length === 0) return null;
+  const targetRarity = (data.rarity ?? 'Common') as FullCardRarity;
+  const match = entries.find(([, pet]) => (pet?.rarity as FullCardRarity | undefined) === targetRarity);
+  return (match?.[0] ?? entries[0][0]) || null;
+}
+
 function isTallSprite(spriteId: string | null): boolean {
   if (!spriteId) return false;
   return /tall-?plant/i.test(spriteId);
@@ -1417,18 +1429,19 @@ export async function drawFullCardStats(
   }
 
   // Pet rows
-  if (data.cardType === 'Pet') {
-    const pet = state.gameData?.pets?.[data.itemId ?? ''];
-    if (pet) {
-      const xp = data.petXp ?? 0;
-      const targetScale = data.petTargetScale ?? 1;
-      const hunger = data.petHunger ?? pet.coinsToFullyReplenishHunger ?? 0;
-      const strength = currentStrength(data.itemId ?? '', xp, targetScale);
-      const maxStr = maxStrength(data.itemId ?? '', targetScale);
-      const isMax = strength >= maxStr;
-      const nextStrength = strength + 1;
-      const nextXp = xpForStrength(nextStrength, data.itemId ?? '', targetScale);
-      const nextLabel = isMax || nextStrength === maxStr ? String(maxStr) : String(nextStrength);
+    if (data.cardType === 'Pet') {
+      const petId = resolvePetStatsId(data);
+      const pet = petId ? state.gameData?.pets?.[petId] : undefined;
+      if (pet) {
+        const xp = data.petXp ?? 0;
+        const targetScale = data.petTargetScale ?? 1;
+        const hunger = data.petHunger ?? pet.coinsToFullyReplenishHunger ?? 0;
+        const strength = currentStrength(petId ?? '', xp, targetScale);
+        const maxStr = maxStrength(petId ?? '', targetScale);
+        const isMax = strength >= maxStr;
+        const nextStrength = strength + 1;
+        const nextXp = xpForStrength(nextStrength, petId ?? '', targetScale);
+        const nextLabel = isMax || nextStrength === maxStr ? String(maxStr) : String(nextStrength);
 
       const barColor = isMax ? '#25AAE2' : '#0067B4';
       drawProgressBarRow(ctx, {
@@ -1446,7 +1459,7 @@ export async function drawFullCardStats(
       }, { progressStar, strengthStar });
       cursorY += 32 + 14;
 
-      const dietIds = data.petDietIds ?? pet.diet ?? [];
+        const dietIds = data.petDietIds ?? [];
       const leftPad = rowWidth * 0.35 - 55;
       const rightPad = dietIds.length * 22 + 12; // step = iconSize(40) + overlap(-18) = 22
       drawProgressBarRow(ctx, {
@@ -1470,8 +1483,8 @@ export async function drawFullCardStats(
       cursorY += 32 + 9;
 
       // Weight / Age / Sell row
-      const weight = weightScale(data.itemId ?? '', xp, targetScale) * pet.matureWeight;
-      const sell = Math.round(pet.maturitySellPrice * weightScale(data.itemId ?? '', xp, targetScale) * mutationMultiplier(mutations));
+        const weight = weightScale(petId ?? '', xp, targetScale) * pet.matureWeight;
+        const sell = Math.round(pet.maturitySellPrice * weightScale(petId ?? '', xp, targetScale) * mutationMultiplier(mutations));
       const ageHours = Math.floor(xp / XP_PER_HOUR);
       drawWeightAgeRow(ctx, detailsY + bottomOffset, formatWeight(weight), ageHours.toLocaleString(), sell.toLocaleString(), {
         weight: weightIcon,

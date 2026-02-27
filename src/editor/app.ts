@@ -519,16 +519,16 @@ export class App {
     });
 
     // Scale / Rotation (debounced)
-    this.scaleInput.addEventListener('input', () => {
-      const slot = getActiveSlot();
-      beginBatchUpdate();
-      if (slot.type === 'text') {
-        // Scale slider = font size for text layers
-        const fontSize = Math.max(8, Math.min(200, parseInt(this.scaleInput.value) || 40));
-        const td = { ...slot.textData!, fontSize };
-        updateSlotSilent(state.activeSlotIndex, { textData: td });
-        this.scheduleTextRerender();
-      } else {
+      this.scaleInput.addEventListener('input', () => {
+        const slot = getActiveSlot();
+        beginBatchUpdate();
+        if (slot.type === 'text') {
+          // Scale slider = font size for text layers
+          const fontSize = Math.max(6, Math.min(200, parseFloat(this.scaleInput.value) || 36));
+          const td = { ...slot.textData!, fontSize };
+          updateSlotSilent(state.activeSlotIndex, { textData: td });
+          this.scheduleTextRerender();
+        } else {
         updateSlotSilent(state.activeSlotIndex, { scale: parseFloat(this.scaleInput.value) || 1 });
       }
     });
@@ -918,13 +918,13 @@ export class App {
     this.fullCardControls.style.display = isFullCard ? '' : 'none';
     this.tintLabel.textContent = isText ? 'Text Color' : (isFullCard ? 'Card Tint' : 'Custom Tint');
 
-    if (isText) {
-      // Switch scale slider → font size mode
-      this.scaleLabel.textContent = 'Font Size';
-      this.scaleInput.min  = '8';
-      this.scaleInput.max  = '200';
-      this.scaleInput.step = '1';
-      this.scaleInput.value = String(slot.textData?.fontSize ?? 60);
+      if (isText) {
+        // Switch scale slider → font size mode
+        this.scaleLabel.textContent = 'Font Size';
+        this.scaleInput.min  = '6';
+        this.scaleInput.max  = '200';
+        this.scaleInput.step = '1';
+        this.scaleInput.value = String(slot.textData?.fontSize ?? 36);
 
       // Sync text-specific controls from slot state
       if (slot.textData) {
@@ -964,7 +964,7 @@ export class App {
   }
 
   /** Add a new text layer slot (finds first empty slot or appends at end logic). */
-  private addTextLayer(): void {
+    private addTextLayer(): void {
     // Find the first empty slot and activate it
     const emptyIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
     // If no empty slot, use the current active one (overwrite)
@@ -972,17 +972,17 @@ export class App {
 
     const td = defaultTextData();
     // Default color: white for textSlapper
-    updateSlot(targetIdx, {
-      type: 'text',
-      spriteKey: 'text-layer',
-      spriteUrl: 'text:', // sentinel — tells renderSlot this is a text slot
-      textData: td,
-      gifFrames: undefined,
-      isAnimated: true, // marks as 'use gifFrames path' after first render
-      scale: td.fontSize,
-      customTint: { color: '#ffffff', opacity: 0 },
-      mutations: [],
-    });
+      updateSlot(targetIdx, {
+        type: 'text',
+        spriteKey: 'text-layer',
+        spriteUrl: 'text:', // sentinel — tells renderSlot this is a text slot
+        textData: td,
+        gifFrames: undefined,
+        isAnimated: true, // marks as 'use gifFrames path' after first render
+        scale: 1,
+        customTint: { color: '#ffffff', opacity: 0 },
+        mutations: [],
+      });
     setActiveSlot(targetIdx);
     this.syncTextSlotUI(state.slots[targetIdx]);
     // Render an initial (empty) text canvas placeholder
@@ -1375,18 +1375,22 @@ export class App {
     }
   }
 
-  private populateFullCardItemOptions(cardType: FullCardType, selectedId?: string): void {
-    const gd = state.gameData;
-    const select = this.fullCardItemSelect;
-    this.fullCardItemLabel.textContent = this.getFullCardItemLabel(cardType);
-    select.innerHTML = '';
+    private populateFullCardItemOptions(cardType: FullCardType, selectedId?: string | null): void {
+      const gd = state.gameData;
+      const select = this.fullCardItemSelect;
+      this.fullCardItemLabel.textContent = this.getFullCardItemLabel(cardType);
+      select.innerHTML = '';
 
     if (!gd) {
       select.append(el('option', { value: '', textContent: '(loading...)' }));
       return;
     }
 
-    type ItemEntry = { id: string; label: string };
+      if (cardType === 'Pet') {
+        select.append(el('option', { value: '', textContent: 'Blank (no sprite)' }));
+      }
+
+      type ItemEntry = { id: string; label: string };
     const allGroups: Array<{ groupLabel: string; primary: boolean; items: ItemEntry[] }> = [
       {
         groupLabel: 'Pets',
@@ -1441,12 +1445,12 @@ export class App {
       if (!firstItem) firstItem = group.items[0];
     }
 
-    if (selectedId) {
-      select.value = selectedId;
-    } else if (firstItem) {
-      select.value = firstItem.id;
+      if (selectedId !== undefined && selectedId !== null) {
+        select.value = selectedId;
+      } else if (firstItem) {
+        select.value = firstItem.id;
+      }
     }
-  }
 
   private populateAbilityOptions(selectedIds: string[] = []): void {
     const gd = state.gameData;
@@ -1496,6 +1500,15 @@ export class App {
       select.append(el('option', { value: weather.id, textContent: weather.name }));
     }
     select.value = selectedId ?? '';
+  }
+
+  private resolveFallbackPetIdByRarity(rarity: FullCardRarity): string | null {
+    const gd = state.gameData;
+    if (!gd) return null;
+    const entries = Object.entries(gd.pets);
+    if (entries.length === 0) return null;
+    const match = entries.find(([, pet]) => (pet?.rarity as FullCardRarity | undefined) === rarity);
+    return (match?.[0] ?? entries[0][0]) || null;
   }
 
   private buildSpriteUrl(spriteId: string): string | null {
@@ -1647,7 +1660,7 @@ export class App {
     if (slot.type !== 'full-card' || !slot.fullCardData) return;
     const cardType = slot.fullCardData.cardType;
     const itemId = this.fullCardItemSelect.value;
-    if (!itemId) return;
+    if (!itemId && cardType !== 'Pet') return;
 
     const defaultName = this.getDefaultItemName(cardType, itemId);
     const currentName = this.fullCardNameInput.value.trim();
@@ -1656,7 +1669,10 @@ export class App {
     }
 
     if (cardType === 'Pet') {
-      const pet = state.gameData?.pets?.[itemId];
+      const petId = itemId || this.resolveFallbackPetIdByRarity(
+        (this.fullCardRaritySelect.value as FullCardRarity) || 'Common',
+      ) || '';
+      const pet = state.gameData?.pets?.[petId];
       if (pet) {
         const hungerMax = pet.coinsToFullyReplenishHunger;
         this.fullCardPetHungerInput.max = String(hungerMax);
@@ -1682,8 +1698,7 @@ export class App {
         const dietChecked = Array.from(this.fullCardPetDietContainer.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked'))
           .map(cb => cb.dataset.dietId as string)
           .filter(Boolean);
-        const dietFallback = pet.diet ?? [];
-        this.populateDietOptions(dietChecked.length > 0 ? dietChecked : dietFallback);
+        this.populateDietOptions(dietChecked);
       }
     }
 
@@ -1702,12 +1717,12 @@ export class App {
     if (!data) return;
 
     this.fullCardTypeLabel.textContent = `${data.cardType} Card`;
-    this.populateFullCardItemOptions(data.cardType, data.itemId);
-    if (!data.itemId) {
-      const resolved = this.resolveFullCardItemId(data.cardType, data.itemName);
-      if (resolved) data.itemId = resolved;
-    }
-    if (data.itemId) this.fullCardItemSelect.value = data.itemId;
+      this.populateFullCardItemOptions(data.cardType, data.itemId ?? null);
+      if (data.itemId == null) {
+        const resolved = this.resolveFullCardItemId(data.cardType, data.itemName);
+        if (resolved) data.itemId = resolved;
+      }
+      if (data.itemId !== undefined && data.itemId !== null) this.fullCardItemSelect.value = data.itemId;
     this.fullCardNameInput.value = data.itemName;
     this.fullCardLockedCheck.checked = data.isLocked ?? false;
 
@@ -1722,7 +1737,10 @@ export class App {
     this.fullCardCropSection.style.display   = isCrop || isPlant ? '' : 'none';
 
     if (isPet) {
-      const pet = state.gameData?.pets?.[data.itemId ?? ''];
+      const petId = data.itemId || this.resolveFallbackPetIdByRarity(
+        (data.rarity as FullCardRarity) || 'Common',
+      ) || '';
+      const pet = state.gameData?.pets?.[petId];
       this.fullCardRaritySelect.value = data.rarity ?? (pet?.rarity as FullCardRarity) ?? 'Common';
 
       // XP slider
@@ -1758,7 +1776,7 @@ export class App {
       this.renderCustomAbilityRows(entryFallback);
       this.populateWeatherOptions(data.petWeatherId ?? '');
       this.fullCardPetWeatherSelect.value = data.petWeatherId ?? '';
-      const dietIds = data.petDietIds ?? (pet?.diet ?? []);
+      const dietIds = data.petDietIds ?? [];
       this.populateDietOptions(dietIds);
     }
 
@@ -1804,17 +1822,18 @@ export class App {
   /** Read current form state into a FullCardData object (cardType is immutable). */
   private readFullCardDataFromUI(base: FullCardData): FullCardData {
     const cardType = base.cardType;
-    const result: FullCardData = {
-      cardType,
-      itemName:  this.fullCardNameInput.value || base.itemName,
-      itemId:    this.fullCardItemSelect.value || base.itemId,
-      isLocked:  this.fullCardLockedCheck.checked,
-    };
+      const selectedId = this.fullCardItemSelect.value;
+      const result: FullCardData = {
+        cardType,
+        itemName:  this.fullCardNameInput.value || base.itemName,
+        itemId:    selectedId === '' ? '' : (selectedId || base.itemId),
+        isLocked:  this.fullCardLockedCheck.checked,
+      };
     if (cardType === 'Pet') {
       result.rarity = (this.fullCardRaritySelect.value as FullCardRarity) || 'Common';
       result.petXp = parseFloat(this.fullCardPetXpInput.value) || 0;
       // Convert Max STR slider (80–100) back to targetScale
-      const petId = this.fullCardItemSelect.value;
+      const petId = this.fullCardItemSelect.value || this.resolveFallbackPetIdByRarity(result.rarity) || '';
       const maxScale = state.gameData?.pets?.[petId]?.maxScale ?? 1;
       const strVal = parseInt(this.fullCardPetScaleInput.value) || 80;
       const t = (strVal - 80) / 20;
@@ -1824,7 +1843,7 @@ export class App {
       const dietIds = Array.from(this.fullCardPetDietContainer.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked'))
         .map(cb => cb.dataset.dietId as string)
         .filter(Boolean);
-      if (dietIds.length > 0) result.petDietIds = dietIds;
+      result.petDietIds = dietIds;
       const selectedGameIds = Array.from(this.fullCardPetAbilityChips.querySelectorAll<HTMLElement>('[data-ability-id]'))
         .map(c => c.dataset.abilityId as string)
         .filter(Boolean);
@@ -1924,9 +1943,11 @@ export class App {
       this.loadSpriteLayer('CardTop',               `${apiBase}/CardTop.png${v}`),
     ]);
 
-    // The middle layer (index 1) is a grayscale ribbon; tint by rarity, fallback to type.
+    // The middle layer (index 1) is a grayscale ribbon; tint by rarity.
+    // If rarity is missing or Common, prefer the type tint so each card stays distinct.
     const rarity = resolveCardRarity(data);
-    const bannerTint = (rarity && RARITY_BANNER_TINTS[rarity]) ?? CARD_MIDDLE_TINTS[cardType];
+    const bannerTint = (rarity && rarity !== 'Common' && RARITY_BANNER_TINTS[rarity])
+      ?? CARD_MIDDLE_TINTS[cardType];
     const layers: LayerSrc[] = layerResults.flatMap((r, idx) => {
       if (r.status !== 'fulfilled' || r.value === null) return [];
       const src = r.value;
@@ -2302,21 +2323,22 @@ export class App {
      *   canvases and accepts the hit (Stage 1 already proved we're inside the content
      *   region in that case).
      */
-    const hitTestSlot = (canvasX: number, canvasY: number): number | null => {
-      const W = this.previewCanvas.width;
-      const H = this.previewCanvas.height;
-      const MARGIN = 8; // canvas pixels added around content bounds
-      for (let i = state.slots.length - 1; i >= 0; i--) {
-        const slot = state.slots[i];
-        if (!slot.visible || !slot.spriteUrl) continue;
+      const hitTestSlot = (canvasX: number, canvasY: number): number | null => {
+        const W = this.previewCanvas.width;
+        const H = this.previewCanvas.height;
+        const MARGIN = 8; // canvas pixels added around content bounds
+        for (let i = state.slots.length - 1; i >= 0; i--) {
+          const slot = state.slots[i];
+          if (!slot.visible || !slot.spriteUrl) continue;
 
-        const cx = W / 2 + slot.position.x;
-        const cy = H / 2 + slot.position.y;
-        const relX = canvasX - cx;
-        const relY = canvasY - cy;
-        const angle = -(slot.rotation * Math.PI) / 180;
-        const localX = relX * Math.cos(angle) - relY * Math.sin(angle);
-        const localY = relX * Math.sin(angle) + relY * Math.cos(angle);
+          const scale = slot.type === 'text' ? 1 : slot.scale;
+          const cx = W / 2 + slot.position.x;
+          const cy = H / 2 + slot.position.y;
+          const relX = canvasX - cx;
+          const relY = canvasY - cy;
+          const angle = -(slot.rotation * Math.PI) / 180;
+          const localX = relX * Math.cos(angle) - relY * Math.sin(angle);
+          const localY = relX * Math.sin(angle) + relY * Math.cos(angle);
 
         // Look up the already-rendered canvas (same key as canvas-renderer uses).
         // Non-animated slots use frameIdx -1 in renderSlot; animated use the current frame index.
@@ -2332,55 +2354,55 @@ export class App {
             hb = scanContentBounds(rendered);
             hitBoundsCache.set(cacheKey, hb);
           }
-          if (hb) {
-            const dx = (hb.cx - rendered.width / 2) * slot.scale;
-            const dy = (hb.cy - rendered.height / 2) * slot.scale;
-            const chw = (hb.hw + MARGIN) * slot.scale;
-            const chv = (hb.hv + MARGIN) * slot.scale;
-            if (Math.abs(localX - dx) > chw || Math.abs(localY - dy) > chv) continue;
-          } else {
-            // Tainted or fully transparent — fall back to full canvas bounds
-            if (Math.abs(localX) > (rendered.width / 2) * slot.scale) continue;
-            if (Math.abs(localY) > (rendered.height / 2) * slot.scale) continue;
-          }
-
-          // Stage 2: pixel-accurate alpha check
-          const px = Math.round(localX / slot.scale + rendered.width / 2);
-          const py = Math.round(localY / slot.scale + rendered.height / 2);
-          const ctx2d = rendered.getContext('2d');
-          try {
-            if (ctx2d && ctx2d.getImageData(px, py, 1, 1).data[3] > 10) return i;
-          } catch {
-            // Tainted canvas — bounds check passed, accept the hit
-            return i;
-          }
-        } else {
-          // Pre-render fallback: scan the raw source image for content bounds
-          const img = spriteLoader.getCached(slot.spriteUrl);
-          if (img) {
-            let hb = hitBoundsCache.get(slot.spriteUrl);
-            if (hb === undefined) {
-              hb = scanContentBounds(img);
-              hitBoundsCache.set(slot.spriteUrl, hb);
-            }
             if (hb) {
-              const dx = (hb.cx - img.naturalWidth / 2) * slot.scale;
-              const dy = (hb.cy - img.naturalHeight / 2) * slot.scale;
-              const chw = (hb.hw + MARGIN) * slot.scale;
-              const chv = (hb.hv + MARGIN) * slot.scale;
-              if (Math.abs(localX - dx) <= chw && Math.abs(localY - dy) <= chv) return i;
+              const dx = (hb.cx - rendered.width / 2) * scale;
+              const dy = (hb.cy - rendered.height / 2) * scale;
+              const chw = (hb.hw + MARGIN) * scale;
+              const chv = (hb.hv + MARGIN) * scale;
+              if (Math.abs(localX - dx) > chw || Math.abs(localY - dy) > chv) continue;
             } else {
-              const hw = (img.naturalWidth / 2) * slot.scale;
-              const hh = (img.naturalHeight / 2) * slot.scale;
-              if (Math.abs(localX) <= hw && Math.abs(localY) <= hh) return i;
+              // Tainted or fully transparent — fall back to full canvas bounds
+              if (Math.abs(localX) > (rendered.width / 2) * scale) continue;
+              if (Math.abs(localY) > (rendered.height / 2) * scale) continue;
+            }
+
+            // Stage 2: pixel-accurate alpha check
+            const px = Math.round(localX / scale + rendered.width / 2);
+            const py = Math.round(localY / scale + rendered.height / 2);
+            const ctx2d = rendered.getContext('2d');
+            try {
+              if (ctx2d && ctx2d.getImageData(px, py, 1, 1).data[3] > 10) return i;
+            } catch {
+              // Tainted canvas — bounds check passed, accept the hit
+              return i;
             }
           } else {
-            if (Math.abs(localX) <= 128 * slot.scale && Math.abs(localY) <= 128 * slot.scale) return i;
+            // Pre-render fallback: scan the raw source image for content bounds
+            const img = spriteLoader.getCached(slot.spriteUrl);
+            if (img) {
+              let hb = hitBoundsCache.get(slot.spriteUrl);
+              if (hb === undefined) {
+                hb = scanContentBounds(img);
+                hitBoundsCache.set(slot.spriteUrl, hb);
+              }
+              if (hb) {
+                const dx = (hb.cx - img.naturalWidth / 2) * scale;
+                const dy = (hb.cy - img.naturalHeight / 2) * scale;
+                const chw = (hb.hw + MARGIN) * scale;
+                const chv = (hb.hv + MARGIN) * scale;
+                if (Math.abs(localX - dx) <= chw && Math.abs(localY - dy) <= chv) return i;
+              } else {
+                const hw = (img.naturalWidth / 2) * scale;
+                const hh = (img.naturalHeight / 2) * scale;
+                if (Math.abs(localX) <= hw && Math.abs(localY) <= hh) return i;
+              }
+            } else {
+              if (Math.abs(localX) <= 128 * scale && Math.abs(localY) <= 128 * scale) return i;
+            }
           }
         }
-      }
-      return null;
-    };
+        return null;
+      };
 
     this.previewCanvas.addEventListener('mousedown', (e) => {
       const rect = this.previewCanvas.getBoundingClientRect();
@@ -2508,31 +2530,121 @@ export class App {
 
   // ── Download ──
 
-  private async download(): Promise<void> {
-    const hasGif = state.slots.some(s => s.visible && s.isAnimated && s.gifFrames && s.gifFrames.length > 1);
-    if (hasGif) {
-      await this.downloadGIF();
-    } else {
-      await this.downloadPNG();
+    private async download(): Promise<void> {
+      const hasGif = state.slots.some(s => s.visible && s.isAnimated && s.gifFrames && s.gifFrames.length > 1);
+      if (hasGif) {
+        await this.downloadGIF();
+      } else {
+        await this.downloadPNG();
+      }
     }
-  }
 
-  private async downloadPNG(): Promise<void> {
-    this.downloadProgress.textContent = 'Rendering...';
-    const canvas = document.createElement('canvas');
-    canvas.width = 1024;
-    canvas.height = 1024;
-    await renderAll(canvas);
-    const link = document.createElement('a');
-    link.download = `${getActiveSlot().spriteKey.split('/').pop() || 'sprite'}.png`;
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-    this.downloadProgress.textContent = '';
-  }
+    private getEffectiveScale(slot: Slot): number {
+      return slot.type === 'text' ? 1 : slot.scale;
+    }
 
-  private async downloadGIF(): Promise<void> {
-    this.downloadProgress.textContent = 'Rendering...';
-    this.downloadBtn.disabled = true;
+    private computeCompositeBounds(
+      sizeMap: Map<Slot, { w: number; h: number }>,
+      fullSize: number,
+      padding: number,
+    ): { x: number; y: number; w: number; h: number } {
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+
+      for (const [slot, size] of sizeMap.entries()) {
+        const scale = this.getEffectiveScale(slot);
+        const w = size.w * scale;
+        const h = size.h * scale;
+        const hw = w / 2;
+        const hh = h / 2;
+        const angle = (slot.rotation * Math.PI) / 180;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        const cx = fullSize / 2 + slot.position.x;
+        const cy = fullSize / 2 + slot.position.y;
+
+        const corners = [
+          { x: -hw, y: -hh },
+          { x:  hw, y: -hh },
+          { x:  hw, y:  hh },
+          { x: -hw, y:  hh },
+        ];
+
+        for (const c of corners) {
+          const rx = c.x * cos - c.y * sin;
+          const ry = c.x * sin + c.y * cos;
+          const px = cx + rx;
+          const py = cy + ry;
+          if (px < minX) minX = px;
+          if (py < minY) minY = py;
+          if (px > maxX) maxX = px;
+          if (py > maxY) maxY = py;
+        }
+      }
+
+      if (!Number.isFinite(minX) || !Number.isFinite(minY)) {
+        return { x: 0, y: 0, w: fullSize, h: fullSize };
+      }
+
+      let x0 = Math.max(0, Math.floor(minX - padding));
+      let y0 = Math.max(0, Math.floor(minY - padding));
+      let x1 = Math.min(fullSize, Math.ceil(maxX + padding));
+      let y1 = Math.min(fullSize, Math.ceil(maxY + padding));
+
+      const w = Math.max(1, x1 - x0);
+      const h = Math.max(1, y1 - y0);
+      return { x: x0, y: y0, w, h };
+    }
+
+    private async downloadPNG(): Promise<void> {
+      this.downloadProgress.textContent = 'Rendering...';
+      const FULL = 1024;
+      const SAFE_PAD = 24;
+      const canvas = document.createElement('canvas');
+      canvas.width = FULL;
+      canvas.height = FULL;
+      await renderAll(canvas);
+
+      const sizeMap = new Map<Slot, { w: number; h: number }>();
+      for (const slot of state.slots) {
+        if (!slot.visible) continue;
+        if (slot.type === 'text' || slot.type === 'full-card') {
+          if (!slot.gifFrames || slot.gifFrames.length === 0) continue;
+        } else if (!slot.spriteUrl) {
+          continue;
+        }
+        const gifIdx = slot.isAnimated && slot.gifFrames ? (slot._gifFrameIdx ?? 0) : undefined;
+        const rendered = await renderSlot(slot, gifIdx);
+        if (rendered) sizeMap.set(slot, { w: rendered.width, h: rendered.height });
+      }
+
+      const bounds = this.computeCompositeBounds(sizeMap, FULL, SAFE_PAD);
+      const out = document.createElement('canvas');
+      out.width = bounds.w;
+      out.height = bounds.h;
+      out.getContext('2d')!.drawImage(
+        canvas,
+        bounds.x,
+        bounds.y,
+        bounds.w,
+        bounds.h,
+        0,
+        0,
+        bounds.w,
+        bounds.h,
+      );
+      const link = document.createElement('a');
+      link.download = `${getActiveSlot().spriteKey.split('/').pop() || 'sprite'}.png`;
+      link.href = out.toDataURL('image/png');
+      link.click();
+      this.downloadProgress.textContent = '';
+    }
+
+    private async downloadGIF(): Promise<void> {
+      this.downloadProgress.textContent = 'Rendering...';
+      this.downloadBtn.disabled = true;
 
     let maxFrames = 0;
     let primaryFrames: { canvas: HTMLCanvasElement; delay: number }[] = [];
@@ -2549,24 +2661,46 @@ export class App {
       return;
     }
 
-    // Composite is built at full 1024×1024 then scaled to EXPORT_SIZE before encoding.
-    // 512×512 = 4× fewer pixels per frame → gif.js encodes ~4× faster.
-    // Smaller pixel area also reduces per-frame colour-palette shifts, which is the cause
-    // of static slots with gradients (e.g. Rainbow) appearing to animate across frames.
-    const FULL = 1024;
-    const EXPORT_SIZE = 512;
+      // Composite is built at full 1024×1024, then cropped to bounds with padding.
+      // If the result is larger than EXPORT_MAX, it is scaled down preserving aspect.
+      const FULL = 1024;
+      const EXPORT_MAX = 512;
+      const SAFE_PAD = 24;
 
     // Pre-render all static (non-animated) slots once before the frame loop.
     // Even though renderSlot caches its output, calling it N times per static slot
     // inside the loop adds N async yields and N cache-key computations per slot.
     this.downloadProgress.textContent = 'Preparing static layers...';
-    const staticCanvases = new Map<Slot, HTMLCanvasElement>();
-    for (const slot of state.slots) {
+      const staticCanvases = new Map<Slot, HTMLCanvasElement>();
+      for (const slot of state.slots) {
       if (!slot.visible || !slot.spriteUrl) continue;
       if (slot.isAnimated && slot.gifFrames && slot.gifFrames.length > 0) continue;
-      const rendered = await renderSlot(slot);
-      if (rendered) staticCanvases.set(slot, rendered);
-    }
+        const rendered = await renderSlot(slot);
+        if (rendered) staticCanvases.set(slot, rendered);
+      }
+
+      // Precompute bounds from slot sizes (use max frame size for animated slots)
+      const sizeMap = new Map<Slot, { w: number; h: number }>();
+      for (const slot of state.slots) {
+        if (!slot.visible || !slot.spriteUrl) continue;
+        if (slot.isAnimated && slot.gifFrames && slot.gifFrames.length > 0) {
+          let maxW = 0;
+          let maxH = 0;
+          for (const f of slot.gifFrames) {
+            if (f.canvas.width > maxW) maxW = f.canvas.width;
+            if (f.canvas.height > maxH) maxH = f.canvas.height;
+          }
+          if (maxW > 0 && maxH > 0) sizeMap.set(slot, { w: maxW, h: maxH });
+          continue;
+        }
+        const rendered = staticCanvases.get(slot);
+        if (rendered) sizeMap.set(slot, { w: rendered.width, h: rendered.height });
+      }
+
+      const bounds = this.computeCompositeBounds(sizeMap, FULL, SAFE_PAD);
+      const scaleDown = Math.min(1, EXPORT_MAX / Math.max(bounds.w, bounds.h));
+      const outW = Math.max(1, Math.round(bounds.w * scaleDown));
+      const outH = Math.max(1, Math.round(bounds.h * scaleDown));
 
     const renderedFrames: { canvas: HTMLCanvasElement; delay: number }[] = [];
 
@@ -2579,49 +2713,64 @@ export class App {
       const outCtx = outCanvas.getContext('2d')!;
       outCtx.clearRect(0, 0, FULL, FULL);
 
-      for (const slot of state.slots) {
-        if (!slot.visible || !slot.spriteUrl) continue;
+        for (const slot of state.slots) {
+          if (!slot.visible || !slot.spriteUrl) continue;
 
-        if (slot.isAnimated && slot.gifFrames && slot.gifFrames.length > 0) {
+          if (slot.isAnimated && slot.gifFrames && slot.gifFrames.length > 0) {
           const fi = i % slot.gifFrames.length;
           const src = slot.gifFrames[fi].canvas;
           const frameCanvas = document.createElement('canvas');
           frameCanvas.width = src.width;
           frameCanvas.height = src.height;
           frameCanvas.getContext('2d')!.drawImage(src, 0, 0);
-          applyMutations(frameCanvas, slot.mutations, false, slot.customTint);
-          outCtx.save();
-          outCtx.translate(FULL / 2 + slot.position.x, FULL / 2 + slot.position.y);
-          outCtx.rotate((slot.rotation * Math.PI) / 180);
-          outCtx.scale(slot.scale, slot.scale);
-          outCtx.drawImage(frameCanvas, -frameCanvas.width / 2, -frameCanvas.height / 2);
-          outCtx.restore();
-        } else {
-          const rendered = staticCanvases.get(slot);
-          if (!rendered) continue;
-          outCtx.save();
-          outCtx.translate(FULL / 2 + slot.position.x, FULL / 2 + slot.position.y);
-          outCtx.rotate((slot.rotation * Math.PI) / 180);
-          outCtx.scale(slot.scale, slot.scale);
-          outCtx.drawImage(rendered, -rendered.width / 2, -rendered.height / 2);
-          outCtx.restore();
+            applyMutations(frameCanvas, slot.mutations, false, slot.customTint);
+            outCtx.save();
+            outCtx.translate(FULL / 2 + slot.position.x, FULL / 2 + slot.position.y);
+            outCtx.rotate((slot.rotation * Math.PI) / 180);
+            outCtx.scale(this.getEffectiveScale(slot), this.getEffectiveScale(slot));
+            outCtx.drawImage(frameCanvas, -frameCanvas.width / 2, -frameCanvas.height / 2);
+            outCtx.restore();
+          } else {
+            const rendered = staticCanvases.get(slot);
+            if (!rendered) continue;
+            outCtx.save();
+            outCtx.translate(FULL / 2 + slot.position.x, FULL / 2 + slot.position.y);
+            outCtx.rotate((slot.rotation * Math.PI) / 180);
+            outCtx.scale(this.getEffectiveScale(slot), this.getEffectiveScale(slot));
+            outCtx.drawImage(rendered, -rendered.width / 2, -rendered.height / 2);
+            outCtx.restore();
+          }
         }
-      }
 
-      // Scale the full-size composite down to the export size.
-      const frameOut = document.createElement('canvas');
-      frameOut.width = EXPORT_SIZE;
-      frameOut.height = EXPORT_SIZE;
-      frameOut.getContext('2d')!.drawImage(outCanvas, 0, 0, EXPORT_SIZE, EXPORT_SIZE);
-      renderedFrames.push({ canvas: frameOut, delay: primaryFrames[i].delay });
-    }
+        // Crop to bounds and scale down if needed.
+        const cropped = document.createElement('canvas');
+        cropped.width = bounds.w;
+        cropped.height = bounds.h;
+        cropped.getContext('2d')!.drawImage(
+          outCanvas,
+          bounds.x,
+          bounds.y,
+          bounds.w,
+          bounds.h,
+          0,
+          0,
+          bounds.w,
+          bounds.h,
+        );
+
+        const frameOut = document.createElement('canvas');
+        frameOut.width = outW;
+        frameOut.height = outH;
+        frameOut.getContext('2d')!.drawImage(cropped, 0, 0, outW, outH);
+        renderedFrames.push({ canvas: frameOut, delay: primaryFrames[i].delay });
+      }
 
     try {
       this.downloadProgress.textContent = 'Encoding GIF...';
       const blob = await encodeGif({
         frames: renderedFrames,
-        width: EXPORT_SIZE,
-        height: EXPORT_SIZE,
+          width: outW,
+          height: outH,
         onProgress: (p) => {
           this.downloadProgress.textContent = `Encoding GIF... ${Math.round(p * 100)}%`;
         },

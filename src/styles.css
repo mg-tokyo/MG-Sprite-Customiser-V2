@@ -309,12 +309,14 @@ button.danger:hover { background: #ff3333; }
   display: grid;
   place-items: center;
   min-height: 360px;
+  max-height: 70vh;
+  aspect-ratio: 1 / 1;
   transition: background 0.3s ease;
   touch-action: none;
 }
 #previewCanvas canvas {
   width: 100%;
-  height: auto;
+  height: 100%;
   object-fit: contain;
   image-rendering: auto;
   cursor: grab;
