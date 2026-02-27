@@ -1,5 +1,5 @@
 import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlot, reorderSlots } from '../state/store';
-import type { Slot } from '../state/store';
+import type { Slot, TextData } from '../state/store';
 import { initTheme, toggleTheme } from './theme';
 import { FILTERS } from '../renderer/mutation-defs';
 import { renderAll, renderSlot } from '../renderer/canvas-renderer';
@@ -15,6 +15,8 @@ import { renderThumb } from './thumbnail';
 import type { DropdownItem } from './custom-dropdown';
 import { spriteLoader } from '../api/sprite-loader';
 import type { SpriteFrame } from '../api/types';
+import { renderTextToCanvas, defaultTextData } from './text-renderer';
+import { MG_FONTS, SYSTEM_FONTS, GOOGLE_FONTS_CURATED, UNICODE_STYLES, ensureFontLoaded } from './font-data';
 
 // ── Hit-test content bounds ──────────────────────────────────────────────────
 // Cache tight bounding boxes (content only, transparent padding stripped) so
@@ -86,6 +88,7 @@ export class App {
   private customColor!: HTMLInputElement;
   private customOpacity!: HTMLInputElement;
   private scaleInput!: HTMLInputElement;
+  private scaleLabel!: HTMLElement;
   private rotationInput!: HTMLInputElement;
   private previewCanvas!: HTMLCanvasElement;
   private metaEl!: HTMLElement;
@@ -98,6 +101,31 @@ export class App {
   private dragIdx: number | null = null;
   private dragInsertBefore: number | null = null;
   private frameScheduler = new FrameScheduler();
+
+  // ── Text layer UI ──
+  private spriteControls!: HTMLElement;   // category + sprite dropdowns section
+  private textControls!: HTMLElement;     // text-layer-specific section
+  private textArea!: HTMLTextAreaElement;
+  private fontGroupDropdown!: CustomDropdown; // font category (MG / System / Google / Unicode)
+  private fontItemDropdown!: CustomDropdown;  // individual font within group
+  private fontGoogleSearch!: HTMLInputElement;
+  private fontGoogleResults!: HTMLElement;
+  private alignBtns!: HTMLButtonElement[];
+  private wordWrapToggle!: HTMLInputElement;
+  private wordWrapWidthRow!: HTMLElement;
+  private wordWrapWidthInput!: HTMLInputElement;
+  private boldToggle!: HTMLInputElement;
+  private italicToggle!: HTMLInputElement;
+  private mgShadowToggle!: HTMLInputElement;
+  private strokeToggle!: HTMLInputElement;
+  private strokeControls!: HTMLElement;
+  private strokeColorInput!: HTMLInputElement;
+  private strokeWidthInput!: HTMLInputElement;
+  private unicodeRow!: HTMLElement;
+  private unicodeDropdown!: CustomDropdown;
+  private tintLabel!: HTMLElement;       // relabelled when text slot active
+  private addTextBtn!: HTMLButtonElement;
+  private textRenderDebounce: ReturnType<typeof setTimeout> | null = null;
 
   constructor(container: HTMLElement) {
     initTheme();
@@ -182,6 +210,23 @@ export class App {
       },
     });
 
+    // ── Sprite controls section (hidden when text slot is active) ──
+    this.spriteControls = el('div', { className: 'sprite-controls-section' });
+
+    // ── Text Layer Controls (hidden when sprite slot active) ──
+    this.textControls = el('div', { className: 'text-controls-section', style: 'display:none' });
+    this.buildTextControls();
+
+    // Populate sprite controls contents
+    this.spriteControls.append(
+      el('label', { textContent: 'Category' }),
+      this.categoryDropdown.element,
+      el('label', { textContent: 'Search' }),
+      this.searchInput,
+      el('label', { textContent: 'Sprite' }),
+      this.spriteDropdown.element,
+    );
+
     // Upload
     const fileInput = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif', id: 'uploadFile' }) as HTMLInputElement;
     const uploadBtn = el('button', { className: 'secondary', textContent: 'Upload PNG/GIF' });
@@ -221,11 +266,16 @@ export class App {
       fileInput.value = '';
     });
 
+    // Add text layer button
+    this.addTextBtn = el('button', { className: 'secondary txt-add-btn', textContent: '+ Text Layer' }) as HTMLButtonElement;
+    this.addTextBtn.addEventListener('click', () => this.addTextLayer());
+
     // Mutations
     this.mutationList = el('div', { className: 'mutations' });
 
-    // Custom tint
-    this.customColor = el('input', { type: 'color', id: 'customColor', value: '#ff00ff' }) as HTMLInputElement;
+    // Custom tint / text color
+    this.tintLabel = el('label', { textContent: 'Custom Tint' }) as HTMLElement;
+    this.customColor = el('input', { type: 'color', id: 'customColor', value: '#ffffff' }) as HTMLInputElement;
     this.customOpacity = el('input', { type: 'range', id: 'customOpacity', min: '0', max: '1', step: '0.05', value: '0' }) as HTMLInputElement;
     this.customTintControls = el('div', { id: 'customTintControls' }, [
       el('div', {}, [el('label', { textContent: 'Color' }), this.customColor]),
@@ -246,6 +296,7 @@ export class App {
     optOverlays.addEventListener('change', () => updateSlot(state.activeSlotIndex, { options: { icons: optIcons.checked, overlays: optOverlays.checked } }));
 
     // Scale / Rotation
+    this.scaleLabel = el('label', { textContent: 'Scale' });
     this.scaleInput = el('input', { id: 'scale', type: 'range', min: '0.1', max: '4', step: '0.1', value: '1' }) as HTMLInputElement;
     this.rotationInput = el('input', { id: 'rotation', type: 'range', min: '0', max: '360', step: '5', value: '0' }) as HTMLInputElement;
 
@@ -275,21 +326,18 @@ export class App {
       el('h2', { textContent: 'Controls' }),
       this.metaLabel('Layers', '(drag to reorder)'),
       this.slotContainer,
-      el('label', { textContent: 'Category' }),
-      this.categoryDropdown.element,
-      el('label', { textContent: 'Search' }),
-      this.searchInput,
-      el('label', { textContent: 'Sprite' }),
-      this.spriteDropdown.element,
+      this.spriteControls,
+      this.textControls,
       el('div', { className: 'upload-controls' }, [
-        el('div', { className: 'upload-actions' }, [uploadBtn, fileInput]),
+        el('div', { className: 'upload-actions' }, [uploadBtn, fileInput, this.addTextBtn]),
       ]),
       el('label', { textContent: 'Mutations' }),
       this.mutationList,
+      this.tintLabel,
       this.customTintControls,
       el('label', { textContent: 'Options' }),
       optionsDiv,
-      el('label', { textContent: 'Scale' }),
+      this.scaleLabel,
       this.scaleInput,
       el('label', { textContent: 'Rotation' }),
       this.rotationInput,
@@ -326,20 +374,31 @@ export class App {
 
     // Scale / Rotation (debounced)
     this.scaleInput.addEventListener('input', () => {
+      const slot = getActiveSlot();
       beginBatchUpdate();
-      updateSlotSilent(state.activeSlotIndex, { scale: parseFloat(this.scaleInput.value) || 1 });
+      if (slot.type === 'text') {
+        // Scale slider = font size for text layers
+        const fontSize = Math.max(8, Math.min(200, parseInt(this.scaleInput.value) || 40));
+        const td = { ...slot.textData!, fontSize };
+        updateSlotSilent(state.activeSlotIndex, { textData: td });
+        this.scheduleTextRerender();
+      } else {
+        updateSlotSilent(state.activeSlotIndex, { scale: parseFloat(this.scaleInput.value) || 1 });
+      }
     });
     this.rotationInput.addEventListener('input', () => {
       beginBatchUpdate();
       updateSlotSilent(state.activeSlotIndex, { rotation: parseFloat(this.rotationInput.value) || 0 });
     });
 
-    // Custom tint (debounced)
+    // Custom tint (debounced) — for text slots this drives the text fill colour
     const updateTint = () => {
+      const slot = getActiveSlot();
       beginBatchUpdate();
       updateSlotSilent(state.activeSlotIndex, {
         customTint: { color: this.customColor.value, opacity: parseFloat(this.customOpacity.value) },
       });
+      if (slot.type === 'text') this.scheduleTextRerender();
     };
     this.customColor.addEventListener('input', updateTint);
     this.customOpacity.addEventListener('input', updateTint);
@@ -349,10 +408,10 @@ export class App {
       const slot = getActiveSlot();
       optIcons.checked = slot.options.icons;
       optOverlays.checked = slot.options.overlays;
-      this.scaleInput.value = String(slot.scale);
       this.rotationInput.value = String(slot.rotation);
       this.customColor.value = slot.customTint.color;
       this.customOpacity.value = String(slot.customTint.opacity);
+      this.syncTextSlotUI(slot);
       if (slot.isAnimated && slot.gifFrames) {
         this.startGifPreview();
       } else {
@@ -374,8 +433,10 @@ export class App {
       this.refreshMutations();
       this.updateMeta();
       this.syncDownloadBtn();
+      const slot = getActiveSlot();
       // Sync dropdown selection to the newly active slot's sprite (silent — no reload)
-      this.spriteDropdown.selectById(getActiveSlot().spriteKey);
+      if (slot.type !== 'text') this.spriteDropdown.selectById(slot.spriteKey);
+      this.syncTextSlotUI(slot);
     });
     bus.on(Events.RENDER_REQUEST, () => this.render());
     bus.on(Events.DATA_LOADED, () => {
@@ -393,6 +454,405 @@ export class App {
 
     // Canvas drag
     this.setupCanvasDrag();
+  }
+
+  // ── Text Layer ──────────────────────────────────────────────────────────────
+
+  /** Build all text-layer control DOM elements (called once in buildUI). */
+  private buildTextControls(): void {
+    // ── Font group selector ──
+    const FONT_GROUPS = [
+      { id: 'mg',      label: 'MG Fonts' },
+      { id: 'system',  label: 'System Fonts' },
+      { id: 'google',  label: 'Google Fonts' },
+      { id: 'unicode', label: 'Unicode Styles' },
+    ];
+    this.fontGroupDropdown = new CustomDropdown({
+      showThumbs: false,
+      placeholder: 'Font group…',
+      onSelect: (item) => this.onFontGroupSelect(item.id),
+    });
+    this.fontGroupDropdown.setItems(
+      FONT_GROUPS.map(g => ({ id: g.id, label: g.label })),
+      'mg',
+    );
+
+    // ── Font item selector ──
+    this.fontItemDropdown = new CustomDropdown({
+      showThumbs: false,
+      placeholder: 'Select font…',
+      onSelect: (item) => {
+        const slot = getActiveSlot();
+        if (slot.type !== 'text' || !slot.textData) return;
+        // item.id encodes fontId; label is the display name
+        // We resolve the font def from item.id
+        this.applyFontSelection(item.id);
+      },
+    });
+
+    // ── Google font search ──
+    this.fontGoogleSearch = el('input', {
+      type: 'text',
+      placeholder: 'Search Google Fonts…',
+      className: 'font-google-search',
+      style: 'display:none',
+    }) as HTMLInputElement;
+    this.fontGoogleResults = el('div', { className: 'font-google-results', style: 'display:none' });
+
+    this.fontGoogleSearch.addEventListener('input', () => this.onGoogleFontSearch());
+
+    // ── Unicode style selector ──
+    this.unicodeDropdown = new CustomDropdown({
+      showThumbs: false,
+      placeholder: 'None (off)',
+      onSelect: (item) => {
+        const slot = getActiveSlot();
+        if (slot.type !== 'text' || !slot.textData) return;
+        const td = { ...slot.textData, unicodeStyle: item.id === 'none' ? undefined : item.id };
+        updateSlot(state.activeSlotIndex, { textData: td });
+        this.scheduleTextRerender();
+      },
+    });
+    const unicodeItems: DropdownItem[] = [
+      { id: 'none', label: 'None (off)' },
+      ...UNICODE_STYLES.map(u => ({ id: u.id, label: u.label })),
+    ];
+    this.unicodeDropdown.setItems(unicodeItems, 'none');
+    this.unicodeRow = el('div', { className: 'text-control-row' }, [
+      el('label', { textContent: 'Unicode style' }),
+      this.unicodeDropdown.element,
+    ]);
+
+    // ── Text area ──
+    this.textArea = el('textarea', {
+      className: 'text-input-area',
+      placeholder: 'Type your text…',
+      rows: '3',
+    }) as HTMLTextAreaElement;
+    this.textArea.addEventListener('input', () => {
+      const slot = getActiveSlot();
+      if (slot.type !== 'text' || !slot.textData) return;
+      const td = { ...slot.textData, content: this.textArea.value };
+      updateSlotSilent(state.activeSlotIndex, { textData: td });
+      this.scheduleTextRerender();
+    });
+
+    // ── Alignment ──
+    const alignLabels: Array<{ id: TextData['align']; glyph: string }> = [
+      { id: 'left',   glyph: '⫷' },
+      { id: 'center', glyph: '≡' },
+      { id: 'right',  glyph: '⫸' },
+    ];
+    this.alignBtns = alignLabels.map(({ id, glyph }) => {
+      const btn = el('button', { className: 'align-btn', textContent: glyph, title: id }) as HTMLButtonElement;
+      btn.dataset.align = id;
+      btn.addEventListener('click', () => {
+        const slot = getActiveSlot();
+        if (slot.type !== 'text' || !slot.textData) return;
+        const td = { ...slot.textData, align: id };
+        updateSlot(state.activeSlotIndex, { textData: td });
+        this.scheduleTextRerender();
+        this.syncAlignBtns(id);
+      });
+      return btn;
+    });
+    const alignRow = el('div', { className: 'align-row' }, [
+      el('span', { textContent: 'Align:', className: 'align-row-label' }),
+      ...this.alignBtns,
+    ]);
+
+    // ── Word wrap ──
+    this.wordWrapToggle = el('input', { type: 'checkbox', id: 'txtWordWrap' }) as HTMLInputElement;
+    this.wordWrapWidthInput = el('input', { type: 'range', min: '100', max: '900', step: '10', value: '400', id: 'txtWrapWidth' }) as HTMLInputElement;
+    this.wordWrapWidthRow = el('div', { className: 'word-wrap-width-row', style: 'display:none' }, [
+      el('label', { textContent: 'Max width' }),
+      this.wordWrapWidthInput,
+    ]);
+
+    this.wordWrapToggle.addEventListener('change', () => {
+      const slot = getActiveSlot();
+      if (slot.type !== 'text' || !slot.textData) return;
+      this.wordWrapWidthRow.style.display = this.wordWrapToggle.checked ? '' : 'none';
+      const td = { ...slot.textData, wordWrap: this.wordWrapToggle.checked };
+      updateSlot(state.activeSlotIndex, { textData: td });
+      this.scheduleTextRerender();
+    });
+    this.wordWrapWidthInput.addEventListener('input', () => {
+      const slot = getActiveSlot();
+      if (slot.type !== 'text' || !slot.textData) return;
+      const td = { ...slot.textData, wordWrapWidth: parseInt(this.wordWrapWidthInput.value) };
+      updateSlotSilent(state.activeSlotIndex, { textData: td });
+      this.scheduleTextRerender();
+    });
+
+    // ── Style toggles (bold, italic) ──
+    this.boldToggle   = el('input', { type: 'checkbox', id: 'txtBold' })   as HTMLInputElement;
+    this.italicToggle = el('input', { type: 'checkbox', id: 'txtItalic' }) as HTMLInputElement;
+    this.boldToggle.addEventListener('change', () => {
+      const slot = getActiveSlot();
+      if (slot.type !== 'text' || !slot.textData) return;
+      updateSlot(state.activeSlotIndex, { textData: { ...slot.textData, bold: this.boldToggle.checked } });
+      this.scheduleTextRerender();
+    });
+    this.italicToggle.addEventListener('change', () => {
+      const slot = getActiveSlot();
+      if (slot.type !== 'text' || !slot.textData) return;
+      updateSlot(state.activeSlotIndex, { textData: { ...slot.textData, italic: this.italicToggle.checked } });
+      this.scheduleTextRerender();
+    });
+
+    // ── MG presets ──
+    this.mgShadowToggle = el('input', { type: 'checkbox', id: 'txtMgShadow' }) as HTMLInputElement;
+    this.mgShadowToggle.checked = true; // default on for textSlapper
+    this.mgShadowToggle.addEventListener('change', () => {
+      const slot = getActiveSlot();
+      if (slot.type !== 'text' || !slot.textData) return;
+      updateSlot(state.activeSlotIndex, { textData: { ...slot.textData, mgShadow: this.mgShadowToggle.checked } });
+      this.scheduleTextRerender();
+    });
+
+    // ── Stroke ──
+    this.strokeToggle = el('input', { type: 'checkbox', id: 'txtStroke' }) as HTMLInputElement;
+    this.strokeColorInput = el('input', { type: 'color', id: 'txtStrokeColor', value: '#000000' }) as HTMLInputElement;
+    this.strokeWidthInput = el('input', { type: 'range', min: '1', max: '20', step: '1', value: '3', id: 'txtStrokeWidth' }) as HTMLInputElement;
+    this.strokeControls = el('div', { className: 'stroke-controls', style: 'display:none' }, [
+      el('div', {}, [el('label', { textContent: 'Outline color' }), this.strokeColorInput]),
+      el('div', {}, [el('label', { textContent: 'Outline width' }), this.strokeWidthInput]),
+    ]);
+
+    this.strokeToggle.addEventListener('change', () => {
+      const slot = getActiveSlot();
+      if (slot.type !== 'text' || !slot.textData) return;
+      this.strokeControls.style.display = this.strokeToggle.checked ? '' : 'none';
+      updateSlot(state.activeSlotIndex, { textData: { ...slot.textData, strokeEnabled: this.strokeToggle.checked } });
+      this.scheduleTextRerender();
+    });
+    this.strokeColorInput.addEventListener('input', () => {
+      const slot = getActiveSlot();
+      if (slot.type !== 'text' || !slot.textData) return;
+      updateSlotSilent(state.activeSlotIndex, { textData: { ...slot.textData, strokeColor: this.strokeColorInput.value } });
+      this.scheduleTextRerender();
+    });
+    this.strokeWidthInput.addEventListener('input', () => {
+      const slot = getActiveSlot();
+      if (slot.type !== 'text' || !slot.textData) return;
+      updateSlotSilent(state.activeSlotIndex, { textData: { ...slot.textData, strokeWidth: parseInt(this.strokeWidthInput.value) } });
+      this.scheduleTextRerender();
+    });
+
+    // Assemble text controls panel
+    this.textControls.append(
+      el('label', { textContent: 'Font group' }),
+      this.fontGroupDropdown.element,
+      el('label', { textContent: 'Font' }),
+      this.fontItemDropdown.element,
+      this.fontGoogleSearch,
+      this.fontGoogleResults,
+      this.unicodeRow,
+      el('label', { textContent: 'Text' }),
+      this.textArea,
+      alignRow,
+      el('div', { className: 'text-style-row' }, [
+        this.makeCheckLabel('Word wrap', this.wordWrapToggle),
+        this.makeCheckLabel('Bold', this.boldToggle),
+        this.makeCheckLabel('Italic', this.italicToggle),
+      ]),
+      this.wordWrapWidthRow,
+      el('div', { className: 'text-preset-row' }, [
+        this.makeCheckLabel('textSlapper shadow', this.mgShadowToggle),
+        this.makeCheckLabel('Outline/Stroke', this.strokeToggle),
+      ]),
+      this.strokeControls,
+    );
+
+    // Initialise font list for MG group (default)
+    this.onFontGroupSelect('mg');
+  }
+
+  /** Called when the font group dropdown changes. Repopulates the font item dropdown. */
+  private onFontGroupSelect(groupId: string): void {
+    let items: DropdownItem[];
+
+    if (groupId === 'mg') {
+      items = MG_FONTS.map(f => ({ id: f.id, label: f.label }));
+      this.fontGoogleSearch.style.display = 'none';
+      this.fontGoogleResults.style.display = 'none';
+      this.unicodeRow.style.display = 'none';
+    } else if (groupId === 'system') {
+      items = SYSTEM_FONTS.map(f => ({ id: f.id, label: f.label }));
+      this.fontGoogleSearch.style.display = 'none';
+      this.fontGoogleResults.style.display = 'none';
+      this.unicodeRow.style.display = 'none';
+    } else if (groupId === 'google') {
+      items = [
+        ...GOOGLE_FONTS_CURATED.map(f => ({ id: f.id, label: f.label })),
+        { id: 'gf-search', label: '🔍 Search all Google Fonts…' },
+      ];
+      this.fontGoogleSearch.style.display = 'none';
+      this.fontGoogleResults.style.display = 'none';
+      this.unicodeRow.style.display = 'none';
+    } else {
+      // unicode group — font item dropdown shows base fonts, unicode style is separate
+      items = [
+        ...MG_FONTS.map(f => ({ id: f.id, label: f.label })),
+        ...SYSTEM_FONTS.map(f => ({ id: f.id, label: f.label })),
+      ];
+      this.fontGoogleSearch.style.display = 'none';
+      this.fontGoogleResults.style.display = 'none';
+      this.unicodeRow.style.display = '';
+    }
+
+    this.fontItemDropdown.setItems(items);
+  }
+
+  /** Resolve a font definition by id and apply it to the active text slot. */
+  private applyFontSelection(fontId: string): void {
+    const slot = getActiveSlot();
+    if (slot.type !== 'text' || !slot.textData) return;
+
+    if (fontId === 'gf-search') {
+      // Show the Google font search box instead
+      this.fontGoogleSearch.style.display = '';
+      this.fontGoogleResults.style.display = '';
+      this.fontGoogleSearch.focus();
+      return;
+    }
+
+    const allDefs = [...MG_FONTS, ...SYSTEM_FONTS, ...GOOGLE_FONTS_CURATED];
+    const def = allDefs.find(f => f.id === fontId);
+    if (!def) return;
+
+    // Fire-and-forget font load
+    if (def.needsLoad) ensureFontLoaded(def).catch(() => {});
+
+    const td: TextData = {
+      ...slot.textData,
+      fontFamily: def.family,
+      fontLabel: def.label,
+      fontWeight: def.weight,
+      fontStyle: def.style,
+      gfFamily: def.gfFamily,
+    };
+    updateSlot(state.activeSlotIndex, { textData: td });
+    this.scheduleTextRerender();
+  }
+
+  /** Live-filter Google Fonts by name and show results as buttons. */
+  private onGoogleFontSearch(): void {
+    const q = this.fontGoogleSearch.value.toLowerCase().trim();
+    this.fontGoogleResults.innerHTML = '';
+    if (!q) return;
+
+    const matches = GOOGLE_FONTS_CURATED.filter(f => f.label.toLowerCase().includes(q));
+    if (matches.length === 0) {
+      this.fontGoogleResults.textContent = 'No results in curated list.';
+      return;
+    }
+    for (const f of matches) {
+      const btn = el('button', { className: 'font-result-btn', textContent: f.label });
+      btn.style.fontFamily = f.family;
+      btn.addEventListener('click', () => this.applyFontSelection(f.id));
+      this.fontGoogleResults.append(btn);
+    }
+  }
+
+  /** Sync visible/hidden and slider range when switching to/from a text slot. */
+  private syncTextSlotUI(slot: Slot): void {
+    const isText = slot.type === 'text';
+    this.spriteControls.style.display = isText ? 'none' : '';
+    this.textControls.style.display   = isText ? '' : 'none';
+    this.tintLabel.textContent = isText ? 'Text Color' : 'Custom Tint';
+
+    if (isText) {
+      // Switch scale slider → font size mode
+      this.scaleLabel.textContent = 'Font Size';
+      this.scaleInput.min  = '8';
+      this.scaleInput.max  = '200';
+      this.scaleInput.step = '1';
+      this.scaleInput.value = String(slot.textData?.fontSize ?? 60);
+
+      // Sync text-specific controls from slot state
+      if (slot.textData) {
+        this.textArea.value = slot.textData.content;
+        this.syncAlignBtns(slot.textData.align);
+        this.wordWrapToggle.checked = slot.textData.wordWrap;
+        this.wordWrapWidthRow.style.display = slot.textData.wordWrap ? '' : 'none';
+        this.wordWrapWidthInput.value = String(slot.textData.wordWrapWidth);
+        this.boldToggle.checked    = slot.textData.bold;
+        this.italicToggle.checked  = slot.textData.italic;
+        this.mgShadowToggle.checked = slot.textData.mgShadow;
+        this.strokeToggle.checked  = slot.textData.strokeEnabled;
+        this.strokeControls.style.display = slot.textData.strokeEnabled ? '' : 'none';
+        this.strokeColorInput.value = slot.textData.strokeColor;
+        this.strokeWidthInput.value = String(slot.textData.strokeWidth);
+        this.unicodeDropdown.selectById(slot.textData.unicodeStyle ?? 'none');
+      }
+    } else {
+      // Restore scale slider → sprite scale mode
+      this.scaleLabel.textContent = 'Scale';
+      this.scaleInput.min  = '0.1';
+      this.scaleInput.max  = '4';
+      this.scaleInput.step = '0.1';
+      this.scaleInput.value = String(slot.scale);
+    }
+  }
+
+  /** Highlight the currently active alignment button. */
+  private syncAlignBtns(align: TextData['align']): void {
+    for (const btn of this.alignBtns) {
+      btn.classList.toggle('active', btn.dataset.align === align);
+    }
+  }
+
+  /** Add a new text layer slot (finds first empty slot or appends at end logic). */
+  private addTextLayer(): void {
+    // Find the first empty slot and activate it
+    const emptyIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
+    // If no empty slot, use the current active one (overwrite)
+    const targetIdx = emptyIdx >= 0 ? emptyIdx : state.activeSlotIndex;
+
+    const td = defaultTextData();
+    // Default color: white for textSlapper
+    updateSlot(targetIdx, {
+      type: 'text',
+      spriteKey: 'text-layer',
+      spriteUrl: 'text:', // sentinel — tells renderSlot this is a text slot
+      textData: td,
+      gifFrames: undefined,
+      isAnimated: true, // marks as 'use gifFrames path' after first render
+      scale: td.fontSize,
+      customTint: { color: '#ffffff', opacity: 0 },
+      mutations: [],
+    });
+    setActiveSlot(targetIdx);
+    this.syncTextSlotUI(state.slots[targetIdx]);
+    // Render an initial (empty) text canvas placeholder
+    this.scheduleTextRerender();
+  }
+
+  /** Debounce text re-renders so rapid typing doesn't flood the canvas pipeline. */
+  private scheduleTextRerender(): void {
+    if (this.textRenderDebounce !== null) clearTimeout(this.textRenderDebounce);
+    this.textRenderDebounce = setTimeout(() => {
+      this.textRenderDebounce = null;
+      this.rerenderTextLayer().catch((err) => console.error('[MG] Text render failed:', err));
+    }, 80);
+  }
+
+  /** Re-render the active text slot's canvas and store it in gifFrames[0]. */
+  private async rerenderTextLayer(): Promise<void> {
+    const slot = getActiveSlot();
+    if (slot.type !== 'text' || !slot.textData) return;
+    const canvas = await renderTextToCanvas(slot.textData, slot.customTint.color);
+    // Update gifFrames in place without pushing undo (visual refresh only)
+    const currentSlot = state.slots[state.activeSlotIndex];
+    if (currentSlot.type !== 'text') return; // slot changed while awaiting
+    currentSlot.gifFrames = [{ canvas, delay: 0 }];
+    currentSlot.isAnimated = true;
+    currentSlot.spriteUrl  = 'text:'; // keep sentinel URL
+    bus.emit(Events.RENDER_REQUEST, null);
+    // Also refresh the slot button thumbnail
+    this.refreshSlots();
   }
 
   // ── Categories & Sprites ──
@@ -667,13 +1127,18 @@ export class App {
 
   private updateMeta(): void {
     const slot = getActiveSlot();
-    if (!slot.spriteUrl) {
+    if (!slot.spriteUrl && slot.type !== 'text') {
       this.metaEl.textContent = '';
       return;
     }
     const muts = slot.mutations.length > 0 ? slot.mutations.join(', ') : 'None';
-    const displayName = slot.spriteKey.split('/').pop() ?? slot.spriteKey;
-    this.metaEl.innerHTML = `<strong>${displayName}</strong> &middot; Slot ${state.activeSlotIndex + 1} &middot; Mutations: ${muts} &middot; Scale: ${slot.scale}x`;
+    if (slot.type === 'text') {
+      const td = slot.textData;
+      this.metaEl.innerHTML = `<strong>Text Layer</strong> &middot; Slot ${state.activeSlotIndex + 1} &middot; Font: ${td?.fontLabel ?? '—'} &middot; ${td?.fontSize ?? 0}px`;
+    } else {
+      const displayName = slot.spriteKey.split('/').pop() ?? slot.spriteKey;
+      this.metaEl.innerHTML = `<strong>${displayName}</strong> &middot; Slot ${state.activeSlotIndex + 1} &middot; Mutations: ${muts} &middot; Scale: ${slot.scale}x`;
+    }
   }
 
   // ── Render ──

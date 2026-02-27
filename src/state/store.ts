@@ -1,20 +1,51 @@
 import type { GameData, SpriteDataResponse, CosmeticsResponse } from '../api/types';
 import { bus, Events } from '../utils/events';
 
+export interface TextData {
+  content: string;
+  /** CSS font-family string (e.g. 'Greycliff CF', 'Impact') */
+  fontFamily: string;
+  /** Display label shown in the font picker */
+  fontLabel: string;
+  /** CSS font-weight (e.g. '400', '700') */
+  fontWeight: string;
+  /** CSS font-style ('normal' | 'italic') */
+  fontStyle: string;
+  /** Font size in px (8–200). Stored in slot.scale for UI reuse. */
+  fontSize: number;
+  align: 'left' | 'center' | 'right';
+  wordWrap: boolean;
+  /** Max line width in px before wrapping */
+  wordWrapWidth: number;
+  bold: boolean;
+  italic: boolean;
+  /** Apply MG textSlapper shadow: -3px 5px 0 rgba(0,0,0,0.25) */
+  mgShadow: boolean;
+  strokeEnabled: boolean;
+  strokeColor: string;
+  strokeWidth: number;
+  /** LingoJam unicode style key, or undefined for no transformation */
+  unicodeStyle?: string;
+  /** Google Fonts family URL param (e.g. 'Bebas+Neue'), if applicable */
+  gfFamily?: string;
+}
+
 export interface Slot {
   id: string;
-  type: 'sprite' | 'custom' | 'cosmetic';
+  type: 'sprite' | 'custom' | 'cosmetic' | 'text';
   spriteKey: string;
   spriteUrl: string;
   mutations: string[];
   options: { icons: boolean; overlays: boolean };
   customTint: { color: string; opacity: number };
   position: { x: number; y: number };
+  /** For text slots: font size in px (8–200). For sprite slots: render scale (0.1–4). */
   scale: number;
   rotation: number;
   visible: boolean;
   locked: boolean;
   cosmeticLayers?: Record<string, string>;
+  textData?: TextData;
   // GIF animation data (not persisted)
   gifFrames?: { canvas: HTMLCanvasElement; delay: number }[];
   isAnimated?: boolean;

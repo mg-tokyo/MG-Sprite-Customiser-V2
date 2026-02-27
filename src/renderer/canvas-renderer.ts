@@ -21,6 +21,19 @@ import type { SpriteFrame } from '../api/types';
  */
 export async function renderSlot(slot: Slot, gifFrameIndex?: number): Promise<HTMLCanvasElement | null> {
   if (!slot.spriteUrl) return null;
+  // Text layers render from gifFrames only (canvas is maintained by text-renderer.ts).
+  // Skip icons/overlays/anchor logic — go straight to the gifFrames path.
+  if (slot.type === 'text') {
+    if (!slot.gifFrames || slot.gifFrames.length === 0) return null;
+    const src = slot.gifFrames[0].canvas;
+    if (!(src instanceof HTMLCanvasElement) || src.width === 0) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = src.width;
+    canvas.height = src.height;
+    canvas.getContext('2d')!.drawImage(src, 0, 0);
+    applyMutations(canvas, slot.mutations, false, { color: '#ffffff', opacity: 0 });
+    return canvas;
+  }
 
   // For animated GIFs, use the specific frame
   const frameIdx = slot.isAnimated && slot.gifFrames ? (gifFrameIndex ?? 0) : -1;
@@ -60,6 +73,7 @@ export async function renderSlot(slot: Slot, gifFrameIndex?: number): Promise<HT
   const tall = isTallKey(slot.spriteKey);
 
   // Apply mutations + custom tint. Pass tall so Rainbow uses angTall (0°) on tall plants.
+  // (Text slots return early above, so customTint here is always a sprite tint overlay.)
   applyMutations(canvas, slot.mutations, tall, slot.customTint);
 
   const origW = canvas.width;
@@ -288,7 +302,13 @@ export async function renderAll(output: HTMLCanvasElement): Promise<void> {
   ctx.clearRect(0, 0, output.width, output.height);
 
   for (const slot of state.slots) {
-    if (!slot.visible || !slot.spriteUrl) continue;
+    if (!slot.visible) continue;
+    if (slot.type === 'text') {
+      // Text slots: only render if there is a composited canvas ready
+      if (!slot.gifFrames || slot.gifFrames.length === 0) continue;
+    } else {
+      if (!slot.spriteUrl) continue;
+    }
 
     const gifIdx = slot.isAnimated && slot.gifFrames ? (slot._gifFrameIdx ?? 0) : undefined;
     const rendered = await renderSlot(slot, gifIdx);
