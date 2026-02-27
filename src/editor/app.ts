@@ -1092,32 +1092,41 @@ export class App {
   }
 
   /**
-   * Fill slots 0/1/2 with a card's Bottom → Middle → Top layers (all centred, scale 1, rotation 0).
-   * Uses updateSlot for slot 0 (one undo snapshot) and updateSlotSilent for the rest,
-   * so a single Ctrl+Z undoes the entire preset. Activates slot 0 after.
+   * Composite all card layers (Bottom → Middle → Top) into a single canvas and load
+   * the result as one sprite in the active slot.
    */
-  private applyCardPreset(urls: string[], label: string): void {
+  private async applyCardPreset(urls: string[], label: string): Promise<void> {
     this.stopGifPreview();
-    const LAYER_NAMES = ['Bottom', 'Middle', 'Top'];
-    const count = Math.min(urls.length, state.slots.length);
-    for (let i = 0; i < count; i++) {
-      const shortName = urls[i].split('/').pop()?.split('?')[0].replace('.png', '')
-        ?? `${label} ${LAYER_NAMES[i] ?? i}`;
-      const slotData: Partial<import('../state/store').Slot> = {
-        type: 'sprite',
-        spriteKey: `ui/${shortName}`,
-        spriteUrl: urls[i],
-        gifFrames: undefined,
-        isAnimated: false,
-        position: { x: 0, y: 0 },
-        scale: 1,
-        rotation: 0,
-      };
-      // Slot 0 pushes the undo snapshot; remaining layers are silent (single Ctrl+Z undoes all)
-      if (i === 0) updateSlot(0, slotData);
-      else updateSlotSilent(i, slotData);
+
+    let images: HTMLImageElement[];
+    try {
+      images = await Promise.all(urls.map(url => spriteLoader.load(url)));
+    } catch (err) {
+      console.error('[MG] Failed to load card preset layers:', err);
+      return;
     }
-    setActiveSlot(0);
+
+    // Composite all layers onto a single canvas (centred within the max dimensions)
+    const width  = Math.max(...images.map(img => img.naturalWidth));
+    const height = Math.max(...images.map(img => img.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width  = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d')!;
+    for (const img of images) {
+      ctx.drawImage(img, (width - img.naturalWidth) / 2, (height - img.naturalHeight) / 2);
+    }
+
+    const blob = await new Promise<Blob>(resolve => canvas.toBlob(b => resolve(b!), 'image/png'));
+    const blobUrl = URL.createObjectURL(blob);
+
+    updateSlot(state.activeSlotIndex, {
+      type: 'custom',
+      spriteKey: label,
+      spriteUrl: blobUrl,
+      gifFrames: undefined,
+      isAnimated: false,
+    });
   }
 
   /**
