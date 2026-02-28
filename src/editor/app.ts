@@ -1,4 +1,4 @@
-import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlot, reorderSlots, pushUndo } from '../state/store';
+import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlot, reorderSlots, pushUndo, addSlot, MAX_SLOTS } from '../state/store';
 import { listSavedScenes, saveNamedScene, deleteNamedScene, exportSceneJson, importSceneJson } from '../state/persistence';
 import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity, FullCardAbilityEntry, FullCardSpriteSlot } from '../state/store';
 import { initTheme, toggleTheme } from './theme';
@@ -902,6 +902,24 @@ export class App {
         this.strokeColorInput.value = slot.textData.strokeColor;
         this.strokeWidthInput.value = String(slot.textData.strokeWidth);
         this.unicodeDropdown.selectById(slot.textData.unicodeStyle ?? 'none');
+        // Sync font group + item dropdowns from saved textData
+        const { fontFamily, fontWeight } = slot.textData;
+        const mgDef  = MG_FONTS.find(f => f.family === fontFamily && f.weight === fontWeight);
+        const sysDef = SYSTEM_FONTS.find(f => f.family === fontFamily);
+        const gfDef  = GOOGLE_FONTS_CURATED.find(f => f.family === fontFamily);
+        if (mgDef) {
+          this.fontGroupDropdown.selectById('mg');
+          this.onFontGroupSelect('mg');
+          this.fontItemDropdown.selectById(mgDef.id);
+        } else if (sysDef) {
+          this.fontGroupDropdown.selectById('system');
+          this.onFontGroupSelect('system');
+          this.fontItemDropdown.selectById(sysDef.id);
+        } else if (gfDef) {
+          this.fontGroupDropdown.selectById('google');
+          this.onFontGroupSelect('google');
+          this.fontItemDropdown.selectById(gfDef.id);
+        }
       }
     } else {
       // Sprite or full-card: scale slider stays in sprite scale mode (0.1–4)
@@ -2193,6 +2211,13 @@ export class App {
 
       this.slotContainer.append(btn);
     }
+
+    if (state.slots.length < MAX_SLOTS) {
+      const addBtn = el('button', { className: 'slot-btn slot-add-btn', title: 'Add layer' });
+      addBtn.textContent = '+';
+      addBtn.addEventListener('click', () => addSlot());
+      this.slotContainer.append(addBtn);
+    }
   }
 
   private clearDropIndicators(): void {
@@ -3089,9 +3114,11 @@ export class App {
     const saveBtn = el('button', { className: 'secondary', textContent: 'Save' }) as HTMLButtonElement;
     saveBtn.addEventListener('click', () => {
       const name = this.sceneNameInput.value.trim();
-      saveNamedScene(name || 'Untitled');
-      this.sceneNameInput.value = '';
-      this.refreshScenesList();
+      saveBtn.disabled = true;
+      saveNamedScene(name || 'Untitled')
+        .then(() => { this.sceneNameInput.value = ''; this.refreshScenesList(); })
+        .catch(err => console.error('[MG] Save scene failed:', err))
+        .finally(() => { saveBtn.disabled = false; });
     });
 
     this.scenesListEl = el('div', { className: 'scenes-list' });

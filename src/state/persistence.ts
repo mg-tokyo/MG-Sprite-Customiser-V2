@@ -76,16 +76,6 @@ export interface SavedScene {
   activeSlotIndex: number;
 }
 
-function cleanSlotsForPersistence(slots: Slot[]): Slot[] {
-  return slots.map(s => {
-    const { gifFrames: _gf, _gifFrameIdx: _idx, ...rest } = s;
-    if (rest.spriteUrl && rest.spriteUrl.startsWith('blob:')) {
-      return { ...rest, spriteUrl: '', isAnimated: false } as Slot;
-    }
-    return { ...rest, isAnimated: false } as Slot;
-  });
-}
-
 export function listSavedScenes(): SavedScene[] {
   try {
     const raw = localStorage.getItem(SCENES_KEY);
@@ -98,12 +88,47 @@ export function listSavedScenes(): SavedScene[] {
   }
 }
 
-export function saveNamedScene(name: string): void {
+/** Max base64 size per custom image — keeps localStorage from overflowing. */
+const MAX_IMAGE_DATA_URL_BYTES = 800_000;
+
+async function blobUrlToDataUrl(blobUrl: string): Promise<string | null> {
+  try {
+    const resp = await fetch(blobUrl);
+    if (!resp.ok) return null;
+    const blob = await resp.blob();
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function cleanSlotsWithImages(slots: Slot[]): Promise<Slot[]> {
+  return Promise.all(
+    slots.map(async s => {
+      const { gifFrames: _gf, _gifFrameIdx: _idx, ...rest } = s;
+      if (rest.spriteUrl?.startsWith('blob:')) {
+        const dataUrl = await blobUrlToDataUrl(rest.spriteUrl);
+        if (dataUrl && dataUrl.length < MAX_IMAGE_DATA_URL_BYTES) {
+          return { ...rest, spriteUrl: dataUrl, isAnimated: false } as Slot;
+        }
+        return { ...rest, spriteUrl: '', isAnimated: false } as Slot;
+      }
+      return { ...rest, isAnimated: false } as Slot;
+    }),
+  );
+}
+
+export async function saveNamedScene(name: string): Promise<void> {
   const scene: SavedScene = {
     _v: SCENE_SCHEMA_VERSION,
     name: name.trim() || 'Untitled',
     savedAt: Date.now(),
-    slots: cleanSlotsForPersistence(state.slots),
+    slots: await cleanSlotsWithImages(state.slots),
     activeSlotIndex: state.activeSlotIndex,
   };
   const scenes = listSavedScenes();

@@ -154,7 +154,8 @@ function createEmptySlot(index: number): Slot {
   };
 }
 
-const MAX_SLOTS = 20;
+const INITIAL_SLOTS = 20;
+export const MAX_SLOTS = 100;
 const MAX_UNDO = 50;
 
 export const state: AppState = {
@@ -164,7 +165,7 @@ export const state: AppState = {
   gameVersion: null,
 
   mode: 'sprites',
-  slots: Array.from({ length: MAX_SLOTS }, (_, i) => createEmptySlot(i)),
+  slots: Array.from({ length: INITIAL_SLOTS }, (_, i) => createEmptySlot(i)),
   activeSlotIndex: 0,
   undoStack: [],
   redoStack: [],
@@ -254,4 +255,11 @@ export function clearSlot(index: number): void {
   state.slots[index] = createEmptySlot(index);
   bus.emit(Events.SLOT_CHANGED, index);
   bus.emit(Events.RENDER_REQUEST, null);
+}
+
+export function addSlot(): void {
+  if (state.slots.length >= MAX_SLOTS) return;
+  pushUndo();
+  state.slots.push(createEmptySlot(state.slots.length));
+  bus.emit(Events.SLOT_CHANGED, null);
 }
