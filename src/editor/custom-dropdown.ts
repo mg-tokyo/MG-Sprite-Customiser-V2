@@ -15,9 +15,14 @@ export interface DropdownItem {
 interface DropdownOptions {
   showThumbs?: boolean;
   placeholder?: string;
-  onSelect: (item: DropdownItem) => void;
+  /** Single-select callback. Required for single-select mode; unused in multiSelect mode. */
+  onSelect?: (item: DropdownItem) => void;
   /** Called when a thumbnail becomes visible in the list. Use to pre-warm the sprite cache. */
   onThumbVisible?: (url: string) => void;
+  /** Enable multi-select mode: items toggle on/off, dropdown stays open, trigger shows count. */
+  multiSelect?: boolean;
+  /** Multi-select change callback, fired after every toggle. */
+  onMultiChange?: (selectedIds: string[]) => void;
 }
 
 export class CustomDropdown {
@@ -37,14 +42,19 @@ export class CustomDropdown {
   private isOpen = false;
 
   private readonly showThumbs: boolean;
+  private readonly multiSelect: boolean;
+  private selectedIds: Set<string> = new Set();
   private readonly onSelectCb: (item: DropdownItem) => void;
+  private readonly onMultiChangeCb?: (selectedIds: string[]) => void;
   private readonly onThumbVisibleCb?: (url: string) => void;
   private readonly observer: IntersectionObserver;
   private readonly outsideHandler: (e: MouseEvent) => void;
 
   constructor(opts: DropdownOptions) {
     this.showThumbs = opts.showThumbs ?? true;
-    this.onSelectCb = opts.onSelect;
+    this.multiSelect = opts.multiSelect ?? false;
+    this.onSelectCb = opts.onSelect ?? (() => {});
+    this.onMultiChangeCb = opts.onMultiChange;
     this.onThumbVisibleCb = opts.onThumbVisible;
     this.placeholder = opts.placeholder ?? 'Select\u2026';
 
@@ -69,7 +79,7 @@ export class CustomDropdown {
     this.trigger.className = 'cdd-trigger';
     this.trigger.setAttribute('aria-haspopup', 'listbox');
     this.trigger.setAttribute('aria-expanded', 'false');
-    if (this.showThumbs) this.trigger.append(this.triggerThumb);
+    if (this.showThumbs && !this.multiSelect) this.trigger.append(this.triggerThumb);
     this.trigger.append(this.triggerLabel, arrow);
 
     // ── Overlay ──
@@ -155,6 +165,16 @@ export class CustomDropdown {
       li.setAttribute('aria-selected', 'false');
       li.dataset.id = item.id;
 
+      if (this.multiSelect) {
+        const check = document.createElement('input');
+        check.type = 'checkbox';
+        check.className = 'cdd-check';
+        check.tabIndex = -1;
+        check.checked = this.selectedIds.has(item.id);
+        if (check.checked) li.classList.add('checked');
+        li.append(check);
+      }
+
       if (this.showThumbs) {
         const thumbSlot = document.createElement('span');
         thumbSlot.className = 'cdd-thumb-placeholder';
@@ -182,7 +202,14 @@ export class CustomDropdown {
 
     if (items.length === 0) {
       this.triggerLabel.textContent = this.placeholder;
-      if (this.showThumbs) this.triggerThumb.style.display = 'none';
+      if (this.showThumbs && !this.multiSelect) this.triggerThumb.style.display = 'none';
+      return;
+    }
+
+    // Multi-select: no auto-selection — caller uses setSelectedIds() to restore state.
+    if (this.multiSelect) {
+      this.syncMultiCheckboxes();
+      this.updateMultiLabel();
       return;
     }
 
@@ -208,6 +235,18 @@ export class CustomDropdown {
     if (!id || this.selectedId === id) return;
     const idx = this.items.findIndex(i => i.id === id);
     if (idx >= 0) this.applySelection(this.items[idx], this.itemEls[idx]);
+  }
+
+  /** Set the selected IDs in multi-select mode and sync checkboxes. */
+  setSelectedIds(ids: string[]): void {
+    this.selectedIds = new Set(ids);
+    this.syncMultiCheckboxes();
+    this.updateMultiLabel();
+  }
+
+  /** Return the currently selected IDs in multi-select mode. */
+  getSelectedIds(): string[] {
+    return Array.from(this.selectedIds);
   }
 
   /**
@@ -293,10 +332,51 @@ export class CustomDropdown {
   }
 
   private pick(item: DropdownItem, el: HTMLLIElement): void {
+    if (this.multiSelect) {
+      this.toggleMulti(item, el);
+      return; // stay open for further selections
+    }
     this.applySelection(item, el);
     this.close();
     this.trigger.focus();
     this.onSelectCb(item);
+  }
+
+  private toggleMulti(item: DropdownItem, el: HTMLLIElement): void {
+    if (this.selectedIds.has(item.id)) {
+      this.selectedIds.delete(item.id);
+      el.classList.remove('checked');
+    } else {
+      this.selectedIds.add(item.id);
+      el.classList.add('checked');
+    }
+    const cb = el.querySelector<HTMLInputElement>('.cdd-check');
+    if (cb) cb.checked = this.selectedIds.has(item.id);
+    this.updateMultiLabel();
+    this.onMultiChangeCb?.(Array.from(this.selectedIds));
+  }
+
+  private syncMultiCheckboxes(): void {
+    for (const li of this.itemEls) {
+      const id = li.dataset.id ?? '';
+      const checked = this.selectedIds.has(id);
+      li.classList.toggle('checked', checked);
+      const cb = li.querySelector<HTMLInputElement>('.cdd-check');
+      if (cb) cb.checked = checked;
+    }
+  }
+
+  private updateMultiLabel(): void {
+    const count = this.selectedIds.size;
+    if (count === 0) {
+      this.triggerLabel.textContent = this.placeholder;
+    } else if (count === 1) {
+      const id = Array.from(this.selectedIds)[0];
+      const item = this.items.find(i => i.id === id);
+      this.triggerLabel.textContent = item?.label ?? '1 selected';
+    } else {
+      this.triggerLabel.textContent = `${count} selected`;
+    }
   }
 
   private toggle(): void {
@@ -396,8 +476,12 @@ export class CustomDropdown {
       case ' ':
         e.preventDefault();
         if (this.focusedIndex >= 0 && this.focusedIndex < this.itemEls.length) {
-          this.pick(this.items[this.focusedIndex], this.itemEls[this.focusedIndex]);
-          this.trigger.focus();
+          if (this.multiSelect) {
+            this.toggleMulti(this.items[this.focusedIndex], this.itemEls[this.focusedIndex]);
+          } else {
+            this.pick(this.items[this.focusedIndex], this.itemEls[this.focusedIndex]);
+            this.trigger.focus();
+          }
         }
         break;
     }

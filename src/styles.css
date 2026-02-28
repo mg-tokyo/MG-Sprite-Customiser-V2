@@ -469,6 +469,18 @@ button.danger:hover { background: #ff3333; }
 .cdd-item.focused {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
+.cdd-item.checked {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.cdd-item.checked.focused {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.cdd-check {
+  flex-shrink: 0;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 .cdd-item.selected {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   font-weight: 600;
@@ -685,7 +697,7 @@ button.danger:hover { background: #ff3333; }
   margin: 10px 0 6px;
 }
 
-.full-card-field input,
+.full-card-field input:not([type="checkbox"]),
 .full-card-field select {
   width: 100%;
   padding: 8px 10px;
@@ -699,7 +711,6 @@ button.danger:hover { background: #ff3333; }
 .full-card-field input[type="range"] {
   padding: 0;
   border: none;
-  background: none;
   height: 20px;
 }
 
@@ -816,37 +827,85 @@ button.danger:hover { background: #ff3333; }
   opacity: 1;
 }
 
-/* Diet checkboxes with sprite previews */
-.full-card-diet-wrap {
-  max-height: 160px;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+/* ── Slot list rows (diet / crop / egg hatch) ── */
+.full-card-slot-list { display: flex; flex-direction: column; gap: 4px; }
+.full-card-slot-row {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--surface-2); border-radius: 8px; padding: 4px 8px;
 }
-.full-card-diet-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--ink);
-  padding: 2px 4px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.1s;
+.full-card-slot-thumb {
+  width: 32px; height: 32px; object-fit: contain;
+  cursor: pointer; border-radius: 4px; flex-shrink: 0;
+  background: var(--surface-3); image-rendering: pixelated;
 }
-.full-card-diet-item:hover { background: var(--hover-bg); }
-.full-card-diet-item input[type="checkbox"] { margin: 0; flex-shrink: 0; }
-.full-card-diet-preview {
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  image-rendering: pixelated;
-  border-radius: 4px;
+.full-card-slot-name {
+  flex: 1; font-size: 12px; color: var(--ink); cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.full-card-slot-mut-btn {
+  padding: 2px 7px; border-radius: 6px; font-size: 11px;
+  background: var(--surface-3); border: none; cursor: pointer;
+  color: var(--ink); flex-shrink: 0;
+}
+.full-card-slot-mut-btn.has-mutations { background: var(--accent); color: #fff; }
+.full-card-slot-remove {
+  background: none; border: none; color: var(--ink-secondary);
+  cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; flex-shrink: 0;
+}
+.full-card-slot-add-btn {
+  align-self: flex-start; font-size: 12px; padding: 4px 10px;
+  border-radius: 8px; border: 1px dashed var(--border);
+  background: none; cursor: pointer; color: var(--ink-secondary);
+  margin-top: 2px;
+}
+.full-card-slot-pct {
+  width: 52px; font-size: 12px; border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px 4px; text-align: center;
+  background: var(--surface-1); color: var(--ink);
+}
+
+/* ── Slot picker overlay ── */
+.fc-slot-picker {
+  position: fixed; z-index: 9999;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.45);
+  width: 300px; max-height: 420px;
+  display: flex; flex-direction: column; gap: 6px; padding: 10px;
+}
+.fc-slot-picker-search {
+  width: 100%; padding: 6px 8px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--input-bg);
+  color: var(--ink); font-size: 13px; box-sizing: border-box;
+}
+.fc-slot-picker-cat {
+  width: 100%; padding: 6px 8px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--input-bg); color: var(--ink);
+  box-sizing: border-box;
+}
+.fc-slot-picker-grid {
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  gap: 5px; overflow-y: auto; flex: 1; min-height: 0;
+}
+.fc-slot-picker-item {
+  display: flex; align-items: center; justify-content: center;
+  width: 52px; height: 52px; border-radius: 8px; cursor: pointer;
+  padding: 3px; box-sizing: border-box;
+}
+.fc-slot-picker-item:hover { background: var(--hover-bg); }
+.fc-slot-picker-item img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+.fc-slot-picker-footer {
+  display: flex; gap: 6px; justify-content: flex-end;
+}
+.fc-slot-picker-footer button { font-size: 12px; padding: 4px 10px; border-radius: 8px; }
+
+/* ── Mutations popover ── */
+.fc-mut-popover {
+  position: fixed; z-index: 9999;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.35);
+}
+.fc-mut-popover-chips { display: flex; flex-wrap: wrap; gap: 5px; max-width: 240px; }
 
 /* Abilities wrap */
 .full-card-abilities-wrap {
@@ -913,46 +972,7 @@ button.danger:hover { background: #ff3333; }
 
 .full-card-ability-remove { background: #b94b4b; }
 
-/* Item Style collapsible — styled like a secondary panel section */
-.full-card-item-style {
-  margin-top: 6px;
-  border-top: 1px solid var(--border);
-  padding-top: 2px;
-}
-
-.full-card-item-style summary {
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  color: var(--muted);
-  margin: 10px 0 4px;
-  list-style: none;
-  user-select: none;
-}
-.full-card-item-style summary::after {
-  content: ' ▸';
-  font-size: 10px;
-}
-.full-card-item-style[open] summary::after {
-  content: ' ▾';
-}
-
-.full-card-item-style-body {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.full-card-item-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 4px;
-}
-
-/* Item style buttons: match secondary button look */
+/* Item style button — kept for ability-add "Add" button */
 .full-card-item-btn {
   padding: 6px 10px;
   border-radius: 10px;
@@ -962,26 +982,6 @@ button.danger:hover { background: #ff3333; }
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-}
-
-.full-card-item-tint {
-  display: grid;
-  grid-template-columns: 40px 1fr;
-  gap: 8px;
-  align-items: center;
-}
-
-.full-card-item-options {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.full-card-item-option {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  font-size: 12px;
 }
 
 .full-card-add-row {

@@ -1,11 +1,10 @@
 
-import type { FullCardData, FullCardType, FullCardRarity, Slot } from '../state/store';
+import type { FullCardData, FullCardType, FullCardRarity, FullCardSpriteSlot } from '../state/store';
 import { state } from '../state/store';
 import { spriteLoader } from '../api/sprite-loader';
 import type { SpriteFrame } from '../api/types';
 import { ensureFontLoaded, MG_FONTS } from './font-data';
 import { applyMutations, spriteToCanvas } from '../renderer/mutation-engine';
-import { renderSlot } from '../renderer/canvas-renderer';
 
 // ---- Layout constants (from live bundle: main.txt) ----
 const RH = 88;
@@ -16,7 +15,7 @@ const HZ = 0.78;
 const JH = 25;
 const QM = 22;
 const CS = 28;
-const DZ = 34;
+// const DZ = 34; // unused
 const VA = 60;
 const ZH = -5;
 const EG = 5;
@@ -40,30 +39,15 @@ const COLOR_STRENGTH_TEXT = '#FFFB6D';
 const COLOR_STRENGTH_STROKE = '#E08B3A';
 const COLOR_PROGRESS_STROKE = '#D97220';
 const COLOR_PROGRESS_STROKE_ALT = '#C9590A';
-const COLOR_SIZE_STROKE = '#EA7726';
+// const COLOR_SIZE_STROKE = '#EA7726'; // unused
 
 const HUNGER_LOW_THRESHOLD = 0.1;
 const HUNGER_LOW_COLOR = '#F48620';
 
-// Portrait window from card-analyze.cjs (500x720 base)
-const PORTRAIT = {
-  baseW: 500,
-  baseH: 720,
-  x: 28,
-  y: 42,
-  w: 442,
-  h: 337,
-};
+// Portrait window from card-analyze.cjs (500x720 base) — unused (portrait drawn as separate layer)
+// const PORTRAIT = { baseW: 500, baseH: 720, x: 28, y: 42, w: 442, h: 337 };
 
-// ---- Game math constants (from live bundle: main.txt) ----
-const BASE_STRENGTH_MIN = 80;
-const BASE_STRENGTH_MAX = 100;
-const STRENGTH_RANGE = 30;
-const XP_PER_HOUR = 3600;
-
-// Size range for crops
-const SIZE_MIN = 50;
-const SIZE_MAX = 100;
+// (game math constants removed — stats are now direct values from FullCardData)
 
 // ---- Sprite maps (from live bundle: main.txt) ----
 const TYPE_ICONS: Record<FullCardType, string | null> = {
@@ -229,101 +213,7 @@ function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: n
   ctx.closePath();
 }
 
-function formatWeight(value: number | string | undefined): string {
-  if (value === undefined) return '';
-  if (typeof value === 'string') return value;
-  if (value < 1) return Math.max(value, 0.01).toFixed(2);
-  if (value < 10) return value.toFixed(1);
-  return Math.round(value).toString();
-}
-
-function formatDuration(ms: number): string {
-  const seconds = ms / 1000;
-  if (seconds < 0) return '0s';
-  const hours = seconds / 3600;
-  const minutes = (seconds % 3600) / 60;
-  const secs = seconds % 60;
-  const h = Math.floor(hours);
-  const m = Math.floor(minutes);
-  const s = Math.floor(secs);
-  if (h > 0) {
-    const parts = [`${h}h`];
-    if (m > 0) parts.push(`${m}m`);
-    if (s > 0) parts.push(`${s}s`);
-    return parts.join(' ');
-  }
-  if (m > 0) return s > 0 ? `${m}m ${s}s` : `${m}m`;
-  if (s > 0) return `${s}s`;
-  if (secs !== 0) return '<1s';
-  return '0s';
-}
-
-function cropSize(speciesId: string, scale: number): number {
-  const crop = state.gameData?.plants?.[speciesId]?.crop;
-  const maxScale = crop?.maxScale ?? 1;
-  if (scale <= 1) return SIZE_MIN;
-  if (scale >= maxScale) return SIZE_MAX;
-  const t = (scale - 1) / (maxScale - 1);
-  return Math.floor(SIZE_MIN + (SIZE_MAX - SIZE_MIN) * t);
-}
-
-function maxStrength(speciesId: string, targetScale: number): number {
-  const pet = state.gameData?.pets?.[speciesId];
-  const maxScale = pet?.maxScale ?? 1;
-  if (targetScale <= 1) return BASE_STRENGTH_MIN;
-  if (targetScale >= maxScale) return BASE_STRENGTH_MAX;
-  const t = (targetScale - 1) / (maxScale - 1);
-  return Math.floor(BASE_STRENGTH_MIN + (BASE_STRENGTH_MAX - BASE_STRENGTH_MIN) * t);
-}
-
-function baseStrength(speciesId: string, targetScale: number): number {
-  return maxStrength(speciesId, targetScale) - STRENGTH_RANGE;
-}
-
-function strengthPerHour(speciesId: string): number {
-  const pet = state.gameData?.pets?.[speciesId];
-  const hours = pet?.hoursToMature ?? 1;
-  return STRENGTH_RANGE / Math.max(1, hours);
-}
-
-function currentStrength(speciesId: string, xpSeconds: number, targetScale: number): number {
-  const s = baseStrength(speciesId, targetScale);
-  const perHour = strengthPerHour(speciesId);
-  const hours = xpSeconds / XP_PER_HOUR;
-  const gain = Math.min(perHour * hours, STRENGTH_RANGE);
-  return Math.floor(s + gain);
-}
-
-function xpForStrength(strength: number, speciesId: string, targetScale: number): number {
-  const s = baseStrength(speciesId, targetScale);
-  const n = strength - s;
-  if (n <= 0) return 0;
-  const perHour = strengthPerHour(speciesId);
-  return (n / perHour) * XP_PER_HOUR;
-}
-
-function weightScale(speciesId: string, xpSeconds: number, targetScale: number): number {
-  const s = currentStrength(speciesId, xpSeconds, targetScale);
-  const max = maxStrength(speciesId, targetScale);
-  return (s / max) * targetScale;
-}
-
-function mutationMultiplier(mutations: string[]): number {
-  const gd = state.gameData;
-  if (!gd?.mutations) return 1;
-  const gold = mutations.find(m => m === 'Gold' || m === 'Rainbow');
-  const others = mutations.filter(m => m !== 'Gold' && m !== 'Rainbow');
-  const base = gold ? (gd.mutations[gold]?.coinMultiplier ?? 1) : 1;
-  const sum = others.reduce((acc, m) => acc + (gd.mutations[m]?.coinMultiplier ?? 1), 0);
-  const count = others.length;
-  return base * (1 + sum - count);
-}
-
-function normalizeScale(value: number): number {
-  if (value > 1) return 1 + (value - 1) * 0.3;
-  if (value < 1) return 1 - (1 - value) * 0.7;
-  return value;
-}
+// formatWeight removed — weight values are now direct strings from FullCardData
 
 async function ensureCardFontsLoaded(): Promise<void> {
   const fonts = MG_FONTS.filter(f =>
@@ -448,39 +338,20 @@ async function loadSprite(spriteId: string | undefined | null): Promise<HTMLImag
   }
 }
 
-async function renderItemCanvas(
-  spriteId: string | null,
-  mutations: string[],
-  itemTint: { color: string; opacity: number },
-  options: { icons: boolean; overlays: boolean },
-): Promise<HTMLCanvasElement | null> {
-  if (!spriteId) return null;
-  const url = getSpriteUrlFromId(spriteId);
-  if (!url) return null;
-
-  const slot: Slot = {
-    id: 'item-preview',
-    type: 'sprite',
-    spriteKey: spriteId,
-    spriteUrl: url,
-    mutations,
-    options,
-    customTint: itemTint,
-    position: { x: 0, y: 0 },
-    scale: 1,
-    rotation: 0,
-    visible: true,
-    locked: false,
-  };
-
-  const rendered = await renderSlot(slot);
-  if (rendered) return rendered;
-
-  const img = await loadSprite(spriteId);
-  if (!img) return null;
-  const canvas = spriteToCanvas(img);
-  applyMutations(canvas, mutations, isTallSprite(spriteId), itemTint);
-  return canvas;
+/** Render a list of sprite slots to canvases (with per-slot mutations applied). */
+async function renderSlotList(
+  slots: FullCardSpriteSlot[],
+): Promise<(HTMLImageElement | HTMLCanvasElement)[]> {
+  const results = await Promise.all(slots.map(async slot => {
+    if (!slot.spriteKey) return null;
+    const img = await loadSprite(slot.spriteKey);
+    if (!img) return null;
+    if (slot.mutations.length === 0) return img;
+    const canvas = spriteToCanvas(img);
+    applyMutations(canvas, slot.mutations, isTallSprite(slot.spriteKey), { color: '#ffffff', opacity: 0 });
+    return canvas;
+  }));
+  return results.filter((x): x is HTMLImageElement | HTMLCanvasElement => x !== null);
 }
 
 function drawImageCentered(
@@ -513,29 +384,6 @@ function drawIconLeft(
   const dw = w * scale;
   const dh = h * scale;
   ctx.drawImage(img, x, y - dh / 2, dw, dh);
-}
-
-function itemTypeScale(cardType: FullCardType, scale: number, petScale?: number): number {
-  switch (cardType) {
-    case 'Pet': {
-      const n = petScale ?? 1;
-      return Math.min(normalizeScale(n * 0.5), 0.8);
-    }
-    case 'Crop':
-      return Math.max(0.6, normalizeScale(scale));
-    case 'Seed':
-      return 0.65;
-    case 'Tool':
-      return 0.6;
-    case 'Decor':
-      return 0.6;
-    case 'Egg':
-      return 0.7;
-    case 'Plant':
-      return 0.9;
-    default:
-      return 0.8;
-  }
 }
 
 function mutationSortOrder(): Map<string, number> {
@@ -808,44 +656,82 @@ function drawCountRow(
   ctx.fillText(value, right, y);
 }
 
-function drawSizeRow(
-  ctx: CanvasRenderingContext2D,
-  y: number,
-  sizeText: string,
-  rowWidth: number,
-  icons: { size?: HTMLImageElement | null },
-): number {
-  const startX = -rowWidth / 2;
-  if (icons.size) {
-    const iconSize = DZ;
-    const w = icons.size.naturalWidth;
-    const h = icons.size.naturalHeight;
-    const scale = iconSize / Math.max(w, h);
-    const dw = w * scale;
-    const dh = h * scale;
-    ctx.drawImage(icons.size, startX, y - dh / 2, dw, dh);
-    setFont(ctx, 26, '800', 'Greycliff CF');
-    ctx.fillStyle = COLOR_TEXT;
-    ctx.strokeStyle = COLOR_SIZE_STROKE;
-    ctx.lineWidth = 5;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.strokeText(sizeText, startX + dw + 4, y);
-    ctx.fillText(sizeText, startX + dw + 4, y);
+// ---- Transparent-padding trimmer ----
+
+/** Pixel-level trim of transparent borders. Cached per image object for performance. */
+const trimCache = new WeakMap<object, HTMLCanvasElement>();
+
+function trimTransparent(src: HTMLImageElement | HTMLCanvasElement): HTMLCanvasElement {
+  const cached = trimCache.get(src);
+  if (cached) return cached;
+
+  const w = src instanceof HTMLCanvasElement ? src.width : src.naturalWidth;
+  const h = src instanceof HTMLCanvasElement ? src.height : src.naturalHeight;
+
+  const tmpCanvas = document.createElement('canvas');
+  if (w === 0 || h === 0) { trimCache.set(src, tmpCanvas); return tmpCanvas; }
+  tmpCanvas.width = w;
+  tmpCanvas.height = h;
+  const tmpCtx = tmpCanvas.getContext('2d')!;
+  tmpCtx.drawImage(src as CanvasImageSource, 0, 0);
+
+  let pixels: Uint8ClampedArray;
+  try {
+    pixels = tmpCtx.getImageData(0, 0, w, h).data;
+  } catch {
+    // Canvas tainted (CORS) — return untrimmed
+    trimCache.set(src, tmpCanvas);
+    return tmpCanvas;
   }
-  return 38;
+
+  let minX = w, maxX = -1, minY = h, maxY = -1;
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      if (pixels[(py * w + px) * 4 + 3] > 10) {
+        if (px < minX) minX = px;
+        if (px > maxX) maxX = px;
+        if (py < minY) minY = py;
+        if (py > maxY) maxY = py;
+      }
+    }
+  }
+
+  if (maxX < 0) { trimCache.set(src, tmpCanvas); return tmpCanvas; } // all transparent
+
+  const pad = 2;
+  const x0 = Math.max(0, minX - pad);
+  const y0 = Math.max(0, minY - pad);
+  const x1 = Math.min(w, maxX + pad + 1);
+  const y1 = Math.min(h, maxY + pad + 1);
+  const trimW = x1 - x0;
+  const trimH = y1 - y0;
+
+  // Already tight (> 90% in both dims) — skip extra canvas allocation
+  if (trimW >= w * 0.9 && trimH >= h * 0.9) {
+    trimCache.set(src, tmpCanvas);
+    return tmpCanvas;
+  }
+
+  const result = document.createElement('canvas');
+  result.width = trimW;
+  result.height = trimH;
+  result.getContext('2d')!.drawImage(tmpCanvas, x0, y0, trimW, trimH, 0, 0, trimW, trimH);
+  trimCache.set(src, result);
+  return result;
 }
+
+// ---- Card detail rows ----
 
 function drawMatureCropsRow(
   ctx: CanvasRenderingContext2D,
   y: number,
   rowWidth: number,
   label: string,
-  crops: HTMLImageElement[],
+  crops: (HTMLImageElement | HTMLCanvasElement)[],
 ): number {
   const left = -rowWidth / 2;
   const iconSize = 48;
-  const overlap = -22;
+  const overlap = -8;
   const textGap = 12;
   const step = iconSize + overlap;
 
@@ -870,7 +756,7 @@ function drawMatureCropsRow(
       rowOffsetY += iconSize + overlap;
       wrapped = true;
     }
-    drawIconLeft(ctx, img, cursorX, y + rowOffsetY, iconSize);
+    drawIconLeft(ctx, trimTransparent(img), cursorX, y + rowOffsetY, iconSize);
     cursorX += step;
   }
   if (wrapped) return iconSize * 2 + overlap;
@@ -882,7 +768,7 @@ function drawEggHatchesRow(
   y: number,
   rowWidth: number,
   label: string,
-  icons: HTMLImageElement[],
+  icons: (HTMLImageElement | HTMLCanvasElement)[],
 ): number {
   const left = -rowWidth / 2;
   setFont(ctx, 18, 'bold', 'Greycliff CF');
@@ -895,7 +781,7 @@ function drawEggHatchesRow(
   const gap = 12;
   let cursorX = left + labelWidth + gap;
   for (const icon of icons) {
-    drawIconLeft(ctx, icon, cursorX, y, iconSize);
+    drawIconLeft(ctx, trimTransparent(icon), cursorX, y, iconSize);
     cursorX += iconSize + gap;
   }
   return 56;
@@ -952,16 +838,16 @@ function drawDietSpritesOnly(
   ctx: CanvasRenderingContext2D,
   y: number,
   rowWidth: number,
-  icons: HTMLImageElement[],
+  icons: (HTMLImageElement | HTMLCanvasElement)[],
 ): void {
   const iconSize = 40;
-  const overlap = -18;
+  const overlap = -6;
   const step = iconSize + overlap;
   const totalWidth = icons.length * step + 12;
   const start = rowWidth / 2 - totalWidth + 12;
   let cursorX = start;
   for (const icon of icons) {
-    drawIconLeft(ctx, icon, cursorX, y, iconSize);
+    drawIconLeft(ctx, trimTransparent(icon), cursorX, y, iconSize);
     cursorX += step;
   }
 }
@@ -1059,91 +945,6 @@ function drawAbilitiesRow(
   return rows.length > 0 ? rows.length * maxH + (rows.length - 1) * rowGap + 8 + topPad : 0;
 }
 
-function resolveItemName(cardType: FullCardType, data: FullCardData): string {
-  const gd = state.gameData;
-  if (!gd) return data.itemName || cardType;
-  switch (cardType) {
-    case 'Pet': {
-      const pet = data.itemId ? gd.pets?.[data.itemId] : null;
-      return pet?.name ?? data.itemName ?? 'Pet';
-    }
-    case 'Plant': {
-      const plant = data.itemId ? gd.plants?.[data.itemId] : null;
-      return plant?.plant?.name ?? data.itemName ?? 'Plant';
-    }
-    case 'Crop': {
-      const plant = data.itemId ? gd.plants?.[data.itemId] : null;
-      return plant?.crop?.name ?? data.itemName ?? 'Crop';
-    }
-    case 'Seed': {
-      const plant = data.itemId ? gd.plants?.[data.itemId] : null;
-      return plant?.seed?.name ?? data.itemName ?? 'Seed';
-    }
-    case 'Egg': {
-      const egg = data.itemId ? gd.eggs?.[data.itemId] : null;
-      return egg?.name ?? data.itemName ?? 'Egg';
-    }
-    case 'Tool': {
-      const tool = data.itemId ? gd.items?.[data.itemId] : null;
-      return tool?.name ?? data.itemName ?? 'Tool';
-    }
-    case 'Decor': {
-      const decor = data.itemId ? gd.decor?.[data.itemId] : null;
-      return decor?.name ?? data.itemName ?? 'Decor';
-    }
-    default:
-      return data.itemName || cardType;
-  }
-}
-
-function resolveRarity(cardType: FullCardType, data: FullCardData): FullCardRarity | null {
-  const gd = state.gameData;
-  if (!gd) return data.rarity ?? data.seedRarity ?? null;
-  if (cardType === 'Pet') return (data.rarity ?? gd.pets?.[data.itemId ?? '']?.rarity) as FullCardRarity ?? null;
-  if (cardType === 'Seed') return (data.seedRarity ?? gd.plants?.[data.itemId ?? '']?.seed?.rarity) as FullCardRarity ?? null;
-  if (cardType === 'Plant' || cardType === 'Crop') return gd.plants?.[data.itemId ?? '']?.seed?.rarity as FullCardRarity ?? null;
-  if (cardType === 'Tool') return gd.items?.[data.itemId ?? '']?.rarity as FullCardRarity ?? null;
-  if (cardType === 'Decor') return gd.decor?.[data.itemId ?? '']?.rarity as FullCardRarity ?? null;
-  if (cardType === 'Egg') return gd.eggs?.[data.itemId ?? '']?.rarity as FullCardRarity ?? null;
-  return null;
-}
-
-function resolveItemSpriteId(cardType: FullCardType, data: FullCardData): string | null {
-  if (data.itemSpriteOverride && data.itemSpriteOverride.trim()) return data.itemSpriteOverride.trim();
-  const gd = state.gameData;
-  if (!gd) return null;
-  switch (cardType) {
-    case 'Pet':
-      return data.itemId ? gd.pets?.[data.itemId]?.sprite ?? null : null;
-    case 'Plant':
-      return data.itemId ? gd.plants?.[data.itemId]?.plant?.sprite ?? null : null;
-    case 'Crop':
-      return data.itemId ? gd.plants?.[data.itemId]?.crop?.sprite ?? null : null;
-    case 'Seed':
-      return data.itemId ? gd.plants?.[data.itemId]?.seed?.sprite ?? null : null;
-    case 'Egg':
-      return data.itemId ? gd.eggs?.[data.itemId]?.sprite ?? null : null;
-    case 'Tool':
-      return data.itemId ? gd.items?.[data.itemId]?.sprite ?? null : null;
-    case 'Decor':
-      return data.itemId ? gd.decor?.[data.itemId]?.sprite ?? null : null;
-    default:
-      return null;
-  }
-}
-
-function resolvePetStatsId(data: FullCardData): string | null {
-  if (data.cardType !== 'Pet') return data.itemId ?? null;
-  if (data.itemId) return data.itemId;
-  const gd = state.gameData;
-  if (!gd) return null;
-  const entries = Object.entries(gd.pets);
-  if (entries.length === 0) return null;
-  const targetRarity = (data.rarity ?? 'Common') as FullCardRarity;
-  const match = entries.find(([, pet]) => (pet?.rarity as FullCardRarity | undefined) === targetRarity);
-  return (match?.[0] ?? entries[0][0]) || null;
-}
-
 function isTallSprite(spriteId: string | null): boolean {
   if (!spriteId) return false;
   return /tall-?plant/i.test(spriteId);
@@ -1171,22 +972,14 @@ export async function drawFullCardStats(
   const bottomOffset = cardH / 2 - detailsY - 58;
 
   // Prepare images
-  const itemSpriteId = resolveItemSpriteId(data.cardType, data);
-  const itemMutations = data.itemMutations ?? mutations;
-  const itemTint = data.itemTint ?? { color: '#ffffff', opacity: 0 };
-  const itemOptions = data.itemOptions ?? { icons: true, overlays: true };
-  const itemSpriteCanvas = itemSpriteId
-    ? await renderItemCanvas(itemSpriteId, itemMutations, itemTint, itemOptions)
-    : null;
   const typeIcon = TYPE_ICONS[data.cardType] ? await loadSprite(TYPE_ICONS[data.cardType]!) : null;
   const lockIcon = await loadSprite(data.isLocked ? 'sprite/ui/Locked' : 'sprite/ui/Unlocked');
-  const rarity = resolveRarity(data.cardType, data);
+  const rarity = (data.rarity ?? data.seedRarity ?? null) as FullCardRarity | null;
   const rarityIcon = rarity ? await loadSprite(RARITY_ICONS[rarity]) : null;
 
   const weightIcon = await loadSprite('sprite/ui/Weight');
   const ageIcon = await loadSprite('sprite/ui/Age');
   const coinIcon = await loadSprite('sprite/ui/Coin');
-  const sizeIcon = await loadSprite('sprite/ui/Size');
 
   const mutationFrame = await loadSprite('sprite/ui/MutationFrame');
   const progressStar = await loadSprite('sprite/ui/ProgressStar');
@@ -1200,56 +993,8 @@ export async function drawFullCardStats(
   ctx.save();
   ctx.translate(cardW / 2, cardH / 2);
 
-  // ---- Item sprite (clipped to portrait window) ----
-  if (itemSpriteCanvas) {
-    const scale = data.itemScale ?? 1;
-    const petScale = data.cardType === 'Pet' && data.petTargetScale != null
-      ? data.petTargetScale
-      : undefined;
-
-    const typeScale = itemTypeScale(data.cardType, scale, petScale);
-    const maxDim = Math.max(itemSpriteCanvas.width, itemSpriteCanvas.height);
-    const baseScale = n * typeScale / Math.max(1, maxDim);
-    const itemVisualScale = data.itemVisualScale ?? 1;
-    const drawScale = baseScale * 1.35 * itemVisualScale;
-
-    const drawW = itemSpriteCanvas.width * drawScale;
-    const drawH = itemSpriteCanvas.height * drawScale;
-    const anchorX = 0.5 * drawW;
-    const isBottom = data.cardType === 'Pet' || data.cardType === 'Plant' || data.cardType === 'Crop';
-    const extra = data.cardType === 'Pet' ? 120 : data.cardType === 'Crop' ? 175 : data.cardType === 'Plant' ? 135 : 0;
-    const anchorY = (isBottom ? 1 : 0.5) * drawH;
-    const posY = isBottom ? (r + n / 2 + extra) : (r + n / 2);
-    const rotation = ((data.itemRotation ?? 0) * Math.PI) / 180;
-
-    // Clip to portrait window
-    const scaleX = cardW / PORTRAIT.baseW;
-    const scaleY = cardH / PORTRAIT.baseH;
-    const clipX = -cardW / 2 + PORTRAIT.x * scaleX;
-    const clipY = -cardH / 2 + PORTRAIT.y * scaleY;
-    const clipW = PORTRAIT.w * scaleX;
-    const clipH = PORTRAIT.h * scaleY;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(clipX, clipY, clipW, clipH);
-    ctx.clip();
-    ctx.translate(0, posY);
-    if (rotation !== 0) ctx.rotate(rotation);
-    ctx.drawImage(itemSpriteCanvas, -anchorX, -anchorY, drawW, drawH);
-    ctx.restore();
-  }
-
   // ---- Name ----
-  const rawName = resolveItemName(data.cardType, data);
-  let displayName = rawName;
-  if (data.cardType === 'Pet') {
-    const petName = state.gameData?.pets?.[data.itemId ?? '']?.name;
-    if (!petName || rawName === petName) {
-      displayName = rawName.toUpperCase();
-    }
-  } else {
-    displayName = rawName.toUpperCase();
-  }
+  const displayName = (data.itemName || data.cardType).toUpperCase();
 
   setFont(ctx, NAME_FONT_SIZE, '400', 'Shrikhand');
   ctx.fillStyle = COLOR_TEXT;
@@ -1283,141 +1028,65 @@ export async function drawFullCardStats(
   let cursorY = 0;
 
   if (data.cardType === 'Plant') {
-    const plant = state.gameData?.plants?.[data.itemId ?? ''];
     const slotCount = Math.max(1, data.plantSlotCount ?? 1);
     const maturedSlots = Math.max(0, Math.min(slotCount, data.plantMaturedSlots ?? 0));
     const maturityPct = Math.max(0, Math.min(100, data.plantMaturityPct ?? 0));
-    const secondsToMature = plant?.plant?.secondsToMature ?? 0;
-    const totalMs = Math.max(1, secondsToMature * 1000);
-    const elapsed = totalMs * (maturityPct / 100);
-    const remaining = totalMs - elapsed;
     const fullyGrown = maturityPct >= 100;
-    const barLabel = fullyGrown ? 'Fully grown' : formatDuration(remaining);
+    const barLabel = fullyGrown ? 'Fully grown' : `${maturityPct}%`;
 
-    if (slotCount === 1) {
-      drawProgressBarRow(ctx, {
-        label: 'Maturity',
-        value: elapsed,
-        max: totalMs,
-        color: '#9FC12B',
-        y: detailsY + cursorY,
-        rowWidth,
-        barLabel,
-      }, { strengthStar });
-      cursorY += 32 + 12;
-    } else {
-      drawProgressBarRow(ctx, {
-        label: 'Maturity',
-        value: elapsed,
-        max: totalMs,
-        color: '#9FC12B',
-        y: detailsY + cursorY,
-        rowWidth,
-        barLabel,
-      }, { strengthStar });
-      cursorY += 32 + 12;
+    drawProgressBarRow(ctx, {
+      label: 'Maturity',
+      value: maturityPct,
+      max: 100,
+      color: '#9FC12B',
+      y: detailsY + cursorY,
+      rowWidth,
+      barLabel,
+    }, { strengthStar });
+    cursorY += 32 + 12;
 
+    if (slotCount > 1) {
       const label = maturedSlots > 0
         ? `Harvestable crops: ${maturedSlots}/${slotCount}`
         : 'No harvestable crops';
-      const cropIconPromises = Array.from({ length: maturedSlots }, async () => {
-        const cropSpriteId = plant?.crop?.sprite ?? null;
-        return cropSpriteId ? await loadSprite(cropSpriteId) : null;
-      });
-      const cropIcons = (await Promise.all(cropIconPromises)).filter((img): img is HTMLImageElement => !!img);
-      const rowH = drawMatureCropsRow(ctx, detailsY + cursorY, rowWidth, label, cropIcons);
+      const cropCanvases = await renderSlotList(data.cropSlots ?? []);
+      const rowH = drawMatureCropsRow(ctx, detailsY + cursorY, rowWidth, label, cropCanvases);
       cursorY += rowH;
       cursorY += -rowH / 2 + 15;
     }
 
-    // Size row for produce if single-slot and fully grown
-    if (slotCount === 1 && plant?.crop) {
-      const sizeVal = cropSize(data.itemId ?? '', data.itemScale ?? 1);
-      drawSizeRow(ctx, detailsY + cursorY, `${Math.round(sizeVal)}`, rowWidth, { size: sizeIcon });
-      cursorY += 38 + 8;
+    // Weight/sell row at bottom (direct values)
+    if (data.cropWeight) {
+      drawWeightSellRow(ctx, detailsY + bottomOffset, data.cropWeight, data.cropSellPrice ?? '', {
+        weight: weightIcon,
+        coin: data.cropSellPrice ? coinIcon : null,
+      });
     }
   }
 
   if (data.cardType === 'Crop') {
-    const sizeVal = cropSize(data.itemId ?? '', data.itemScale ?? 1);
-    drawSizeRow(ctx, detailsY + cursorY, `${Math.round(sizeVal)}`, rowWidth, { size: sizeIcon });
-    cursorY += 38 + 8;
-  }
-
-  // Abilities (non-pet)
-  if (data.cardType !== 'Pet') {
-    const abilities: string[] = [];
-    if (data.cardType === 'Plant' || data.cardType === 'Seed') {
-      const plant = state.gameData?.plants?.[data.itemId ?? ''] as any;
-      if (plant?.plant?.abilities && Array.isArray(plant.plant.abilities)) {
-        abilities.push(...plant.plant.abilities);
-      }
-    }
-    if (abilities.length > 0) {
-      const abilityDefs = abilities.map(id => {
-        const def = state.gameData?.abilities?.[id];
-        return {
-          id,
-          name: def?.name ?? id,
-          color: abilityColor(id),
-          disabled: false,
-        };
-      });
-      const h = drawAbilitiesRow(ctx, detailsY + cursorY, rowWidth, abilityDefs);
-      cursorY += h + 8;
-    }
-  }
-
-  // Crop weight/sell row
-  if (data.cardType === 'Crop') {
-    const crop = state.gameData?.plants?.[data.itemId ?? '']?.crop;
-    if (crop) {
-      const weight = (data.itemScale ?? 1) * crop.baseWeight;
-      const sell = Math.round(crop.baseSellPrice * (data.itemScale ?? 1) * mutationMultiplier(mutations));
-      drawWeightSellRow(ctx, detailsY + bottomOffset, formatWeight(weight), sell.toLocaleString(), {
+    // Weight/sell row (direct values)
+    if (data.cropWeight) {
+      drawWeightSellRow(ctx, detailsY + bottomOffset, data.cropWeight, data.cropSellPrice ?? '', {
         weight: weightIcon,
-        coin: coinIcon,
+        coin: data.cropSellPrice ? coinIcon : null,
       });
     }
   }
 
-  // Plant weight/sell row for single-slot mature crops
-  if (data.cardType === 'Plant') {
-    const plant = state.gameData?.plants?.[data.itemId ?? ''];
-    const slotCount = Math.max(1, data.plantSlotCount ?? 1);
-    const maturityPct = Math.max(0, Math.min(100, data.plantMaturityPct ?? 0));
-    if (plant?.crop && slotCount === 1 && maturityPct >= 100) {
-      const weight = (data.itemScale ?? 1) * plant.crop.baseWeight;
-      const sell = Math.round(plant.crop.baseSellPrice * (data.itemScale ?? 1) * mutationMultiplier(mutations));
-      drawWeightSellRow(ctx, detailsY + bottomOffset, formatWeight(weight), sell.toLocaleString(), {
-        weight: weightIcon,
-        coin: coinIcon,
-      });
-    }
-  }
-
-  // Egg rows
+  // Egg rows — use eggHatchSlots directly
   if (data.cardType === 'Egg') {
-    const egg = state.gameData?.eggs?.[data.itemId ?? ''];
-    if (egg) {
-      cursorY += 30;
-      const species = Object.keys(egg.faunaSpawnWeights ?? {});
-      const hatchIcons = (await Promise.all(species.map(async id => {
-        const sprite = state.gameData?.pets?.[id]?.sprite ?? null;
-        return sprite ? await loadSprite(sprite) : null;
-      }))).filter((img): img is HTMLImageElement => !!img);
-      cursorY += drawEggHatchesRow(ctx, detailsY + cursorY, rowWidth, 'Hatches', hatchIcons);
-
-      const goldChance = (state.gameData?.mutations?.Gold?.baseChance ?? 0) * 100;
-      const rainbowChance = (state.gameData?.mutations?.Rainbow?.baseChance ?? 0) * 100;
-      const goldText = Number.isInteger(goldChance) ? `${goldChance}%` : `${goldChance.toFixed(1)}%`;
-      const rainbowText = Number.isInteger(rainbowChance) ? `${rainbowChance}%` : `${rainbowChance.toFixed(1)}%`;
-      drawEggGoldRainbowRatesRow(ctx, detailsY + bottomOffset, goldText, rainbowText, {
+    cursorY += 30;
+    const hatchCanvases = await renderSlotList(data.eggHatchSlots ?? []);
+    if (hatchCanvases.length > 0) {
+      cursorY += drawEggHatchesRow(ctx, detailsY + cursorY, rowWidth, 'Hatches', hatchCanvases);
+    }
+    drawEggGoldRainbowRatesRow(ctx, detailsY + bottomOffset,
+      data.eggGoldRateText ?? '0%', data.eggRainbowRateText ?? '0%', {
         frame: mutationFrame,
         gold: mutationIcons.Gold,
         rainbow: mutationIcons.Rainbow,
       });
-    }
   }
 
   // Stack count row (Seed / Tool / Decor)
@@ -1428,105 +1097,73 @@ export async function drawFullCardStats(
     }
   }
 
-  // Pet rows
-    if (data.cardType === 'Pet') {
-      const petId = resolvePetStatsId(data);
-      const pet = petId ? state.gameData?.pets?.[petId] : undefined;
-      if (pet) {
-        const xp = data.petXp ?? 0;
-        const targetScale = data.petTargetScale ?? 1;
-        const hunger = data.petHunger ?? pet.coinsToFullyReplenishHunger ?? 0;
-        const strength = currentStrength(petId ?? '', xp, targetScale);
-        const maxStr = maxStrength(petId ?? '', targetScale);
-        const isMax = strength >= maxStr;
-        const nextStrength = strength + 1;
-        const nextXp = xpForStrength(nextStrength, petId ?? '', targetScale);
-        const nextLabel = isMax || nextStrength === maxStr ? String(maxStr) : String(nextStrength);
+  // Pet rows — use direct values from FullCardData
+  if (data.cardType === 'Pet') {
+    const currentStr = parseInt(data.petStr ?? '0') || 0;
+    const maxStr     = parseInt(data.petMaxStr ?? '0') || 0;
+    const strPct     = data.petStrPct ?? 0;
+    const barValue   = strPct / 100;
+    const isMax      = maxStr > 0 && currentStr >= maxStr;
 
-      const barColor = isMax ? '#25AAE2' : '#0067B4';
-      drawProgressBarRow(ctx, {
-        label: 'Strength',
-        value: xp,
-        max: isMax ? xp : nextXp,
-        color: barColor,
-        y: detailsY + cursorY,
-        rowWidth,
-        showMaxLabel: true,
-        maxLabelValue: String(maxStr),
-        nextLabelValue: nextLabel,
-        currentLabelValue: String(strength),
-        fullyGrown: isMax,
-      }, { progressStar, strengthStar });
-      cursorY += 32 + 14;
+    drawProgressBarRow(ctx, {
+      label: 'Strength',
+      value: barValue,
+      max: 1,
+      color: isMax ? '#25AAE2' : '#0067B4',
+      y: detailsY + cursorY,
+      rowWidth,
+      showMaxLabel: true,
+      maxLabelValue: String(maxStr || ''),
+      nextLabelValue: String(currentStr + 1),
+      currentLabelValue: String(currentStr),
+      fullyGrown: isMax,
+    }, { progressStar, strengthStar });
+    cursorY += 32 + 14;
 
-        const dietIds = data.petDietIds ?? [];
-      const leftPad = rowWidth * 0.35 - 55;
-      const rightPad = dietIds.length * 22 + 12; // step = iconSize(40) + overlap(-18) = 22
-      drawProgressBarRow(ctx, {
-        label: 'Hunger',
-        value: hunger,
-        max: pet.coinsToFullyReplenishHunger ?? 0,
-        color: '#5EAC46',
-        y: detailsY + cursorY,
-        rowWidth,
-        leftPad,
-        rightPad,
-        colorByPct: (pct) => pct <= HUNGER_LOW_THRESHOLD ? HUNGER_LOW_COLOR : '#5EAC46',
-      }, { strengthStar });
+    const hungerPct = data.petHungerPct ?? 100;
+    const dietSlots = data.petDietSlots ?? [];
+    const leftPad   = rowWidth * 0.35 - 55;
+    const rightPad  = dietSlots.length * 34 + 12; // step(34) * N + gap
+    drawProgressBarRow(ctx, {
+      label: 'Hunger',
+      value: hungerPct,
+      max: 100,
+      color: '#5EAC46',
+      y: detailsY + cursorY,
+      rowWidth,
+      leftPad,
+      rightPad,
+      colorByPct: (pct) => pct <= HUNGER_LOW_THRESHOLD ? HUNGER_LOW_COLOR : '#5EAC46',
+    }, { strengthStar });
 
-      // Diet sprites aligned with hunger row
-      const dietIcons = (await Promise.all(dietIds.map(async id => {
-        const sprite = state.gameData?.plants?.[id]?.crop?.sprite ?? null;
-        return sprite ? await loadSprite(sprite) : null;
-      }))).filter((img): img is HTMLImageElement => !!img);
-      drawDietSpritesOnly(ctx, detailsY + cursorY, rowWidth, dietIcons);
-      cursorY += 32 + 9;
+    const dietCanvases = await renderSlotList(dietSlots);
+    drawDietSpritesOnly(ctx, detailsY + cursorY, rowWidth, dietCanvases);
+    cursorY += 32 + 9;
 
-      // Weight / Age / Sell row
-        const weight = weightScale(petId ?? '', xp, targetScale) * pet.matureWeight;
-        const sell = Math.round(pet.maturitySellPrice * weightScale(petId ?? '', xp, targetScale) * mutationMultiplier(mutations));
-      const ageHours = Math.floor(xp / XP_PER_HOUR);
-      drawWeightAgeRow(ctx, detailsY + bottomOffset, formatWeight(weight), ageHours.toLocaleString(), sell.toLocaleString(), {
+    // Weight / Age / Sell row (direct text values)
+    drawWeightAgeRow(ctx, detailsY + bottomOffset,
+      data.petWeight ?? '', data.petAge ?? '', data.petSellPrice ?? '', {
         weight: weightIcon,
         age: ageIcon,
         coin: coinIcon,
       });
 
-      // Abilities row
-      const weatherId = data.petWeatherId ?? '';
-      const entryFallback = data.petAbilities
-        ? data.petAbilities.map(id => ({ kind: 'game' as const, id }))
-        : Object.keys(pet.innateAbilityWeights ?? {}).map(id => ({ kind: 'game' as const, id }));
-      const abilityEntries = data.petAbilityEntries ?? entryFallback;
-      const abilityDefs = abilityEntries.map(entry => {
-        if (entry.kind === 'custom') {
-          const name = (entry.name ?? '').trim();
-          if (!name) return null;
-          const color = entry.color ?? '#969696';
-          return {
-            id: `custom:${name}`,
-            name,
-            color,
-            disabled: false,
-          };
-        }
-        const id = entry.id ?? '';
-        if (!id) return null;
-        const def = state.gameData?.abilities?.[id];
-        const requiredWeather = (def?.baseParameters as any)?.requiredWeather;
-        const requiresWeather = requiredWeather != null && requiredWeather !== '';
-        const weatherMismatch = requiresWeather && (!weatherId || String(requiredWeather) !== weatherId);
-        return {
-          id,
-          name: def?.name ?? id,
-          color: abilityColor(id),
-          disabled: weatherMismatch,
-        };
-      }).filter((def): def is { id: string; name: string; color: string; disabled: boolean } => !!def);
-      if (abilityDefs.length > 0) {
-        const h = drawAbilitiesRow(ctx, detailsY + cursorY, rowWidth, abilityDefs);
-        cursorY += h + 8;
+    // Abilities row
+    const abilityEntries = data.petAbilityEntries ?? [];
+    const abilityDefs = abilityEntries.map(entry => {
+      if (entry.kind === 'custom') {
+        const name = (entry.name ?? '').trim();
+        if (!name) return null;
+        return { id: `custom:${name}`, name, color: entry.color ?? '#969696', disabled: false };
       }
+      const id = entry.id ?? '';
+      if (!id) return null;
+      const def = state.gameData?.abilities?.[id];
+      return { id, name: def?.name ?? id, color: abilityColor(id), disabled: false };
+    }).filter((def): def is { id: string; name: string; color: string; disabled: boolean } => !!def);
+    if (abilityDefs.length > 0) {
+      const h = drawAbilitiesRow(ctx, detailsY + cursorY, rowWidth, abilityDefs);
+      cursorY += h + 8;
     }
   }
 
@@ -1565,86 +1202,49 @@ export async function drawFullCardStats(
 }
 
 export function defaultFullCardData(cardType: FullCardType): FullCardData {
-  const gd = state.gameData;
-  const pickFirst = <T extends Record<string, any>>(obj: T | undefined): string | undefined => {
-    if (!obj) return undefined;
-    const keys = Object.keys(obj);
-    return keys.length > 0 ? keys[0] : undefined;
-  };
-
   const data: FullCardData = {
     cardType,
     itemName: cardType,
+    isLocked: false,
   };
 
-  if (!gd) return data;
-
   switch (cardType) {
-    case 'Pet': {
-      const id = pickFirst(gd.pets);
-      const pet = id ? gd.pets[id] : undefined;
-      data.itemId = id;
-      data.itemName = pet?.name ?? 'Pet';
-      data.rarity = pet?.rarity as FullCardRarity ?? 'Common';
-      data.petXp = 0;
-      data.petTargetScale = 1;
-      data.petHunger = pet?.coinsToFullyReplenishHunger ?? 0;
-      data.petAbilities = pet ? Object.keys(pet.innateAbilityWeights ?? {}) : [];
-      data.petAbilityEntries = pet
-        ? Object.keys(pet.innateAbilityWeights ?? {}).map(id => ({ kind: 'game' as const, id }))
-        : [];
-      return data;
-    }
-    case 'Plant': {
-      const id = pickFirst(gd.plants);
-      const plant = id ? gd.plants[id] : undefined;
-      data.itemId = id;
-      data.itemName = plant?.plant?.name ?? 'Plant';
-      data.itemScale = 1;
-      const slots = plant?.plant?.slotOffsets?.length;
-      data.plantSlotCount = slots && slots > 0 ? slots : 1;
+    case 'Pet':
+      data.rarity = 'Common';
+      data.petStr = '50';
+      data.petMaxStr = '80';
+      data.petStrPct = 0;
+      data.petHungerPct = 100;
+      data.petDietSlots = [];
+      data.petAbilityEntries = [];
+      data.petAge = '0h';
+      data.petWeight = '0 kg';
+      data.petSellPrice = '0';
+      break;
+    case 'Plant':
+      data.plantSlotCount = 1;
       data.plantMaturedSlots = 0;
       data.plantMaturityPct = 0;
-      return data;
-    }
-    case 'Crop': {
-      const id = pickFirst(gd.plants);
-      const plant = id ? gd.plants[id] : undefined;
-      data.itemId = id;
-      data.itemName = plant?.crop?.name ?? 'Crop';
-      data.itemScale = 1;
-      return data;
-    }
-    case 'Seed': {
-      const id = pickFirst(gd.plants);
-      const plant = id ? gd.plants[id] : undefined;
-      data.itemId = id;
-      data.itemName = plant?.seed?.name ?? 'Seed';
-      data.seedRarity = plant?.seed?.rarity as FullCardRarity ?? 'Common';
-      return data;
-    }
-    case 'Egg': {
-      const id = pickFirst(gd.eggs);
-      const egg = id ? gd.eggs[id] : undefined;
-      data.itemId = id;
-      data.itemName = egg?.name ?? 'Egg';
-      return data;
-    }
-    case 'Tool': {
-      const id = pickFirst(gd.items);
-      const tool = id ? gd.items[id] : undefined;
-      data.itemId = id;
-      data.itemName = tool?.name ?? 'Tool';
-      return data;
-    }
-    case 'Decor': {
-      const id = pickFirst(gd.decor);
-      const decor = id ? gd.decor[id] : undefined;
-      data.itemId = id;
-      data.itemName = decor?.name ?? 'Decor';
-      return data;
-    }
-    default:
-      return data;
+      data.cropSlots = [];
+      break;
+    case 'Crop':
+      data.cropSlots = [];
+      data.cropWeight = '';
+      break;
+    case 'Seed':
+      data.seedRarity = 'Common';
+      break;
+    case 'Egg':
+      data.eggHatchSlots = [];
+      data.eggGoldRateText = '0%';
+      data.eggRainbowRateText = '0%';
+      break;
+    case 'Tool':
+      data.toolDescription = '';
+      break;
+    case 'Decor':
+      break;
   }
+
+  return data;
 }

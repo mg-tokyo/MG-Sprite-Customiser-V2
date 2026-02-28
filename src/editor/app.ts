@@ -1,5 +1,5 @@
 import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlot, reorderSlots } from '../state/store';
-import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity, FullCardAbilityEntry } from '../state/store';
+import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity, FullCardAbilityEntry, FullCardSpriteSlot } from '../state/store';
 import { initTheme, toggleTheme } from './theme';
 import { FILTERS } from '../renderer/mutation-defs';
 import { renderAll, renderSlot } from '../renderer/canvas-renderer';
@@ -93,68 +93,8 @@ const MUTATION_CHIP_COLORS: Record<string, string> = {
   Ambercharged:  '#AA3C19',
 };
 
-function formatXpTime(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h === 0) return `${m}m`;
-  if (m === 0) return `${h}h`;
-  return `${h}h ${m}m`;
-}
 
-// ── Card middle-layer tint: rarity-based, falling back to type-based ─────────
-// The ${type}CardMiddle layer is a grayscale ribbon that gets a colour multiply.
-// The game uses rarity to colour the banner; type tints are a fallback.
-const RARITY_BANNER_TINTS: Record<string, string> = {
-  Common:    '#8090A0',  // silver-grey
-  Uncommon:  '#3CA050',  // green
-  Rare:      '#2870E8',  // blue
-  Legendary: '#CC8A00',  // gold
-  Mythic:    '#A030E0',  // purple/violet
-  Divine:    '#20A0CC',  // teal/cyan
-  Celestial: '#CC60F0',  // light violet
-};
-
-const CARD_MIDDLE_TINTS: Partial<Record<FullCardType, string>> = {
-  Pet:   '#9040D8',  // purple
-  Plant: '#4A8A30',  // forest green
-  Crop:  '#509030',  // olive green
-  Seed:  '#90C020',  // lime green
-  Egg:   '#D03880',  // magenta-pink
-  Tool:  '#2888D8',  // sky blue
-  Decor: '#E0B020',  // gold
-};
-
-function resolveCardRarity(data: FullCardData): string | null {
-  const gd = state.gameData;
-  if (!gd) return (data.rarity ?? data.seedRarity) ?? null;
-  switch (data.cardType) {
-    case 'Pet':    return (data.rarity ?? gd.pets?.[data.itemId ?? '']?.rarity) ?? null;
-    case 'Seed':   return (data.seedRarity ?? gd.plants?.[data.itemId ?? '']?.seed?.rarity) ?? null;
-    case 'Plant':
-    case 'Crop':   return gd.plants?.[data.itemId ?? '']?.seed?.rarity ?? null;
-    case 'Tool':   return gd.items?.[data.itemId ?? '']?.rarity ?? null;
-    case 'Decor':  return gd.decor?.[data.itemId ?? '']?.rarity ?? null;
-    case 'Egg':    return gd.eggs?.[data.itemId ?? '']?.rarity ?? null;
-    default:       return null;
-  }
-}
-
-function tintLayer(
-  src: HTMLImageElement | HTMLCanvasElement,
-  color: string,
-): HTMLCanvasElement {
-  const w = src instanceof HTMLCanvasElement ? src.width  : src.naturalWidth;
-  const h = src instanceof HTMLCanvasElement ? src.height : src.naturalHeight;
-  const tmp = document.createElement('canvas');
-  tmp.width  = w;
-  tmp.height = h;
-  const tc = tmp.getContext('2d')!;
-  tc.drawImage(src as CanvasImageSource, 0, 0);
-  tc.globalCompositeOperation = 'multiply';
-  tc.fillStyle = color;
-  tc.fillRect(0, 0, w, h);
-  return tmp;
-}
+// (card-tinting functions removed — card PNG sprites are pre-colored per type)
 
 export class App {
   private categoryDropdown!: CustomDropdown;
@@ -209,57 +149,68 @@ export class App {
   private fullCardControls!: HTMLElement;
   private fullCardTypeLabel!: HTMLElement;
   private fullCardNameInput!: HTMLInputElement;
-  private fullCardItemLabel!: HTMLElement;
-  private fullCardItemSelect!: HTMLSelectElement;
+  private fullCardRaritySelect!: HTMLSelectElement;
+  private fullCardRarityRow!: HTMLElement;
+  private fullCardLockedCheck!: HTMLInputElement;
+  // Mutations section (all card types)
+  private fullCardItemMutationsContainer!: HTMLElement;
   // Pet fields
   private fullCardPetSection!: HTMLElement;
-  private fullCardRaritySelect!: HTMLSelectElement;
-  private fullCardPetXpInput!: HTMLInputElement;
-  private fullCardPetXpDisplay!: HTMLElement;
-  private fullCardPetScaleInput!: HTMLInputElement;
-  private fullCardPetMaxStrDisplay!: HTMLElement;
-  private fullCardPetHungerInput!: HTMLInputElement;
-  private fullCardPetHungerDisplay!: HTMLElement;
-  private fullCardPetWeatherSelect!: HTMLSelectElement;
-  private fullCardPetDietContainer!: HTMLElement;
+  private fullCardPetCurrentStrInput!: HTMLInputElement;
+  private fullCardPetMaxStrInput!: HTMLInputElement;
+  private fullCardPetStrPctInput!: HTMLInputElement;
+  private fullCardPetStrPctDisplay!: HTMLElement;
+  private fullCardPetHungerPctInput!: HTMLInputElement;
+  private fullCardPetHungerPctDisplay!: HTMLElement;
+  private fullCardPetAgeInput!: HTMLInputElement;
+  private fullCardPetWeightInput!: HTMLInputElement;
+  private fullCardPetSellInput!: HTMLInputElement;
+  private fullCardDietSlotList!: HTMLElement;
   private fullCardPetAbilityChips!: HTMLElement;
   private fullCardPetAbilityAddSelect!: HTMLSelectElement;
   private fullCardPetAbilityAddBtn!: HTMLButtonElement;
   private fullCardPetAbilityList!: HTMLElement;
   private fullCardAddCustomAbilityBtn!: HTMLButtonElement;
-  // Mutations section (standalone, all card types)
-  private fullCardItemMutationsContainer!: HTMLElement;
-  // Item style fields
-  private fullCardItemStyleDetails!: HTMLDetailsElement;
-  private fullCardItemSpriteInput!: HTMLInputElement;
-  private fullCardItemSpriteUseBtn!: HTMLButtonElement;
-  private fullCardItemSpriteClearBtn!: HTMLButtonElement;
-  private fullCardItemSpriteUploadBtn!: HTMLButtonElement;
-  private fullCardItemSpriteFileInput!: HTMLInputElement;
-  private fullCardItemTintColor!: HTMLInputElement;
-  private fullCardItemTintOpacity!: HTMLInputElement;
-  private fullCardItemScaleInput!: HTMLInputElement;
-  private fullCardItemRotationInput!: HTMLInputElement;
-  private fullCardItemIconsCheck!: HTMLInputElement;
-  private fullCardItemOverlaysCheck!: HTMLInputElement;
   // Plant fields
   private fullCardPlantSection!: HTMLElement;
   private fullCardPlantSlotCountInput!: HTMLInputElement;
   private fullCardPlantMaturedSlotsInput!: HTMLInputElement;
   private fullCardPlantMaturityInput!: HTMLInputElement;
-  // Scale fields (Crop / Plant single-slot)
+  private fullCardPlantCropSlotList!: HTMLElement;
+  private fullCardPlantCropWeightInput!: HTMLInputElement;
+  private fullCardPlantCropSellInput!: HTMLInputElement;
+  // Crop fields
   private fullCardCropSection!: HTMLElement;
-  private fullCardScaleInput!: HTMLInputElement;
-  // Simple / count fields
-  private fullCardSimpleSection!: HTMLElement;
-  private fullCardCountInput!: HTMLInputElement;
-  private fullCardSeedRarityRow!: HTMLElement;
+  private fullCardCropSlotList!: HTMLElement;
+  private fullCardCropWeightInput!: HTMLInputElement;
+  private fullCardCropSellInput!: HTMLInputElement;
+  // Seed fields
+  private fullCardSeedSection!: HTMLElement;
   private fullCardSeedRaritySelect!: HTMLSelectElement;
-  // Shared fields (all card types)
-  private fullCardLockedCheck!: HTMLInputElement;
+  private fullCardSeedCountInput!: HTMLInputElement;
+  // Egg fields
+  private fullCardEggSection!: HTMLElement;
+  private fullCardEggCountInput!: HTMLInputElement;
+  private fullCardEggHatchSlotList!: HTMLElement;
+  private fullCardEggGoldRateInput!: HTMLInputElement;
+  private fullCardEggRainbowRateInput!: HTMLInputElement;
+  // Tool fields
+  private fullCardToolSection!: HTMLElement;
+  private fullCardToolCountInput!: HTMLInputElement;
+  private fullCardToolDescInput!: HTMLTextAreaElement;
+  // Decor fields
+  private fullCardDecorSection!: HTMLElement;
+  private fullCardDecorCountInput!: HTMLInputElement;
+  // Slot picker overlay and mutation popover (singletons)
+  private fcSlotPickerOverlay!: HTMLElement;
+  private fcMutPopover!: HTMLElement;
+  private fcActiveSlotCtx: { list: 'diet' | 'crop' | 'egg'; index: number } | null = null;
+  // In-memory slot data (kept in sync with controls)
+  private fcDietSlots: FullCardSpriteSlot[] = [];
+  private fcCropSlots: FullCardSpriteSlot[] = [];
+  private fcEggHatchSlots: FullCardSpriteSlot[] = [];
 
   private fullCardRenderDebounce: ReturnType<typeof setTimeout> | null = null;
-  private lastSpriteSelection: { id: string; url: string } | null = null;
 
   constructor(container: HTMLElement) {
     initTheme();
@@ -303,8 +254,7 @@ export class App {
       placeholder: 'Select category\u2026',
       onSelect: (item: DropdownItem) => {
         if (!item.fullCardType && !item.cardPresetUrls) {
-          const url = item.thumbUrl ?? item.animFrameUrls?.[0] ?? '';
-          if (url) this.lastSpriteSelection = { id: item.id, url };
+          // no-op: lastSpriteSelection removed
         }
         state.selectedCategory = item.id;
         // Clear search when changing category
@@ -328,20 +278,22 @@ export class App {
           this.applyCardPreset(item.cardPresetUrls, item.label);
         } else if (item.animFrameUrls && item.animFrameUrls.length > 0) {
           // Show first frame immediately, then async-load all frames for animated playback
+          const firstUrl = item.animFrameUrls[0];
           updateSlot(state.activeSlotIndex, {
             type: 'sprite',
             spriteKey: item.id,
-            spriteUrl: item.animFrameUrls[0],
+            spriteUrl: firstUrl,
             gifFrames: undefined,
             isAnimated: false,
           });
           this.stopGifPreview();
           this.loadAtlasAnimation(state.activeSlotIndex, item.id, item.animFrameUrls);
         } else {
+          const url = item.thumbUrl ?? '';
           updateSlot(state.activeSlotIndex, {
             type: 'sprite',
             spriteKey: item.id,
-            spriteUrl: item.thumbUrl ?? '',
+            spriteUrl: url,
             gifFrames: undefined,
             isAnimated: false,
           });
@@ -574,7 +526,7 @@ export class App {
     });
 
     // Render on changes
-    bus.on(Events.SLOT_CHANGED, () => { this.refreshSlots(); this.updateMeta(); this.syncDownloadBtn(); this.render(); });
+    bus.on(Events.SLOT_CHANGED, () => { this.refreshSlots(); this.updateMeta(); this.syncDownloadBtn(); this.render(); this.syncTextSlotUI(getActiveSlot()); });
     bus.on(Events.SLOT_SELECTED, () => {
       this.refreshSlots();
       this.refreshMutations();
@@ -1016,7 +968,345 @@ export class App {
 
   // ── Full Card Layer ──────────────────────────────────────────────────────────
 
-    /** Build the compact full-card control panel (called once in buildUI). */
+  /** Build the slot picker overlay (singleton, appended to document.body). */
+  private buildSlotPickerOverlay(): void {
+    const overlay = el('div', { className: 'fc-slot-picker', style: 'display:none' });
+
+    const search = el('input', {
+      type: 'text',
+      className: 'fc-slot-picker-search',
+      placeholder: 'Search sprites…',
+    }) as HTMLInputElement;
+
+    const catSelect = el('select', { className: 'fc-slot-picker-cat' }) as HTMLSelectElement;
+    catSelect.append(el('option', { value: '', textContent: 'All categories' }));
+    if (state.spriteData) {
+      for (const cat of state.spriteData.categories) {
+        catSelect.append(el('option', { value: cat.cat, textContent: cat.cat }));
+      }
+    }
+    if (state.cosmeticsData) {
+      for (const cat of state.cosmeticsData.categories) {
+        catSelect.append(el('option', { value: `cosmetic:${cat.cat}`, textContent: `Blobling: ${cat.cat}` }));
+      }
+    }
+
+    const grid = el('div', { className: 'fc-slot-picker-grid' });
+
+    const clearBtn = el('button', { textContent: 'Clear' }) as HTMLButtonElement;
+    const closeBtn = el('button', { textContent: 'Close' }) as HTMLButtonElement;
+    const footer = el('div', { className: 'fc-slot-picker-footer' }, [clearBtn, closeBtn]);
+
+    overlay.append(search, catSelect, grid, footer);
+    document.body.append(overlay);
+    this.fcSlotPickerOverlay = overlay;
+
+    const rebuildGrid = () => {
+      grid.innerHTML = '';
+      const q = search.value.toLowerCase();
+      const catFilter = catSelect.value; // '' | atlas catName | 'cosmetic:catName'
+      const sd = state.spriteData;
+      const cd = state.cosmeticsData;
+
+      const observer = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            const img = entry.target as HTMLImageElement;
+            const src = img.dataset.src;
+            if (src) { img.src = src; delete img.dataset.src; }
+            observer.unobserve(img);
+          }
+        }
+      }, { root: grid, rootMargin: '40px' });
+
+      const seen = new Set<string>();
+      const addEntry = (key: string, displayName: string, thumbUrl: string) => {
+        if (seen.has(key)) return;
+        seen.add(key);
+        if (q && !displayName.toLowerCase().includes(q)) return;
+        const img = document.createElement('img');
+        img.dataset.src = thumbUrl;
+        // No crossOrigin — picker thumbnails are display-only.
+        img.alt = displayName;
+        img.title = displayName;
+        const div = el('div', { className: 'fc-slot-picker-item' }, [img]);
+        div.addEventListener('click', () => {
+          this.applySlotPickerSelection(key);
+          overlay.style.display = 'none';
+        });
+        grid.append(div);
+        observer.observe(img);
+      };
+
+      // ── Atlas frames + animations ──
+      const showAtlas = !catFilter || !catFilter.startsWith('cosmetic:');
+      if (showAtlas && sd) {
+        for (const cat of sd.categories) {
+          if (catFilter && cat.cat !== catFilter) continue;
+          for (const item of cat.items) {
+            const version = item.url.match(/\/version\/([a-f0-9]+)\//i)?.[1] ?? state.gameVersion ?? '';
+            if (item.type === 'frame') {
+              const name = item.id.split('/').pop() ?? item.name;
+              const url = `https://mg-api.ariedam.fr/assets/sprites/${cat.cat}/${name}.png${version ? `?v=${version}` : ''}`;
+              addEntry(item.id, item.name, url);
+            } else if (item.type === 'animation' && item.frames.length > 0) {
+              const frameUrls = this.resolveAnimFrameUrls(item.frames, version);
+              if (frameUrls.length > 0) {
+                addEntry(frameUrls[0], item.name, frameUrls[0]);
+              }
+            }
+          }
+        }
+        // CDN-only extras (shown under 'ui' or when no filter)
+        if (state.gameVersion && (!catFilter || catFilter === 'ui')) {
+          const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
+          const cdnExtras: { label: string; file: string }[] = [
+            { label: 'GardenJournal',          file: 'ui/GardenJournal.webp' },
+            { label: 'AllRestocked (banner)',   file: 'ui/all-restocked.webp' },
+            { label: 'EggsRestocked (banner)',  file: 'ui/eggs-restocked.webp' },
+            { label: 'SeedsRestocked (banner)', file: 'ui/seeds-restocked.webp' },
+            { label: 'ToolsRestocked (banner)', file: 'ui/tools-restocked.webp' },
+          ];
+          for (const extra of cdnExtras) {
+            const url = `${cdnBase}/${extra.file}`;
+            addEntry(url, extra.label, url);
+          }
+        }
+      }
+
+      // ── Cosmetics ──
+      const showCosmetics = !catFilter || catFilter.startsWith('cosmetic:');
+      if (showCosmetics && cd) {
+        for (const cat of cd.categories) {
+          if (catFilter && catFilter !== `cosmetic:${cat.cat}`) continue;
+          for (const item of cat.items) {
+            addEntry(item.url, item.name, item.url);
+          }
+        }
+      }
+    };
+
+    search.addEventListener('input', rebuildGrid);
+    catSelect.addEventListener('change', rebuildGrid);
+
+    clearBtn.addEventListener('click', () => {
+      this.applySlotPickerSelection('');
+      overlay.style.display = 'none';
+    });
+    closeBtn.addEventListener('click', () => { overlay.style.display = 'none'; });
+
+    // Close on outside click
+    document.addEventListener('click', (e) => {
+      if (overlay.style.display !== 'none' && !overlay.contains(e.target as Node)) {
+        overlay.style.display = 'none';
+      }
+    }, true);
+
+    // Store rebuild fn on element for re-population on open
+    (overlay as any)._rebuild = rebuildGrid;
+  }
+
+  private openSlotPicker(trigger: HTMLElement, listType: 'diet' | 'crop' | 'egg', index: number): void {
+    this.fcActiveSlotCtx = { list: listType, index };
+    const overlay = this.fcSlotPickerOverlay;
+    const rebuild = (overlay as any)._rebuild as (() => void) | undefined;
+    if (rebuild) rebuild();
+    const rect = trigger.getBoundingClientRect();
+    const overlayW = 300;
+    const overlayH = 400;
+    // Open to the right of the trigger; fall back to left side if no room
+    let left = rect.right + 4;
+    let top = rect.top;
+    if (left + overlayW > window.innerWidth) left = rect.left - overlayW - 4;
+    if (left < 0) left = 4;
+    if (top + overlayH > window.innerHeight) top = window.innerHeight - overlayH - 8;
+    if (top < 0) top = 4;
+    overlay.style.left = `${left}px`;
+    overlay.style.top = `${top}px`;
+    overlay.style.display = 'flex';
+  }
+
+  private applySlotPickerSelection(spriteKey: string): void {
+    const ctx = this.fcActiveSlotCtx;
+    if (!ctx) return;
+    const slots = this.getSlotArray(ctx.list);
+    if (ctx.index >= 0 && ctx.index < slots.length) {
+      slots[ctx.index] = { ...slots[ctx.index], spriteKey };
+    }
+    this.renderSlotListUI(ctx.list);
+    this.scheduleFullCardRerender();
+  }
+
+  /** Build the per-slot mutation popover (singleton, appended to document.body). */
+  private buildMutPopover(): void {
+    const popover = el('div', { className: 'fc-mut-popover', style: 'display:none' });
+    const chips = el('div', { className: 'fc-mut-popover-chips' });
+    popover.append(chips);
+    document.body.append(popover);
+    this.fcMutPopover = popover;
+
+    for (const id of Object.keys(MUTATION_CHIP_COLORS)) {
+      const chip = el('span', { className: 'full-card-mutation-chip', textContent: id }) as HTMLElement;
+      chip.dataset.mutId = id;
+      chip.style.background = MUTATION_CHIP_COLORS[id] ?? '#555';
+      chip.addEventListener('click', () => {
+        chip.classList.toggle('active');
+        const ctx = this.fcActiveSlotCtx;
+        if (!ctx) return;
+        const slots = this.getSlotArray(ctx.list);
+        if (ctx.index >= 0 && ctx.index < slots.length) {
+          const active = Array.from(chips.querySelectorAll<HTMLElement>('.full-card-mutation-chip.active'))
+            .map(c => c.dataset.mutId as string).filter(Boolean);
+          slots[ctx.index] = { ...slots[ctx.index], mutations: active };
+        }
+        this.renderSlotListUI(ctx.list);
+        this.scheduleFullCardRerender();
+      });
+      chips.append(chip);
+    }
+
+    document.addEventListener('click', (e) => {
+      if (popover.style.display !== 'none' && !popover.contains(e.target as Node)) {
+        popover.style.display = 'none';
+      }
+    }, true);
+  }
+
+  private openMutPopover(trigger: HTMLElement, listType: 'diet' | 'crop' | 'egg', index: number): void {
+    this.fcActiveSlotCtx = { list: listType, index };
+    const popover = this.fcMutPopover;
+    const slots = this.getSlotArray(listType);
+    const currentMuts = new Set(slots[index]?.mutations ?? []);
+    for (const chip of Array.from(popover.querySelectorAll<HTMLElement>('[data-mut-id]'))) {
+      chip.classList.toggle('active', currentMuts.has(chip.dataset.mutId ?? ''));
+    }
+    const rect = trigger.getBoundingClientRect();
+    let left = rect.left;
+    let top = rect.bottom + 4;
+    if (left + 260 > window.innerWidth) left = window.innerWidth - 268;
+    if (top + 200 > window.innerHeight) top = rect.top - 204;
+    popover.style.left = `${left}px`;
+    popover.style.top = `${top}px`;
+    popover.style.display = 'block';
+  }
+
+  private getSlotArray(listType: 'diet' | 'crop' | 'egg'): FullCardSpriteSlot[] {
+    if (listType === 'diet') return this.fcDietSlots;
+    if (listType === 'crop') return this.fcCropSlots;
+    return this.fcEggHatchSlots;
+  }
+
+  private makeSlotRow(listType: 'diet' | 'crop' | 'egg', index: number, slot: FullCardSpriteSlot): HTMLElement {
+    const thumb = document.createElement('img');
+    thumb.className = 'full-card-slot-thumb';
+    // No crossOrigin — thumbnails are display-only, don't need canvas access.
+    // crossOrigin='anonymous' would break them in production if the server
+    // doesn't send CORS headers (which mg-api does not per sprite-loader.ts).
+    if (slot.spriteKey) {
+      const url = this.fcBuildSpriteUrl(slot.spriteKey);
+      if (url) thumb.src = url;
+    }
+
+    const rawName = slot.spriteKey
+      ? (slot.spriteKey.split('?')[0].split('/').pop()?.replace(/\.(png|webp|gif|jpg)$/i, '') ?? '(empty)')
+      : '(empty)';
+    const name = el('span', { className: 'full-card-slot-name', textContent: rawName });
+
+    const openPicker = () => this.openSlotPicker(thumb, listType, index);
+    thumb.addEventListener('click', openPicker);
+    name.addEventListener('click', openPicker);
+
+    const mutBtn = el('button', {
+      className: `full-card-slot-mut-btn${slot.mutations.length > 0 ? ' has-mutations' : ''}`,
+      textContent: '✦',
+      title: 'Mutations',
+      type: 'button',
+    }) as HTMLButtonElement;
+    mutBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.openMutPopover(mutBtn, listType, index);
+    });
+
+    const removeBtn = el('button', {
+      className: 'full-card-slot-remove',
+      textContent: '×',
+      type: 'button',
+    }) as HTMLButtonElement;
+    removeBtn.addEventListener('click', () => {
+      const slots = this.getSlotArray(listType);
+      slots.splice(index, 1);
+      this.renderSlotListUI(listType);
+      this.scheduleFullCardRerender();
+    });
+
+    const children: HTMLElement[] = [thumb as unknown as HTMLElement, name as HTMLElement, mutBtn, removeBtn];
+
+    if (listType === 'egg') {
+      const pctInput = el('input', {
+        type: 'text',
+        className: 'full-card-slot-pct',
+        placeholder: '0%',
+        value: slot.pctText ?? '',
+      }) as HTMLInputElement;
+      pctInput.addEventListener('input', () => {
+        const slots = this.getSlotArray(listType);
+        if (slots[index]) slots[index] = { ...slots[index], pctText: pctInput.value };
+      });
+      children.splice(3, 0, pctInput);
+    }
+
+    return el('div', { className: 'full-card-slot-row' }, children);
+  }
+
+  private renderSlotListUI(listType: 'diet' | 'crop' | 'egg'): void {
+    let container: HTMLElement;
+    if (listType === 'diet') container = this.fullCardDietSlotList;
+    else if (listType === 'crop') {
+      this.renderSlotListInContainer(this.fullCardPlantCropSlotList, 'crop');
+      container = this.fullCardCropSlotList;
+    } else container = this.fullCardEggHatchSlotList;
+    this.renderSlotListInContainer(container, listType);
+  }
+
+  private renderSlotListInContainer(container: HTMLElement, listType: 'diet' | 'crop' | 'egg'): void {
+    container.innerHTML = '';
+    const slots = this.getSlotArray(listType);
+    slots.forEach((slot, index) => {
+      container.append(this.makeSlotRow(listType, index, slot));
+    });
+    const addBtn = el('button', {
+      className: 'full-card-slot-add-btn',
+      textContent: '+ Add',
+      type: 'button',
+    }) as HTMLButtonElement;
+    addBtn.addEventListener('click', () => {
+      slots.push({ spriteKey: '', mutations: [] });
+      this.renderSlotListInContainer(container, listType);
+      if (listType === 'crop') {
+        // sync the other crop container
+        const other = container === this.fullCardCropSlotList ? this.fullCardPlantCropSlotList : this.fullCardCropSlotList;
+        if (other) this.renderSlotListInContainer(other, 'crop');
+      }
+      this.scheduleFullCardRerender();
+    });
+    container.append(addBtn);
+  }
+
+  private fcBuildSpriteUrl(spriteKey: string): string | null {
+    if (!spriteKey) return null;
+    if (spriteKey.startsWith('http') || spriteKey.startsWith('blob:') || spriteKey.startsWith('data:')) return spriteKey;
+    if (spriteKey.startsWith('sprite/')) {
+      const [, cat, ...rest] = spriteKey.split('/');
+      const name = rest.join('/');
+      if (cat && name) {
+        const version = state.gameVersion ?? '';
+        return `https://mg-api.ariedam.fr/assets/sprites/${cat}/${name}.png${version ? `?v=${version}` : ''}`;
+      }
+    }
+    return null;
+  }
+
+  /** Build the compact full-card control panel (called once in buildUI). */
   private buildFullCardControls(): HTMLElement {
     const RARITIES: FullCardRarity[] = ['Common', 'Uncommon', 'Rare', 'Legendary', 'Mythic', 'Divine', 'Celestial'];
 
@@ -1025,49 +1315,45 @@ export class App {
     this.fullCardNameInput = el('input', { type: 'text', placeholder: 'Item name...' }) as HTMLInputElement;
     this.fullCardNameInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
-    this.fullCardItemLabel = el('label', { textContent: 'Item' }) as HTMLElement;
-    this.fullCardItemSelect = el('select') as HTMLSelectElement;
-    this.fullCardItemSelect.addEventListener('change', () => {
-      this.syncFullCardItemDefaults();
-      this.scheduleFullCardRerender();
-    });
-
-    // -- Pet section --
+    // ── Pet section ──
     this.fullCardRaritySelect = el('select') as HTMLSelectElement;
     for (const r of RARITIES) {
       this.fullCardRaritySelect.append(el('option', { value: r, textContent: r }));
     }
     this.fullCardRaritySelect.addEventListener('change', () => this.scheduleFullCardRerender());
 
-    // XP slider
-    this.fullCardPetXpDisplay = el('span', { className: 'full-card-slider-val', textContent: '0h 0m' });
-    this.fullCardPetXpInput = el('input', { type: 'range', min: '0', max: '108000', step: '1000', value: '0' }) as HTMLInputElement;
-    this.fullCardPetXpInput.addEventListener('input', () => {
-      this.fullCardPetXpDisplay.textContent = formatXpTime(Number(this.fullCardPetXpInput.value));
+    this.fullCardRarityRow = el('div', { className: 'full-card-field' }, [
+      el('label', { textContent: 'Rarity' }), this.fullCardRaritySelect,
+    ]) as HTMLElement;
+
+    this.fullCardPetCurrentStrInput = el('input', { type: 'number', min: '0', max: '1000', step: '1', value: '50' }) as HTMLInputElement;
+    this.fullCardPetCurrentStrInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardPetMaxStrInput = el('input', { type: 'number', min: '0', max: '1000', step: '1', value: '80' }) as HTMLInputElement;
+    this.fullCardPetMaxStrInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardPetStrPctDisplay = el('span', { className: 'full-card-slider-val', textContent: '0%' });
+    this.fullCardPetStrPctInput = el('input', { type: 'range', min: '0', max: '100', step: '1', value: '0' }) as HTMLInputElement;
+    this.fullCardPetStrPctInput.addEventListener('input', () => {
+      this.fullCardPetStrPctDisplay.textContent = `${this.fullCardPetStrPctInput.value}%`;
       this.scheduleFullCardRerender();
     });
 
-    // Max STR slider (80–100 → converts to targetScale internally)
-    this.fullCardPetMaxStrDisplay = el('span', { className: 'full-card-slider-val', textContent: '80' });
-    this.fullCardPetScaleInput = el('input', { type: 'range', min: '80', max: '100', step: '1', value: '80' }) as HTMLInputElement;
-    this.fullCardPetScaleInput.addEventListener('input', () => {
-      this.fullCardPetMaxStrDisplay.textContent = this.fullCardPetScaleInput.value;
+    this.fullCardPetHungerPctDisplay = el('span', { className: 'full-card-slider-val', textContent: '100%' });
+    this.fullCardPetHungerPctInput = el('input', { type: 'range', min: '0', max: '100', step: '1', value: '100' }) as HTMLInputElement;
+    this.fullCardPetHungerPctInput.addEventListener('input', () => {
+      this.fullCardPetHungerPctDisplay.textContent = `${this.fullCardPetHungerPctInput.value}%`;
       this.scheduleFullCardRerender();
     });
 
-    // Hunger slider
-    this.fullCardPetHungerDisplay = el('span', { className: 'full-card-slider-val', textContent: '0' });
-    this.fullCardPetHungerInput = el('input', { type: 'range', min: '0', max: '1000', step: '1', value: '0' }) as HTMLInputElement;
-    this.fullCardPetHungerInput.addEventListener('input', () => {
-      this.fullCardPetHungerDisplay.textContent = this.fullCardPetHungerInput.value;
-      this.scheduleFullCardRerender();
-    });
+    this.fullCardPetAgeInput = el('input', { type: 'text', placeholder: '0h' }) as HTMLInputElement;
+    this.fullCardPetAgeInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    this.fullCardPetWeightInput = el('input', { type: 'text', placeholder: '0 kg' }) as HTMLInputElement;
+    this.fullCardPetWeightInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    this.fullCardPetSellInput = el('input', { type: 'text', placeholder: '0' }) as HTMLInputElement;
+    this.fullCardPetSellInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
-    this.fullCardPetWeatherSelect = el('select') as HTMLSelectElement;
-    this.fullCardPetWeatherSelect.addEventListener('change', () => this.scheduleFullCardRerender());
-
-    // Diet checkbox container
-    this.fullCardPetDietContainer = el('div', { className: 'full-card-diet-wrap' });
+    this.fullCardDietSlotList = el('div', { className: 'full-card-slot-list' });
 
     // Ability chips
     this.fullCardPetAbilityChips = el('div', { className: 'full-card-ability-chips' });
@@ -1114,25 +1400,25 @@ export class App {
 
     this.fullCardPetSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
       el('div', { className: 'full-card-section-title', textContent: 'Pet Stats' }),
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Rarity' }), this.fullCardRaritySelect]),
+      this.fullCardRarityRow,
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Current STR' }), this.fullCardPetCurrentStrInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Max STR' }), this.fullCardPetMaxStrInput]),
       el('div', { className: 'full-card-field' }, [
-        el('label', { textContent: 'XP' }),
-        el('div', { className: 'full-card-slider-row' }, [this.fullCardPetXpInput, this.fullCardPetXpDisplay]),
+        el('label', { textContent: 'XP % (within level)' }),
+        el('div', { className: 'full-card-slider-row' }, [this.fullCardPetStrPctInput, this.fullCardPetStrPctDisplay]),
       ]),
       el('div', { className: 'full-card-field' }, [
-        el('label', { textContent: 'Max STR' }),
-        el('div', { className: 'full-card-slider-row' }, [this.fullCardPetScaleInput, this.fullCardPetMaxStrDisplay]),
+        el('label', { textContent: 'Hunger %' }),
+        el('div', { className: 'full-card-slider-row' }, [this.fullCardPetHungerPctInput, this.fullCardPetHungerPctDisplay]),
       ]),
-      el('div', { className: 'full-card-field' }, [
-        el('label', { textContent: 'Hunger' }),
-        el('div', { className: 'full-card-slider-row' }, [this.fullCardPetHungerInput, this.fullCardPetHungerDisplay]),
-      ]),
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Weather' }), this.fullCardPetWeatherSelect]),
-      el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Diet' }), this.fullCardPetDietContainer]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Age' }), this.fullCardPetAgeInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Weight' }), this.fullCardPetWeightInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Sell Price' }), this.fullCardPetSellInput]),
+      el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Diet' }), this.fullCardDietSlotList]),
       el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Abilities' }), abilityWrap]),
     ]);
 
-    // -- Plant section --
+    // ── Plant section ──
     this.fullCardPlantSlotCountInput = el('input', { type: 'number', min: '1', step: '1', value: '1' }) as HTMLInputElement;
     this.fullCardPlantSlotCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
@@ -1142,25 +1428,43 @@ export class App {
     this.fullCardPlantMaturityInput = el('input', { type: 'range', min: '0', max: '100', step: '1', value: '0' }) as HTMLInputElement;
     this.fullCardPlantMaturityInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
+    this.fullCardPlantCropSlotList = el('div', { className: 'full-card-slot-list' });
+
+    this.fullCardPlantCropWeightInput = el('input', { type: 'text', placeholder: '0 kg' }) as HTMLInputElement;
+    this.fullCardPlantCropWeightInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardPlantCropSellInput = el('input', { type: 'text', placeholder: '0' }) as HTMLInputElement;
+    this.fullCardPlantCropSellInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
     this.fullCardPlantSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
       el('div', { className: 'full-card-section-title', textContent: 'Growth' }),
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Total Slots' }), this.fullCardPlantSlotCountInput]),
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Mature Slots' }), this.fullCardPlantMaturedSlotsInput]),
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Maturity %' }), this.fullCardPlantMaturityInput]),
+      el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Crops' }), this.fullCardPlantCropSlotList]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Crop Weight' }), this.fullCardPlantCropWeightInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Crop Sell Price' }), this.fullCardPlantCropSellInput]),
     ]);
 
-    // -- Scale section (Crop / Plant single-slot) --
-    this.fullCardScaleInput = el('input', { type: 'number', min: '0.1', step: '0.01', value: '1' }) as HTMLInputElement;
-    this.fullCardScaleInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    // ── Crop section ──
+    this.fullCardCropSlotList = el('div', { className: 'full-card-slot-list' });
+
+    this.fullCardCropWeightInput = el('input', { type: 'text', placeholder: '0 kg' }) as HTMLInputElement;
+    this.fullCardCropWeightInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardCropSellInput = el('input', { type: 'text', placeholder: '0' }) as HTMLInputElement;
+    this.fullCardCropSellInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
     this.fullCardCropSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
-      el('div', { className: 'full-card-section-title', textContent: 'Size' }),
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Scale' }), this.fullCardScaleInput]),
+      el('div', { className: 'full-card-section-title', textContent: 'Crop' }),
+      el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Produce' }), this.fullCardCropSlotList]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Weight' }), this.fullCardCropWeightInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Sell Price' }), this.fullCardCropSellInput]),
     ]);
 
-    // -- Simple section (Seed / Egg / Tool / Decor) --
-    this.fullCardCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
-    this.fullCardCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    // ── Seed section ──
+    this.fullCardSeedCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
+    this.fullCardSeedCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
     this.fullCardSeedRaritySelect = el('select') as HTMLSelectElement;
     for (const r of RARITIES) {
@@ -1168,74 +1472,56 @@ export class App {
     }
     this.fullCardSeedRaritySelect.addEventListener('change', () => this.scheduleFullCardRerender());
 
-    this.fullCardSeedRarityRow = el('div', { className: 'full-card-field', style: 'display:none' }, [
-      el('label', { textContent: 'Rarity' }), this.fullCardSeedRaritySelect,
+    this.fullCardSeedSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
+      el('div', { className: 'full-card-section-title', textContent: 'Seed' }),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Count' }), this.fullCardSeedCountInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Rarity' }), this.fullCardSeedRaritySelect]),
     ]);
 
-    this.fullCardSimpleSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
-      el('div', { className: 'full-card-section-title', textContent: 'Stack' }),
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Count (optional)' }), this.fullCardCountInput]),
-      this.fullCardSeedRarityRow,
+    // ── Egg section ──
+    this.fullCardEggCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
+    this.fullCardEggCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardEggHatchSlotList = el('div', { className: 'full-card-slot-list' });
+
+    this.fullCardEggGoldRateInput = el('input', { type: 'text', placeholder: '0%' }) as HTMLInputElement;
+    this.fullCardEggGoldRateInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardEggRainbowRateInput = el('input', { type: 'text', placeholder: '0%' }) as HTMLInputElement;
+    this.fullCardEggRainbowRateInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
+    this.fullCardEggSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
+      el('div', { className: 'full-card-section-title', textContent: 'Egg' }),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Count' }), this.fullCardEggCountInput]),
+      el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Hatches' }), this.fullCardEggHatchSlotList]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Gold Rate' }), this.fullCardEggGoldRateInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Rainbow Rate' }), this.fullCardEggRainbowRateInput]),
     ]);
 
-    // -- Item style (collapsible) --
-    this.fullCardItemSpriteInput = el('input', { type: 'text', placeholder: 'sprite id or URL' }) as HTMLInputElement;
-    this.fullCardItemSpriteInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    // ── Tool section ──
+    this.fullCardToolCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
+    this.fullCardToolCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
-    this.fullCardItemSpriteUseBtn = el('button', {
-      type: 'button',
-      className: 'full-card-item-btn',
-      textContent: 'Use selected',
-    }) as HTMLButtonElement;
-    this.fullCardItemSpriteUseBtn.addEventListener('click', () => {
-      const last = this.lastSpriteSelection;
-      if (!last) return;
-      const value = last.id.startsWith('sprite/') ? last.id : (last.url || last.id);
-      this.fullCardItemSpriteInput.value = value;
-      this.scheduleFullCardRerender();
-    });
+    this.fullCardToolDescInput = el('textarea', { placeholder: 'Tool description...' }) as HTMLTextAreaElement;
+    this.fullCardToolDescInput.rows = 3;
+    this.fullCardToolDescInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
-    this.fullCardItemSpriteClearBtn = el('button', {
-      type: 'button',
-      className: 'full-card-item-btn',
-      textContent: 'Clear',
-    }) as HTMLButtonElement;
-    this.fullCardItemSpriteClearBtn.addEventListener('click', () => {
-      this.fullCardItemSpriteInput.value = '';
-      this.scheduleFullCardRerender();
-    });
+    this.fullCardToolSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
+      el('div', { className: 'full-card-section-title', textContent: 'Tool' }),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Count' }), this.fullCardToolCountInput]),
+      el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Description' }), this.fullCardToolDescInput]),
+    ]);
 
-    this.fullCardItemSpriteFileInput = el('input', {
-      type: 'file',
-      accept: 'image/png,image/jpeg,image/gif',
-    }) as HTMLInputElement;
-    this.fullCardItemSpriteFileInput.style.display = 'none';
-    this.fullCardItemSpriteUploadBtn = el('button', {
-      type: 'button',
-      className: 'full-card-item-btn',
-      textContent: 'Upload',
-    }) as HTMLButtonElement;
-    this.fullCardItemSpriteUploadBtn.addEventListener('click', () => this.fullCardItemSpriteFileInput.click());
-    this.fullCardItemSpriteFileInput.addEventListener('change', async () => {
-      const file = this.fullCardItemSpriteFileInput.files?.[0];
-      if (!file) return;
-      if (file.type === 'image/gif' || file.name.toLowerCase().endsWith('.gif')) {
-        const buffer = await file.arrayBuffer();
-        const decoded = decodeGif(buffer);
-        const firstFrameBlob = await new Promise<Blob>((resolve) =>
-          decoded.frames[0].canvas.toBlob((b) => resolve(b!), 'image/png'),
-        );
-        const url = URL.createObjectURL(firstFrameBlob);
-        this.fullCardItemSpriteInput.value = url;
-      } else {
-        const url = URL.createObjectURL(file);
-        this.fullCardItemSpriteInput.value = url;
-      }
-      this.fullCardItemSpriteFileInput.value = '';
-      this.scheduleFullCardRerender();
-    });
+    // ── Decor section ──
+    this.fullCardDecorCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
+    this.fullCardDecorCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
-    // Mutations toggle-chip container (standalone section, all card types)
+    this.fullCardDecorSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
+      el('div', { className: 'full-card-section-title', textContent: 'Decor' }),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Count' }), this.fullCardDecorCountInput]),
+    ]);
+
+    // ── Shared: mutations (all card types) ──
     this.fullCardItemMutationsContainer = el('div', { className: 'full-card-mutations-wrap' });
     for (const id of Object.keys(FILTERS)) {
       const chip = el('span', {
@@ -1251,206 +1537,37 @@ export class App {
       this.fullCardItemMutationsContainer.append(chip);
     }
 
-    this.fullCardItemTintColor = el('input', { type: 'color', value: '#ffffff' }) as HTMLInputElement;
-    this.fullCardItemTintOpacity = el('input', { type: 'range', min: '0', max: '1', step: '0.05', value: '0' }) as HTMLInputElement;
-    this.fullCardItemTintColor.addEventListener('input', () => this.scheduleFullCardRerender());
-    this.fullCardItemTintOpacity.addEventListener('input', () => this.scheduleFullCardRerender());
-
-    this.fullCardItemScaleInput = el('input', { type: 'number', min: '0.1', step: '0.01', value: '1' }) as HTMLInputElement;
-    this.fullCardItemScaleInput.addEventListener('input', () => this.scheduleFullCardRerender());
-
-    this.fullCardItemRotationInput = el('input', { type: 'number', min: '-180', max: '180', step: '1', value: '0' }) as HTMLInputElement;
-    this.fullCardItemRotationInput.addEventListener('input', () => this.scheduleFullCardRerender());
-
-    this.fullCardItemIconsCheck = el('input', { type: 'checkbox' }) as HTMLInputElement;
-    this.fullCardItemIconsCheck.addEventListener('change', () => this.scheduleFullCardRerender());
-
-    this.fullCardItemOverlaysCheck = el('input', { type: 'checkbox' }) as HTMLInputElement;
-    this.fullCardItemOverlaysCheck.addEventListener('change', () => this.scheduleFullCardRerender());
-
-    this.fullCardItemStyleDetails = document.createElement('details');
-    this.fullCardItemStyleDetails.className = 'full-card-item-style';
-    const itemSummary = el('summary', { textContent: 'Item Appearance' });
-    const itemStyleBody = el('div', { className: 'full-card-item-style-body' }, [
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Item Sprite' }), this.fullCardItemSpriteInput]),
-      el('div', { className: 'full-card-item-actions' }, [
-        this.fullCardItemSpriteUseBtn,
-        this.fullCardItemSpriteUploadBtn,
-        this.fullCardItemSpriteClearBtn,
-        this.fullCardItemSpriteFileInput,
-      ]),
-      el('div', { className: 'full-card-field' }, [
-        el('label', { textContent: 'Item Tint' }),
-        el('div', { className: 'full-card-item-tint' }, [this.fullCardItemTintColor, this.fullCardItemTintOpacity]),
-      ]),
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Item Scale' }), this.fullCardItemScaleInput]),
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Item Rotation' }), this.fullCardItemRotationInput]),
-      el('div', { className: 'full-card-field full-card-field--stack' }, [
-        el('label', { textContent: 'Item Options' }),
-        el('div', { className: 'full-card-item-options' }, [
-          el('label', { className: 'full-card-item-option' }, [this.fullCardItemIconsCheck, document.createTextNode(' Icons')]),
-          el('label', { className: 'full-card-item-option' }, [this.fullCardItemOverlaysCheck, document.createTextNode(' Overlays')]),
-        ]),
-      ]),
-    ]);
-    this.fullCardItemStyleDetails.append(itemSummary, itemStyleBody);
-
-    // -- Shared: locked toggle (applies to all card types) --
+    // ── Shared: locked toggle ──
     this.fullCardLockedCheck = el('input', { type: 'checkbox' }) as HTMLInputElement;
     this.fullCardLockedCheck.addEventListener('change', () => this.scheduleFullCardRerender());
 
-    const section = el('div', { className: 'full-card-controls-section', style: 'display:none' });
+    // ── Assemble ──
     const mutationsSection = el('div', { className: 'full-card-section' }, [
       el('div', { className: 'full-card-section-title', textContent: 'Mutations' }),
       this.fullCardItemMutationsContainer,
     ]);
 
+    const section = el('div', { className: 'full-card-controls-section', style: 'display:none' });
     section.append(
       this.fullCardTypeLabel,
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Name' }), this.fullCardNameInput]),
-      el('div', { className: 'full-card-field' }, [this.fullCardItemLabel, this.fullCardItemSelect]),
       el('label', { className: 'full-card-locked-wrap' }, [this.fullCardLockedCheck, document.createTextNode(' Locked')]),
       this.fullCardPetSection,
       this.fullCardPlantSection,
       this.fullCardCropSection,
-      this.fullCardSimpleSection,
+      this.fullCardSeedSection,
+      this.fullCardEggSection,
+      this.fullCardToolSection,
+      this.fullCardDecorSection,
       mutationsSection,
-      this.fullCardItemStyleDetails,
     );
+
+    // Build singleton overlays (appended to body)
+    this.buildSlotPickerOverlay();
+    this.buildMutPopover();
+
     return section;
   }
-
-  private getFullCardItemLabel(cardType: FullCardType): string {
-    switch (cardType) {
-      case 'Pet': return 'Pet Species';
-      case 'Plant': return 'Plant';
-      case 'Crop': return 'Crop';
-      case 'Seed': return 'Seed';
-      case 'Egg': return 'Egg';
-      case 'Tool': return 'Tool';
-      case 'Decor': return 'Decor';
-      default: return 'Item';
-    }
-  }
-
-  private getDefaultItemName(cardType: FullCardType, itemId: string): string | undefined {
-    const gd = state.gameData;
-    if (!gd) return undefined;
-    switch (cardType) {
-      case 'Pet': return gd.pets[itemId]?.name;
-      case 'Plant': return gd.plants[itemId]?.plant?.name;
-      case 'Crop': return gd.plants[itemId]?.crop?.name;
-      case 'Seed': return gd.plants[itemId]?.seed?.name;
-      case 'Egg': return gd.eggs[itemId]?.name;
-      case 'Tool': return gd.items[itemId]?.name;
-      case 'Decor': return gd.decor[itemId]?.name;
-      default: return undefined;
-    }
-  }
-
-  private resolveFullCardItemId(cardType: FullCardType, itemName: string): string | undefined {
-    const gd = state.gameData;
-    if (!gd) return undefined;
-    const target = itemName.trim().toLowerCase();
-    if (!target) return undefined;
-    const matchByName = (name: string | undefined) =>
-      name && name.trim().toLowerCase() === target;
-    switch (cardType) {
-      case 'Pet':
-        return Object.keys(gd.pets).find(id => matchByName(gd.pets[id]?.name));
-      case 'Plant':
-        return Object.keys(gd.plants).find(id => matchByName(gd.plants[id]?.plant?.name));
-      case 'Crop':
-        return Object.keys(gd.plants).find(id => matchByName(gd.plants[id]?.crop?.name));
-      case 'Seed':
-        return Object.keys(gd.plants).find(id => matchByName(gd.plants[id]?.seed?.name));
-      case 'Egg':
-        return Object.keys(gd.eggs).find(id => matchByName(gd.eggs[id]?.name));
-      case 'Tool':
-        return Object.keys(gd.items).find(id => matchByName(gd.items[id]?.name));
-      case 'Decor':
-        return Object.keys(gd.decor).find(id => matchByName(gd.decor[id]?.name));
-      default:
-        return undefined;
-    }
-  }
-
-    private populateFullCardItemOptions(cardType: FullCardType, selectedId?: string | null): void {
-      const gd = state.gameData;
-      const select = this.fullCardItemSelect;
-      this.fullCardItemLabel.textContent = this.getFullCardItemLabel(cardType);
-      select.innerHTML = '';
-
-    if (!gd) {
-      select.append(el('option', { value: '', textContent: '(loading...)' }));
-      return;
-    }
-
-      if (cardType === 'Pet') {
-        select.append(el('option', { value: '', textContent: 'Blank (no sprite)' }));
-      }
-
-      type ItemEntry = { id: string; label: string };
-    const allGroups: Array<{ groupLabel: string; primary: boolean; items: ItemEntry[] }> = [
-      {
-        groupLabel: 'Pets',
-        primary: cardType === 'Pet',
-        items: Object.entries(gd.pets).map(([id, p]) => ({ id, label: p.name })),
-      },
-      {
-        groupLabel: 'Plants',
-        primary: cardType === 'Plant',
-        items: Object.entries(gd.plants).map(([id, p]) => ({ id, label: p.plant.name })),
-      },
-      {
-        groupLabel: 'Crops',
-        primary: cardType === 'Crop',
-        items: Object.entries(gd.plants).map(([id, p]) => ({ id, label: p.crop.name })),
-      },
-      {
-        groupLabel: 'Seeds',
-        primary: cardType === 'Seed',
-        items: Object.entries(gd.plants).map(([id, p]) => ({ id, label: p.seed.name })),
-      },
-      {
-        groupLabel: 'Eggs',
-        primary: cardType === 'Egg',
-        items: Object.entries(gd.eggs).map(([id, p]) => ({ id, label: p.name })),
-      },
-      {
-        groupLabel: 'Tools',
-        primary: cardType === 'Tool',
-        items: Object.entries(gd.items).map(([id, p]) => ({ id, label: p.name })),
-      },
-      {
-        groupLabel: 'Decor',
-        primary: cardType === 'Decor',
-        items: Object.entries(gd.decor).map(([id, p]) => ({ id, label: p.name })),
-      },
-    ];
-
-    // Primary group first, then all others
-    allGroups.sort((a, b) => (b.primary ? 1 : 0) - (a.primary ? 1 : 0));
-
-    let firstItem: ItemEntry | null = null;
-    for (const group of allGroups) {
-      group.items.sort((a, b) => a.label.localeCompare(b.label));
-      if (group.items.length === 0) continue;
-      const optgroup = document.createElement('optgroup');
-      optgroup.label = group.groupLabel;
-      for (const item of group.items) {
-        optgroup.append(el('option', { value: item.id, textContent: item.label }));
-      }
-      select.append(optgroup);
-      if (!firstItem) firstItem = group.items[0];
-    }
-
-      if (selectedId !== undefined && selectedId !== null) {
-        select.value = selectedId;
-      } else if (firstItem) {
-        select.value = firstItem.id;
-      }
-    }
 
   private populateAbilityOptions(selectedIds: string[] = []): void {
     const gd = state.gameData;
@@ -1479,97 +1596,6 @@ export class App {
       const optEl = Array.from(addSelect.options).find(o => o.value === id);
       const name = optEl?.textContent ?? id;
       this.fullCardPetAbilityChips.append(this.createAbilityChip(id, name));
-    }
-  }
-
-  private populateWeatherOptions(selectedId?: string): void {
-    const select = this.fullCardPetWeatherSelect;
-    select.innerHTML = '';
-    const gd = state.gameData;
-    if (!gd) {
-      select.append(el('option', { value: '', textContent: '(loading...)' }));
-      return;
-    }
-    select.append(el('option', { value: '', textContent: 'None' }));
-    const weathers = Object.entries(gd.weathers).map(([id, w]) => ({
-      id,
-      name: w?.name ?? id,
-    }));
-    weathers.sort((a, b) => a.name.localeCompare(b.name));
-    for (const weather of weathers) {
-      select.append(el('option', { value: weather.id, textContent: weather.name }));
-    }
-    select.value = selectedId ?? '';
-  }
-
-  private resolveFallbackPetIdByRarity(rarity: FullCardRarity): string | null {
-    const gd = state.gameData;
-    if (!gd) return null;
-    const entries = Object.entries(gd.pets);
-    if (entries.length === 0) return null;
-    const match = entries.find(([, pet]) => (pet?.rarity as FullCardRarity | undefined) === rarity);
-    return (match?.[0] ?? entries[0][0]) || null;
-  }
-
-  private buildSpriteUrl(spriteId: string): string | null {
-    if (!spriteId) return null;
-    if (spriteId.startsWith('sprite/')) {
-      const [, cat, ...rest] = spriteId.split('/');
-      const name = rest.join('/');
-      if (cat && name) {
-        const version = state.gameVersion ?? '';
-        return `https://mg-api.ariedam.fr/assets/sprites/${cat}/${name}.png${version ? `?v=${version}` : ''}`;
-      }
-    }
-    return null;
-  }
-
-  private populateDietOptions(selectedIds: string[] = []): void {
-    const container = this.fullCardPetDietContainer;
-    container.innerHTML = '';
-    const gd = state.gameData;
-    if (!gd) {
-      container.append(el('span', { textContent: '(loading...)', style: 'font-size:12px;color:var(--muted)' }));
-      return;
-    }
-    const plants = Object.entries(gd.plants).map(([id, p]) => ({
-      id,
-      name: p?.crop?.name ?? id,
-      spriteId: p?.crop?.sprite ?? null as string | null,
-    }));
-    plants.sort((a, b) => a.name.localeCompare(b.name));
-    const selected = new Set(selectedIds);
-    for (const plant of plants) {
-      const checkbox = el('input', { type: 'checkbox', value: plant.id }) as HTMLInputElement;
-      checkbox.dataset.dietId = plant.id;
-      checkbox.checked = selected.has(plant.id);
-      checkbox.addEventListener('change', () => this.scheduleFullCardRerender());
-
-      const preview = document.createElement('canvas');
-      preview.width = 32;
-      preview.height = 32;
-      preview.className = 'full-card-diet-preview';
-
-      if (plant.spriteId) {
-        const url = this.buildSpriteUrl(plant.spriteId);
-        if (url) {
-          spriteLoader.load(url).then(img => {
-            const pCtx = preview.getContext('2d');
-            if (!pCtx) return;
-            const scale = Math.min(32 / img.naturalWidth, 32 / img.naturalHeight);
-            const dw = img.naturalWidth * scale;
-            const dh = img.naturalHeight * scale;
-            pCtx.drawImage(img, (32 - dw) / 2, (32 - dh) / 2, dw, dh);
-          }).catch(() => {});
-        }
-      }
-
-      const label = el('label', { className: 'full-card-diet-item' }, [
-        preview,
-        checkbox,
-        document.createTextNode(plant.name),
-      ]);
-      container.append(label);
     }
   }
 
@@ -1655,237 +1681,154 @@ export class App {
     return entries;
   }
 
-  private syncFullCardItemDefaults(): void {
-    const slot = getActiveSlot();
-    if (slot.type !== 'full-card' || !slot.fullCardData) return;
-    const cardType = slot.fullCardData.cardType;
-    const itemId = this.fullCardItemSelect.value;
-    if (!itemId && cardType !== 'Pet') return;
-
-    const defaultName = this.getDefaultItemName(cardType, itemId);
-    const currentName = this.fullCardNameInput.value.trim();
-    if (!currentName || currentName === slot.fullCardData.itemName) {
-      if (defaultName) this.fullCardNameInput.value = defaultName;
-    }
-
-    if (cardType === 'Pet') {
-      const petId = itemId || this.resolveFallbackPetIdByRarity(
-        (this.fullCardRaritySelect.value as FullCardRarity) || 'Common',
-      ) || '';
-      const pet = state.gameData?.pets?.[petId];
-      if (pet) {
-        const hungerMax = pet.coinsToFullyReplenishHunger;
-        this.fullCardPetHungerInput.max = String(hungerMax);
-        if (!this.fullCardPetHungerInput.value || Number(this.fullCardPetHungerInput.value) === 0) {
-          this.fullCardPetHungerInput.value = String(hungerMax);
-          this.fullCardPetHungerDisplay.textContent = String(hungerMax);
-        }
-        const xpMax = Math.round((pet.hoursToMature ?? 30) * 3600);
-        this.fullCardPetXpInput.max = String(xpMax);
-        const currentChipIds = Array.from(this.fullCardPetAbilityChips.querySelectorAll<HTMLElement>('[data-ability-id]'))
-          .map(c => c.dataset.abilityId as string)
-          .filter(Boolean);
-        const hasCustom = this.fullCardPetAbilityList.childElementCount > 0;
-        const fallback = Object.keys(pet.innateAbilityWeights ?? {});
-        this.populateAbilityOptions((currentChipIds.length > 0 || hasCustom) ? currentChipIds : fallback);
-        if (!this.fullCardRaritySelect.value) {
-          this.fullCardRaritySelect.value = pet.rarity as FullCardRarity;
-        }
-        this.populateWeatherOptions(this.fullCardPetWeatherSelect.value || '');
-        if (!this.fullCardPetWeatherSelect.value) {
-          this.fullCardPetWeatherSelect.value = '';
-        }
-        const dietChecked = Array.from(this.fullCardPetDietContainer.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked'))
-          .map(cb => cb.dataset.dietId as string)
-          .filter(Boolean);
-        this.populateDietOptions(dietChecked);
-      }
-    }
-
-    if (cardType === 'Seed') {
-      const seed = state.gameData?.plants?.[itemId]?.seed;
-      if (seed && !this.fullCardSeedRaritySelect.value) {
-        this.fullCardSeedRaritySelect.value = seed.rarity as FullCardRarity;
-      }
-    }
-  }
-
-
   /** Populate full-card form fields from a slot's fullCardData. */
   private syncFullCardUI(slot: Slot): void {
     const data = slot.fullCardData;
     if (!data) return;
 
     this.fullCardTypeLabel.textContent = `${data.cardType} Card`;
-      this.populateFullCardItemOptions(data.cardType, data.itemId ?? null);
-      if (data.itemId == null) {
-        const resolved = this.resolveFullCardItemId(data.cardType, data.itemName);
-        if (resolved) data.itemId = resolved;
-      }
-      if (data.itemId !== undefined && data.itemId !== null) this.fullCardItemSelect.value = data.itemId;
     this.fullCardNameInput.value = data.itemName;
     this.fullCardLockedCheck.checked = data.isLocked ?? false;
 
-    const isPet    = data.cardType === 'Pet';
-    const isPlant  = data.cardType === 'Plant';
-    const isCrop   = data.cardType === 'Crop';
-    const isSimple = data.cardType === 'Seed' || data.cardType === 'Egg' || data.cardType === 'Tool' || data.cardType === 'Decor';
+    const isPet   = data.cardType === 'Pet';
+    const isPlant = data.cardType === 'Plant';
+    const isCrop  = data.cardType === 'Crop';
+    const isSeed  = data.cardType === 'Seed';
+    const isEgg   = data.cardType === 'Egg';
+    const isTool  = data.cardType === 'Tool';
+    const isDecor = data.cardType === 'Decor';
 
-    this.fullCardPetSection.style.display    = isPet    ? '' : 'none';
-    this.fullCardPlantSection.style.display  = isPlant  ? '' : 'none';
-    this.fullCardSimpleSection.style.display = isSimple ? '' : 'none';
-    this.fullCardCropSection.style.display   = isCrop || isPlant ? '' : 'none';
+    this.fullCardPetSection.style.display   = isPet   ? '' : 'none';
+    this.fullCardPlantSection.style.display = isPlant ? '' : 'none';
+    this.fullCardCropSection.style.display  = isCrop  ? '' : 'none';
+    this.fullCardSeedSection.style.display  = isSeed  ? '' : 'none';
+    this.fullCardEggSection.style.display   = isEgg   ? '' : 'none';
+    this.fullCardToolSection.style.display  = isTool  ? '' : 'none';
+    this.fullCardDecorSection.style.display = isDecor ? '' : 'none';
 
     if (isPet) {
-      const petId = data.itemId || this.resolveFallbackPetIdByRarity(
-        (data.rarity as FullCardRarity) || 'Common',
-      ) || '';
-      const pet = state.gameData?.pets?.[petId];
-      this.fullCardRaritySelect.value = data.rarity ?? (pet?.rarity as FullCardRarity) ?? 'Common';
-
-      // XP slider
-      const xpMax = Math.round((pet?.hoursToMature ?? 30) * 3600);
-      this.fullCardPetXpInput.max = String(xpMax);
-      const xpVal = data.petXp ?? 0;
-      this.fullCardPetXpInput.value = String(xpVal);
-      this.fullCardPetXpDisplay.textContent = formatXpTime(xpVal);
-
-      // Max STR slider (convert targetScale → 80–100)
-      const maxScale = pet?.maxScale ?? 1;
-      const targetScale = data.petTargetScale ?? 1;
-      const t = maxScale > 1 ? Math.max(0, Math.min(1, (targetScale - 1) / (maxScale - 1))) : 0;
-      const displayStr = Math.floor(80 + 20 * t);
-      this.fullCardPetScaleInput.value = String(displayStr);
-      this.fullCardPetMaxStrDisplay.textContent = String(displayStr);
-
-      // Hunger slider
-      const hungerMax = pet?.coinsToFullyReplenishHunger ?? 1000;
-      this.fullCardPetHungerInput.max = String(hungerMax);
-      const hungerVal = data.petHunger ?? hungerMax;
-      this.fullCardPetHungerInput.value = String(hungerVal);
-      this.fullCardPetHungerDisplay.textContent = String(hungerVal);
-
-      const entryFallback: FullCardAbilityEntry[] = data.petAbilityEntries
-        ?? (data.petAbilities
-          ? data.petAbilities.map(id => ({ kind: 'game', id }))
-          : (pet ? Object.keys(pet.innateAbilityWeights ?? {}).map(id => ({ kind: 'game', id })) : []));
-      const gameIds = entryFallback
-        .filter(entry => entry.kind === 'game' && entry.id)
-        .map(entry => entry.id as string);
+      this.fullCardRaritySelect.value = data.rarity ?? 'Common';
+      this.fullCardPetCurrentStrInput.value = data.petStr ?? '50';
+      this.fullCardPetMaxStrInput.value = data.petMaxStr ?? '80';
+      const strPct = data.petStrPct ?? 0;
+      this.fullCardPetStrPctInput.value = String(strPct);
+      this.fullCardPetStrPctDisplay.textContent = `${strPct}%`;
+      const hungerPct = data.petHungerPct ?? 100;
+      this.fullCardPetHungerPctInput.value = String(hungerPct);
+      this.fullCardPetHungerPctDisplay.textContent = `${hungerPct}%`;
+      this.fullCardPetAgeInput.value = data.petAge ?? '';
+      this.fullCardPetWeightInput.value = data.petWeight ?? '';
+      this.fullCardPetSellInput.value = data.petSellPrice ?? '';
+      this.fcDietSlots = (data.petDietSlots ?? []).map(s => ({ ...s }));
+      this.renderSlotListInContainer(this.fullCardDietSlotList, 'diet');
+      const entries = data.petAbilityEntries ?? [];
+      const gameIds = entries.filter(e => e.kind === 'game' && e.id).map(e => e.id as string);
       this.populateAbilityOptions(gameIds);
-      this.renderCustomAbilityRows(entryFallback);
-      this.populateWeatherOptions(data.petWeatherId ?? '');
-      this.fullCardPetWeatherSelect.value = data.petWeatherId ?? '';
-      const dietIds = data.petDietIds ?? [];
-      this.populateDietOptions(dietIds);
+      this.renderCustomAbilityRows(entries);
     }
 
     if (isPlant) {
       this.fullCardPlantSlotCountInput.value = String(data.plantSlotCount ?? 1);
       this.fullCardPlantMaturedSlotsInput.value = String(data.plantMaturedSlots ?? 0);
       this.fullCardPlantMaturityInput.value = String(data.plantMaturityPct ?? 0);
+      this.fcCropSlots = (data.cropSlots ?? []).map(s => ({ ...s }));
+      this.renderSlotListInContainer(this.fullCardPlantCropSlotList, 'crop');
+      this.fullCardPlantCropWeightInput.value = data.cropWeight ?? '';
+      this.fullCardPlantCropSellInput.value = data.cropSellPrice ?? '';
     }
 
-    if (isCrop || isPlant) {
-      this.fullCardScaleInput.value = String(data.itemScale ?? 1);
+    if (isCrop) {
+      this.fcCropSlots = (data.cropSlots ?? []).map(s => ({ ...s }));
+      this.renderSlotListInContainer(this.fullCardCropSlotList, 'crop');
+      this.fullCardCropWeightInput.value = data.cropWeight ?? '';
+      this.fullCardCropSellInput.value = data.cropSellPrice ?? '';
     }
 
-    if (isSimple) {
-      this.fullCardCountInput.value = data.itemCount ?? '';
-      const isSeed = data.cardType === 'Seed';
-      this.fullCardSeedRarityRow.style.display = isSeed ? '' : 'none';
-      if (isSeed) {
-        const seedRarity = data.seedRarity
-          ?? (state.gameData?.plants?.[data.itemId ?? '']?.seed?.rarity as FullCardRarity | undefined)
-          ?? 'Common';
-        this.fullCardSeedRaritySelect.value = seedRarity;
-      }
+    if (isSeed) {
+      this.fullCardSeedCountInput.value = data.itemCount ?? '';
+      this.fullCardSeedRaritySelect.value = data.seedRarity ?? 'Common';
     }
 
-    // Item style
-    this.fullCardItemSpriteInput.value = data.itemSpriteOverride ?? '';
-    const itemMutations = data.itemMutations ?? slot.mutations ?? [];
-    const mutationSet = new Set(itemMutations);
+    if (isEgg) {
+      this.fullCardEggCountInput.value = data.itemCount ?? '';
+      this.fcEggHatchSlots = (data.eggHatchSlots ?? []).map(s => ({ ...s }));
+      this.renderSlotListInContainer(this.fullCardEggHatchSlotList, 'egg');
+      this.fullCardEggGoldRateInput.value = data.eggGoldRateText ?? '0%';
+      this.fullCardEggRainbowRateInput.value = data.eggRainbowRateText ?? '0%';
+    }
+
+    if (isTool) {
+      this.fullCardToolCountInput.value = data.itemCount ?? '';
+      this.fullCardToolDescInput.value = data.toolDescription ?? '';
+    }
+
+    if (isDecor) {
+      this.fullCardDecorCountInput.value = data.itemCount ?? '';
+    }
+
+    // Mutations
+    const mutationSet = new Set(slot.mutations ?? []);
     for (const chip of Array.from(this.fullCardItemMutationsContainer.querySelectorAll<HTMLElement>('[data-mutation-id]'))) {
       chip.classList.toggle('active', mutationSet.has(chip.dataset.mutationId ?? ''));
     }
-    const itemTint = data.itemTint ?? { color: '#ffffff', opacity: 0 };
-    this.fullCardItemTintColor.value = itemTint.color ?? '#ffffff';
-    this.fullCardItemTintOpacity.value = String(itemTint.opacity ?? 0);
-    this.fullCardItemScaleInput.value = String(data.itemVisualScale ?? 1);
-    this.fullCardItemRotationInput.value = String(data.itemRotation ?? 0);
-    const itemOptions = data.itemOptions ?? { icons: true, overlays: true };
-    this.fullCardItemIconsCheck.checked = itemOptions.icons ?? true;
-    this.fullCardItemOverlaysCheck.checked = itemOptions.overlays ?? true;
   }
 
   /** Read current form state into a FullCardData object (cardType is immutable). */
   private readFullCardDataFromUI(base: FullCardData): FullCardData {
     const cardType = base.cardType;
-      const selectedId = this.fullCardItemSelect.value;
-      const result: FullCardData = {
-        cardType,
-        itemName:  this.fullCardNameInput.value || base.itemName,
-        itemId:    selectedId === '' ? '' : (selectedId || base.itemId),
-        isLocked:  this.fullCardLockedCheck.checked,
-      };
+    const result: FullCardData = {
+      cardType,
+      itemName: this.fullCardNameInput.value || base.itemName,
+      isLocked: this.fullCardLockedCheck.checked,
+    };
+
     if (cardType === 'Pet') {
       result.rarity = (this.fullCardRaritySelect.value as FullCardRarity) || 'Common';
-      result.petXp = parseFloat(this.fullCardPetXpInput.value) || 0;
-      // Convert Max STR slider (80–100) back to targetScale
-      const petId = this.fullCardItemSelect.value || this.resolveFallbackPetIdByRarity(result.rarity) || '';
-      const maxScale = state.gameData?.pets?.[petId]?.maxScale ?? 1;
-      const strVal = parseInt(this.fullCardPetScaleInput.value) || 80;
-      const t = (strVal - 80) / 20;
-      result.petTargetScale = 1 + t * (maxScale - 1);
-      result.petHunger = parseFloat(this.fullCardPetHungerInput.value) || 0;
-      result.petWeatherId = this.fullCardPetWeatherSelect.value || '';
-      const dietIds = Array.from(this.fullCardPetDietContainer.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked'))
-        .map(cb => cb.dataset.dietId as string)
-        .filter(Boolean);
-      result.petDietIds = dietIds;
+      result.petStr = this.fullCardPetCurrentStrInput.value;
+      result.petMaxStr = this.fullCardPetMaxStrInput.value;
+      result.petStrPct = parseInt(this.fullCardPetStrPctInput.value) || 0;
+      result.petHungerPct = parseInt(this.fullCardPetHungerPctInput.value) || 100;
+      result.petAge = this.fullCardPetAgeInput.value;
+      result.petWeight = this.fullCardPetWeightInput.value;
+      result.petSellPrice = this.fullCardPetSellInput.value;
+      result.petDietSlots = this.fcDietSlots.map(s => ({ ...s }));
       const selectedGameIds = Array.from(this.fullCardPetAbilityChips.querySelectorAll<HTMLElement>('[data-ability-id]'))
         .map(c => c.dataset.abilityId as string)
         .filter(Boolean);
       const customEntries = this.readCustomAbilityEntries();
-      result.petAbilities = selectedGameIds;
       result.petAbilityEntries = [
         ...selectedGameIds.map(id => ({ kind: 'game' as const, id })),
         ...customEntries,
       ];
-    } else if (cardType === 'Crop' || cardType === 'Plant') {
-      result.itemScale = parseFloat(this.fullCardScaleInput.value) || 1;
-      if (cardType === 'Plant') {
-        const slotCount = Math.max(1, parseInt(this.fullCardPlantSlotCountInput.value) || 1);
-        const maturedSlots = Math.max(0, Math.min(slotCount, parseInt(this.fullCardPlantMaturedSlotsInput.value) || 0));
-        const maturityPct = Math.max(0, Math.min(100, parseInt(this.fullCardPlantMaturityInput.value) || 0));
-        result.plantSlotCount = slotCount;
-        result.plantMaturedSlots = maturedSlots;
-        result.plantMaturityPct = maturityPct;
-      }
-    } else {
-      result.itemCount = this.fullCardCountInput.value;
-      if (cardType === 'Seed') {
-        result.seedRarity = (this.fullCardSeedRaritySelect.value as FullCardRarity) || 'Common';
-      }
+    } else if (cardType === 'Plant') {
+      const slotCount = Math.max(1, parseInt(this.fullCardPlantSlotCountInput.value) || 1);
+      const maturedSlots = Math.max(0, Math.min(slotCount, parseInt(this.fullCardPlantMaturedSlotsInput.value) || 0));
+      const maturityPct = Math.max(0, Math.min(100, parseInt(this.fullCardPlantMaturityInput.value) || 0));
+      result.plantSlotCount = slotCount;
+      result.plantMaturedSlots = maturedSlots;
+      result.plantMaturityPct = maturityPct;
+      result.cropSlots = this.fcCropSlots.map(s => ({ ...s }));
+      result.cropWeight = this.fullCardPlantCropWeightInput.value;
+      result.cropSellPrice = this.fullCardPlantCropSellInput.value;
+    } else if (cardType === 'Crop') {
+      result.cropSlots = this.fcCropSlots.map(s => ({ ...s }));
+      result.cropWeight = this.fullCardCropWeightInput.value;
+      result.cropSellPrice = this.fullCardCropSellInput.value;
+    } else if (cardType === 'Seed') {
+      result.itemCount = this.fullCardSeedCountInput.value;
+      result.seedRarity = (this.fullCardSeedRaritySelect.value as FullCardRarity) || 'Common';
+    } else if (cardType === 'Egg') {
+      result.itemCount = this.fullCardEggCountInput.value;
+      result.eggHatchSlots = this.fcEggHatchSlots.map(s => ({ ...s }));
+      result.eggGoldRateText = this.fullCardEggGoldRateInput.value;
+      result.eggRainbowRateText = this.fullCardEggRainbowRateInput.value;
+    } else if (cardType === 'Tool') {
+      result.itemCount = this.fullCardToolCountInput.value;
+      result.toolDescription = this.fullCardToolDescInput.value;
+    } else if (cardType === 'Decor') {
+      result.itemCount = this.fullCardDecorCountInput.value;
     }
 
-    const spriteOverride = this.fullCardItemSpriteInput.value.trim();
-    if (spriteOverride) result.itemSpriteOverride = spriteOverride;
-    const itemMutations = Array.from(this.fullCardItemMutationsContainer.querySelectorAll<HTMLElement>('.full-card-mutation-chip.active'))
-      .map(chip => chip.dataset.mutationId as string)
-      .filter(Boolean);
-    result.itemMutations = itemMutations;
-    result.itemTint = {
-      color: this.fullCardItemTintColor.value || '#ffffff',
-      opacity: parseFloat(this.fullCardItemTintOpacity.value) || 0,
-    };
-    result.itemVisualScale = parseFloat(this.fullCardItemScaleInput.value) || 1;
-    result.itemRotation = parseFloat(this.fullCardItemRotationInput.value) || 0;
-    result.itemOptions = {
-      icons: this.fullCardItemIconsCheck.checked,
-      overlays: this.fullCardItemOverlaysCheck.checked,
-    };
     return result;
   }
 
@@ -1940,18 +1883,12 @@ export class App {
     const layerResults = await Promise.allSettled([
       this.loadSpriteLayer(`${cardType}CardBottom`, `${apiBase}/${cardType}CardBottom.png${v}`),
       this.loadSpriteLayer(`${cardType}CardMiddle`, `${apiBase}/${cardType}CardMiddle.png${v}`),
-      this.loadSpriteLayer('CardTop',               `${apiBase}/CardTop.png${v}`),
     ]);
 
-    // The middle layer (index 1) is a grayscale ribbon; tint by rarity.
-    // If rarity is missing or Common, prefer the type tint so each card stays distinct.
-    const rarity = resolveCardRarity(data);
-    const bannerTint = (rarity && rarity !== 'Common' && RARITY_BANNER_TINTS[rarity])
-      ?? CARD_MIDDLE_TINTS[cardType];
-    const layers: LayerSrc[] = layerResults.flatMap((r, idx) => {
+    // Layers drawn as-is — card PNG sprites are pre-colored per type, no JS tinting.
+    const layers: LayerSrc[] = layerResults.flatMap((r) => {
       if (r.status !== 'fulfilled' || r.value === null) return [];
-      const src = r.value;
-      return [idx === 1 && bannerTint ? tintLayer(src, bannerTint) : src];
+      return [r.value];
     });
 
     if (layers.length === 0) {
@@ -2035,7 +1972,6 @@ export class App {
       const version = this.getUiSpriteVersion();
       const v = version ? `?v=${version}` : '';
       const base = 'https://mg-api.ariedam.fr/assets/sprites/ui';
-      const topUrl = `${base}/CardTop.png${v}`;
       const CARD_TYPES: { key: string; label: string }[] = [
         { key: 'Plant', label: 'Plant Card' },
         { key: 'Pet',   label: 'Pet Card' },
@@ -2053,7 +1989,7 @@ export class App {
             id: `cardpreset/${cardType.key}`,
             label: cardType.label,
             thumbUrl: bottomUrl,
-            cardPresetUrls: [bottomUrl, middleUrl, topUrl],
+            cardPresetUrls: [bottomUrl, middleUrl],
           });
         } else {
           // full-cards: same layer URLs for thumbnail, but fullCardType signals onSelect
@@ -2061,7 +1997,7 @@ export class App {
             id: `full-card/${cardType.key}`,
             label: cardType.label,
             thumbUrl: bottomUrl,
-            cardPresetUrls: [bottomUrl, middleUrl, topUrl],
+            cardPresetUrls: [bottomUrl, middleUrl],
             fullCardType: cardType.key,
           });
         }
