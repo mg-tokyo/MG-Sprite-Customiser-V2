@@ -1126,7 +1126,7 @@ export async function drawFullCardStats(
     const isMax      = maxStr > 0 && currentStr >= maxStr;
 
     drawProgressBarRow(ctx, {
-      label: 'Strength',
+      label: data.petStrLabel?.trim() || 'Strength',
       value: barValue,
       max: 1,
       color: isMax ? '#25AAE2' : '#0067B4',
@@ -1145,7 +1145,7 @@ export async function drawFullCardStats(
     const leftPad   = rowWidth * 0.35 - 55;
     const rightPad  = dietSlots.length * 34 + 12; // step(34) * N + gap
     drawProgressBarRow(ctx, {
-      label: 'Hunger',
+      label: data.petHungerLabel?.trim() || 'Hunger',
       value: hungerPct,
       max: 100,
       color: '#5EAC46',
@@ -1199,8 +1199,8 @@ export async function drawFullCardStats(
 
   // ---- Lock icon ----
   if (lockIcon) {
-    const r = -3;
-    const a = -4;
+    const r = 4;
+    const a = 4;
     const cx = cardW / 2 - r - LOCK_SIZE / 2;
     const cy = -cardH / 2 + a + LOCK_SIZE / 2;
     drawImageCentered(ctx, lockIcon, cx, cy, LOCK_SIZE);

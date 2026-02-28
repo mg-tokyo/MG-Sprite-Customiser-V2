@@ -12,6 +12,10 @@
   --border: #e3d7c8;
   --canvas-bg: #ffffff;
   --input-bg: #ffffff;
+  --surface-1: #fff8ee;
+  --surface-2: #ede5d8;
+  --surface-3: #e3d7c8;
+  --hover-bg: rgba(0,0,0,0.07);
 }
 
 [data-theme="dark"] {
@@ -24,6 +28,10 @@
   --border: #3d342d;
   --canvas-bg: #2a231e;
   --input-bg: #3d342d;
+  --surface-1: #251f1c;
+  --surface-2: #2e2620;
+  --surface-3: #3d342d;
+  --hover-bg: rgba(255,255,255,0.07);
 }
 
 body {
@@ -1017,3 +1025,19 @@ button.danger:hover { background: #ff3333; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* ── Scenes ── */
+.scenes-section { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); margin-top: 8px; }
+.scenes-heading { margin: 0; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.scenes-save-row { display: flex; gap: 6px; }
+.scene-name-input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--input-bg); color: var(--ink); font-size: 13px; }
+.scenes-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
+.scene-item { display: flex; align-items: center; gap: 8px; background: var(--surface-2); border-radius: 8px; padding: 6px 10px; }
+.scene-item-info { flex: 1; min-width: 0; }
+.scene-item-name { font-size: 13px; font-weight: 600; color: var(--ink); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scene-item-date { font-size: 11px; color: var(--muted); }
+.scene-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.btn-sm { font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer; background: var(--surface-3); border: 1px solid var(--border); color: var(--ink); }
+.btn-sm:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-sm.danger-sm:hover { background: #c0392b; border-color: #c0392b; color: #fff; }
+.scenes-import-row { display: flex; }

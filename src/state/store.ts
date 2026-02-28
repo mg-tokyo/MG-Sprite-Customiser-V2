@@ -61,6 +61,9 @@ export interface FullCardData {
   seedRarity?: FullCardRarity;
   // Whether the game item shows as locked (padlock icon on portrait)
   isLocked?: boolean;
+  // Custom bar labels (pet card only)
+  petStrLabel?: string;    // defaults to 'Strength' if blank
+  petHungerLabel?: string; // defaults to 'Hunger' if blank
 }
 
 export interface TextData {
@@ -176,7 +179,7 @@ export function getActiveSlot(): Slot {
   return state.slots[state.activeSlotIndex];
 }
 
-function pushUndo(): void {
+export function pushUndo(): void {
   state.undoStack.push(JSON.parse(JSON.stringify(state.slots)));
   if (state.undoStack.length > MAX_UNDO) state.undoStack.shift();
   state.redoStack = [];

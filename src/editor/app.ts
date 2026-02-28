@@ -1,4 +1,5 @@
-import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlot, reorderSlots } from '../state/store';
+import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlot, reorderSlots, pushUndo } from '../state/store';
+import { listSavedScenes, saveNamedScene, deleteNamedScene, exportSceneJson, importSceneJson } from '../state/persistence';
 import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity, FullCardAbilityEntry, FullCardSpriteSlot } from '../state/store';
 import { initTheme, toggleTheme } from './theme';
 import { FILTERS } from '../renderer/mutation-defs';
@@ -145,6 +146,10 @@ export class App {
   private addTextBtn!: HTMLButtonElement;
   private textRenderDebounce: ReturnType<typeof setTimeout> | null = null;
 
+  // ── Scenes UI ──
+  private scenesListEl!: HTMLElement;
+  private sceneNameInput!: HTMLInputElement;
+
   // ── Full Card layer UI ──
   private fullCardControls!: HTMLElement;
   private fullCardTypeLabel!: HTMLElement;
@@ -194,6 +199,9 @@ export class App {
   private fullCardEggHatchSlotList!: HTMLElement;
   private fullCardEggGoldRateInput!: HTMLInputElement;
   private fullCardEggRainbowRateInput!: HTMLInputElement;
+  // Pet bar label inputs
+  private fullCardPetStrLabelInput!: HTMLInputElement;
+  private fullCardPetHungerLabelInput!: HTMLInputElement;
   // Tool fields
   private fullCardToolSection!: HTMLElement;
   private fullCardToolCountInput!: HTMLInputElement;
@@ -442,6 +450,7 @@ export class App {
       this.timelineBar,
       el('div', { className: 'actions' }, [this.downloadBtn, clearBtn, resetBtn]),
       this.downloadProgress,
+      this.buildScenesSection(),
     ]);
 
     // ── Right Panel: Preview ──
@@ -1353,6 +1362,11 @@ export class App {
     this.fullCardPetSellInput = el('input', { type: 'text', placeholder: '0' }) as HTMLInputElement;
     this.fullCardPetSellInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
+    this.fullCardPetStrLabelInput = el('input', { type: 'text', placeholder: 'Strength' }) as HTMLInputElement;
+    this.fullCardPetStrLabelInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    this.fullCardPetHungerLabelInput = el('input', { type: 'text', placeholder: 'Hunger' }) as HTMLInputElement;
+    this.fullCardPetHungerLabelInput.addEventListener('input', () => this.scheduleFullCardRerender());
+
     this.fullCardDietSlotList = el('div', { className: 'full-card-slot-list' });
 
     // Ability chips
@@ -1414,6 +1428,8 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Age' }), this.fullCardPetAgeInput]),
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Weight' }), this.fullCardPetWeightInput]),
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Sell Price' }), this.fullCardPetSellInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Str label' }), this.fullCardPetStrLabelInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Hunger label' }), this.fullCardPetHungerLabelInput]),
       el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Diet' }), this.fullCardDietSlotList]),
       el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Abilities' }), abilityWrap]),
     ]);
@@ -1719,6 +1735,8 @@ export class App {
       this.fullCardPetAgeInput.value = data.petAge ?? '';
       this.fullCardPetWeightInput.value = data.petWeight ?? '';
       this.fullCardPetSellInput.value = data.petSellPrice ?? '';
+      this.fullCardPetStrLabelInput.value = data.petStrLabel ?? '';
+      this.fullCardPetHungerLabelInput.value = data.petHungerLabel ?? '';
       this.fcDietSlots = (data.petDietSlots ?? []).map(s => ({ ...s }));
       this.renderSlotListInContainer(this.fullCardDietSlotList, 'diet');
       const entries = data.petAbilityEntries ?? [];
@@ -1791,6 +1809,8 @@ export class App {
       result.petAge = this.fullCardPetAgeInput.value;
       result.petWeight = this.fullCardPetWeightInput.value;
       result.petSellPrice = this.fullCardPetSellInput.value;
+      result.petStrLabel = this.fullCardPetStrLabelInput.value || undefined;
+      result.petHungerLabel = this.fullCardPetHungerLabelInput.value || undefined;
       result.petDietSlots = this.fcDietSlots.map(s => ({ ...s }));
       const selectedGameIds = Array.from(this.fullCardPetAbilityChips.querySelectorAll<HTMLElement>('[data-ability-id]'))
         .map(c => c.dataset.abilityId as string)
@@ -2993,6 +3013,116 @@ export class App {
     const hasGif = state.slots.some(s => s.visible && s.isAnimated && s.gifFrames && s.gifFrames.length > 1);
     this.downloadBtn.textContent = hasGif ? 'Download GIF' : 'Download PNG';
   }
+
+  // ── Scenes section ──────────────────────────────────────────────────────────
+
+  private buildScenesSection(): HTMLElement {
+    this.sceneNameInput = el('input', {
+      type: 'text',
+      className: 'scene-name-input',
+      placeholder: 'Scene name\u2026',
+    }) as HTMLInputElement;
+
+    const saveBtn = el('button', { className: 'secondary', textContent: 'Save' }) as HTMLButtonElement;
+    saveBtn.addEventListener('click', () => {
+      const name = this.sceneNameInput.value.trim();
+      saveNamedScene(name || 'Untitled');
+      this.sceneNameInput.value = '';
+      this.refreshScenesList();
+    });
+
+    this.scenesListEl = el('div', { className: 'scenes-list' });
+
+    const importFileInput = el('input', { type: 'file', accept: '.json' }) as HTMLInputElement;
+    importFileInput.style.display = 'none';
+    const importBtn = el('button', { className: 'secondary', textContent: 'Import JSON' }) as HTMLButtonElement;
+    importBtn.addEventListener('click', () => importFileInput.click());
+    importFileInput.addEventListener('change', () => {
+      const file = importFileInput.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const scene = importSceneJson(reader.result as string);
+        if (!scene) {
+          alert('Invalid scene file');
+          return;
+        }
+        pushUndo();
+        state.slots = scene.slots;
+        state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
+        bus.emit(Events.SLOT_CHANGED, null);
+        bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
+        bus.emit(Events.RENDER_REQUEST, null);
+      };
+      reader.readAsText(file);
+      importFileInput.value = '';
+    });
+
+    const section = el('div', { className: 'scenes-section' }, [
+      el('h3', { className: 'scenes-heading', textContent: 'Scenes' }),
+      el('div', { className: 'scenes-save-row' }, [this.sceneNameInput, saveBtn]),
+      this.scenesListEl,
+      el('div', { className: 'scenes-import-row' }, [importBtn, importFileInput]),
+    ]);
+
+    this.refreshScenesList();
+    return section;
+  }
+
+  private refreshScenesList(): void {
+    this.scenesListEl.innerHTML = '';
+    const scenes = listSavedScenes();
+    if (scenes.length === 0) {
+      const empty = el('div', { style: 'font-size:12px;color:var(--muted);padding:4px 2px' });
+      empty.textContent = 'No saved scenes yet.';
+      this.scenesListEl.append(empty);
+      return;
+    }
+
+    scenes.forEach((scene, index) => {
+      const date = new Date(scene.savedAt);
+      const dateStr = date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+
+      const loadBtn = el('button', { className: 'btn-sm', textContent: 'Load' }) as HTMLButtonElement;
+      loadBtn.addEventListener('click', () => {
+        pushUndo();
+        state.slots = scene.slots;
+        state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
+        bus.emit(Events.SLOT_CHANGED, null);
+        bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
+        bus.emit(Events.RENDER_REQUEST, null);
+      });
+
+      const exportBtn = el('button', { className: 'btn-sm', textContent: 'Export' }) as HTMLButtonElement;
+      exportBtn.addEventListener('click', () => {
+        const json = exportSceneJson(index);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${scene.name.replace(/[^a-z0-9_-]/gi, '_')}.mgscene.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+
+      const deleteBtn = el('button', { className: 'btn-sm danger-sm', textContent: '\u00d7' }) as HTMLButtonElement;
+      deleteBtn.addEventListener('click', () => {
+        deleteNamedScene(index);
+        this.refreshScenesList();
+      });
+
+      const item = el('div', { className: 'scene-item' }, [
+        el('div', { className: 'scene-item-info' }, [
+          el('span', { className: 'scene-item-name', textContent: scene.name }),
+          el('span', { className: 'scene-item-date', textContent: dateStr }),
+        ]),
+        el('div', { className: 'scene-item-actions' }, [loadBtn, exportBtn, deleteBtn]),
+      ]);
+      this.scenesListEl.append(item);
+    });
+  }
+
+  // ── End scenes section ───────────────────────────────────────────────────────
 
   private metaLabel(text: string, hint: string): HTMLElement {
     const lbl = el('label', {}, []);
