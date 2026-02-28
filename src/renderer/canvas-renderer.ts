@@ -285,7 +285,7 @@ export async function renderSlot(slot: Slot, gifFrameIndex?: number): Promise<HT
   // Render cosmetic layers
   if (slot.type === 'cosmetic' && slot.cosmeticLayers) {
     const ctx = canvas.getContext('2d')!;
-    const layerOrder = ['Default', 'Mid', 'Bottom', 'Top', 'Expression', 'FaceProp', 'Status', 'Banner'];
+    const layerOrder = ['Default', 'Bottom', 'Mid', 'Top', 'Expression', 'FaceProp', 'Status', 'Banner'];
     for (const category of layerOrder) {
       const cosmeticId = slot.cosmeticLayers[category];
       if (!cosmeticId) continue;

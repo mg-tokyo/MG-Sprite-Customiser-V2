@@ -1004,7 +1004,7 @@ export class App {
 
   // ── Blobling Rig ─────────────────────────────────────────────────────────────
 
-  private static readonly BLOBLING_LAYER_ORDER = ['Default', 'Mid', 'Bottom', 'Top', 'Expression', 'FaceProp', 'Status', 'Banner'] as const;
+  private static readonly BLOBLING_LAYER_ORDER = ['Default', 'Bottom', 'Mid', 'Top', 'Expression', 'FaceProp', 'Status', 'Banner'] as const;
 
   /** Build the blobling rig controls panel (called once in buildUI). */
   private buildBloblingControls(): HTMLElement {
