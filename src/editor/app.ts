@@ -902,23 +902,36 @@ export class App {
         this.strokeColorInput.value = slot.textData.strokeColor;
         this.strokeWidthInput.value = String(slot.textData.strokeWidth);
         this.unicodeDropdown.selectById(slot.textData.unicodeStyle ?? 'none');
-        // Sync font group + item dropdowns from saved textData
+        // Sync font group + item dropdowns from saved textData.
+        // Use setItems(items, restoreId) so CustomDropdown takes the silent
+        // restore path — calling onFontGroupSelect would trigger setItems with
+        // no restoreId, auto-selecting the first item and firing onSelectCb →
+        // applyFontSelection → updateSlot → SLOT_CHANGED → infinite loop.
         const { fontFamily, fontWeight } = slot.textData;
         const mgDef  = MG_FONTS.find(f => f.family === fontFamily && f.weight === fontWeight);
         const sysDef = SYSTEM_FONTS.find(f => f.family === fontFamily);
         const gfDef  = GOOGLE_FONTS_CURATED.find(f => f.family === fontFamily);
         if (mgDef) {
           this.fontGroupDropdown.selectById('mg');
-          this.onFontGroupSelect('mg');
-          this.fontItemDropdown.selectById(mgDef.id);
+          this.fontItemDropdown.setItems(MG_FONTS.map(f => ({ id: f.id, label: f.label })), mgDef.id);
+          this.fontGoogleSearch.style.display = 'none';
+          this.fontGoogleResults.style.display = 'none';
+          this.unicodeRow.style.display = 'none';
         } else if (sysDef) {
           this.fontGroupDropdown.selectById('system');
-          this.onFontGroupSelect('system');
-          this.fontItemDropdown.selectById(sysDef.id);
+          this.fontItemDropdown.setItems(SYSTEM_FONTS.map(f => ({ id: f.id, label: f.label })), sysDef.id);
+          this.fontGoogleSearch.style.display = 'none';
+          this.fontGoogleResults.style.display = 'none';
+          this.unicodeRow.style.display = 'none';
         } else if (gfDef) {
           this.fontGroupDropdown.selectById('google');
-          this.onFontGroupSelect('google');
-          this.fontItemDropdown.selectById(gfDef.id);
+          this.fontItemDropdown.setItems(
+            [...GOOGLE_FONTS_CURATED.map(f => ({ id: f.id, label: f.label })), { id: 'gf-search', label: '\uD83D\uDD0D Search all Google Fonts\u2026' }],
+            gfDef.id,
+          );
+          this.fontGoogleSearch.style.display = 'none';
+          this.fontGoogleResults.style.display = 'none';
+          this.unicodeRow.style.display = 'none';
         }
       }
     } else {
