@@ -1043,7 +1043,9 @@ button.danger:hover { background: #ff3333; }
 .scenes-save-row { display: flex; gap: 6px; }
 .scene-name-input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--input-bg); color: var(--ink); font-size: 13px; }
 .scenes-list { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
-.scene-item { display: flex; align-items: center; gap: 8px; background: var(--surface-2); border-radius: 8px; padding: 6px 10px; }
+.scene-item { display: flex; align-items: center; gap: 8px; background: var(--surface-2); border-radius: 8px; padding: 6px 8px; }
+.scene-item-thumb { width: 48px; height: 48px; flex-shrink: 0; border-radius: 6px; background: var(--canvas-bg); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.scene-item-thumb img { width: 48px; height: 48px; object-fit: contain; image-rendering: auto; }
 .scene-item-info { flex: 1; min-width: 0; }
 .scene-item-name { font-size: 13px; font-weight: 600; color: var(--ink); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .scene-item-date { font-size: 11px; color: var(--muted); }
@@ -1052,3 +1054,11 @@ button.danger:hover { background: #ff3333; }
 .btn-sm:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn-sm.danger-sm:hover { background: #c0392b; border-color: #c0392b; color: #fff; }
 .scenes-import-row { display: flex; }
+
+/* ── Blobling Rig ── */
+.blobling-controls-section { display: flex; flex-direction: column; gap: 6px; }
+.blobling-heading { margin: 0 0 2px; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.blobling-hint { margin: 0 0 6px; font-size: 11px; color: var(--muted); }
+.blobling-cat-row { display: flex; align-items: center; gap: 8px; }
+.blobling-cat-label { font-size: 12px; font-weight: 600; color: var(--ink); min-width: 84px; flex-shrink: 0; text-align: right; }
+.blobling-anim-section { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }

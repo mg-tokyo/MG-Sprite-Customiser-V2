@@ -37,6 +37,21 @@ export async function renderSlot(slot: Slot, gifFrameIndex?: number): Promise<HT
     return canvas;
   }
 
+  // Blobling rig (cosmetic slot pre-rendered to gifFrames).
+  // The spriteUrl sentinel 'blobling:' cannot be fetched — always use gifFrames.
+  if (slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:') {
+    if (!slot.gifFrames || slot.gifFrames.length === 0) return null;
+    const fi = Math.max(0, Math.min(gifFrameIndex ?? 0, slot.gifFrames.length - 1));
+    const src = slot.gifFrames[fi].canvas;
+    if (!(src instanceof HTMLCanvasElement) || src.width === 0) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = src.width;
+    canvas.height = src.height;
+    canvas.getContext('2d')!.drawImage(src, 0, 0);
+    applyMutations(canvas, slot.mutations, false, slot.customTint);
+    return canvas;
+  }
+
   // For animated GIFs, use the specific frame
   const frameIdx = slot.isAnimated && slot.gifFrames ? (gifFrameIndex ?? 0) : -1;
 
@@ -305,7 +320,8 @@ export async function renderAll(output: HTMLCanvasElement): Promise<void> {
 
   for (const slot of state.slots) {
     if (!slot.visible) continue;
-    if (slot.type === 'text' || slot.type === 'full-card') {
+    if (slot.type === 'text' || slot.type === 'full-card' ||
+        (slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:')) {
       // These slot types render from gifFrames only — skip if not ready
       if (!slot.gifFrames || slot.gifFrames.length === 0) continue;
     } else {

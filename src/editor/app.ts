@@ -150,6 +150,12 @@ export class App {
   private scenesListEl!: HTMLElement;
   private sceneNameInput!: HTMLInputElement;
 
+  // ── Blobling Rig UI ──
+  private bloblingControls!: HTMLElement;
+  private bloblingCatDropdowns = new Map<string, CustomDropdown>();
+  private bloblingAnimDropdown!: CustomDropdown;
+  private bloblingRenderDebounce: ReturnType<typeof setTimeout> | null = null;
+
   // ── Full Card layer UI ──
   private fullCardControls!: HTMLElement;
   private fullCardTypeLabel!: HTMLElement;
@@ -280,7 +286,9 @@ export class App {
       // clicks, the canvas renderer finds it instantly without re-fetching.
       onThumbVisible: (url) => spriteLoader.preloadUrls([url]),
       onSelect: (item: DropdownItem) => {
-        if (item.fullCardType) {
+        if (item.id === 'blobling-new') {
+          this.addBloblingLayer();
+        } else if (item.fullCardType) {
           this.addFullCardPreset(item.fullCardType as FullCardType);
         } else if (item.cardPresetUrls && item.cardPresetUrls.length > 0) {
           this.applyCardPreset(item.cardPresetUrls, item.label);
@@ -320,6 +328,9 @@ export class App {
 
     // ── Full Card Controls (hidden unless full-card slot active) ──
     this.fullCardControls = this.buildFullCardControls();
+
+    // ── Blobling Rig Controls (hidden unless cosmetic blobling slot active) ──
+    this.bloblingControls = this.buildBloblingControls();
 
     // Populate sprite controls contents (search + sprite list only — no category here)
     this.spriteControls.append(
@@ -434,6 +445,7 @@ export class App {
       this.spriteControls,
       this.textControls,
       this.fullCardControls,
+      this.bloblingControls,
       el('div', { className: 'upload-controls' }, [
         el('div', { className: 'upload-actions' }, [uploadBtn, fileInput, this.addTextBtn]),
       ]),
@@ -543,7 +555,7 @@ export class App {
       this.syncDownloadBtn();
       const slot = getActiveSlot();
       // Sync dropdown selection to the newly active slot's sprite (silent — no reload)
-      if (slot.type !== 'text' && slot.type !== 'full-card') this.spriteDropdown.selectById(slot.spriteKey);
+      if (slot.type !== 'text' && slot.type !== 'full-card' && slot.type !== 'cosmetic') this.spriteDropdown.selectById(slot.spriteKey);
       this.syncTextSlotUI(slot);
     });
     bus.on(Events.RENDER_REQUEST, () => this.render());
@@ -870,16 +882,25 @@ export class App {
   private syncTextSlotUI(slot: Slot): void {
     const isText     = slot.type === 'text';
     const isFullCard = slot.type === 'full-card';
+    const isCosmetic = slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:';
 
     // Category dropdown is always visible (lives above spriteControls in the DOM).
-    // Only hide the sprite list for text slots — full-card slots keep it so the user
-    // can still browse categories and switch card types.
-    this.spriteControls.style.display   = isText ? 'none' : '';
+    // Only hide the sprite list for text/blobling slots.
+    this.spriteControls.style.display   = (isText || isCosmetic) ? 'none' : '';
     this.textControls.style.display     = isText     ? '' : 'none';
     this.fullCardControls.style.display = isFullCard ? '' : 'none';
+    this.bloblingControls.style.display = isCosmetic ? '' : 'none';
     this.tintLabel.textContent = isText ? 'Text Color' : (isFullCard ? 'Card Tint' : 'Custom Tint');
 
-      if (isText) {
+    if (isCosmetic) {
+      // Blobling slot: scale slider in normal sprite mode
+      this.scaleLabel.textContent = 'Scale';
+      this.scaleInput.min  = '0.1';
+      this.scaleInput.max  = '4';
+      this.scaleInput.step = '0.1';
+      this.scaleInput.value = String(slot.scale);
+      this.syncBloblingUI(slot);
+    } else if (isText) {
         // Switch scale slider → font size mode
         this.scaleLabel.textContent = 'Font Size';
         this.scaleInput.min  = '6';
@@ -979,6 +1000,236 @@ export class App {
     this.syncTextSlotUI(state.slots[targetIdx]);
     // Render an initial (empty) text canvas placeholder
     this.scheduleTextRerender();
+  }
+
+  // ── Blobling Rig ─────────────────────────────────────────────────────────────
+
+  private static readonly BLOBLING_LAYER_ORDER = ['Default', 'Mid', 'Bottom', 'Top', 'Expression', 'FaceProp', 'Status', 'Banner'] as const;
+
+  /** Build the blobling rig controls panel (called once in buildUI). */
+  private buildBloblingControls(): HTMLElement {
+    const rows: HTMLElement[] = [];
+
+    for (const cat of App.BLOBLING_LAYER_ORDER) {
+      const dropdown = new CustomDropdown({
+        showThumbs: true,
+        placeholder: 'None',
+        onSelect: (item) => {
+          const slot = getActiveSlot();
+          if (slot.type !== 'cosmetic') return;
+          const layers = { ...(slot.cosmeticLayers ?? {}) };
+          if (item.id === 'none') {
+            delete layers[cat];
+          } else {
+            layers[cat] = item.id;
+          }
+          updateSlotSilent(state.activeSlotIndex, { cosmeticLayers: layers });
+          this.scheduleBloblingRerender();
+        },
+      });
+      // Pre-populate with just 'None' so the dropdown renders immediately;
+      // syncBloblingUI will repopulate with the full cosmetics list.
+      dropdown.setItems([{ id: 'none', label: 'None' }], 'none');
+      this.bloblingCatDropdowns.set(cat, dropdown);
+
+      rows.push(el('div', { className: 'blobling-cat-row' }, [
+        el('span', { className: 'blobling-cat-label', textContent: cat }),
+        dropdown.element,
+      ]));
+    }
+
+    // Animation picker
+    this.bloblingAnimDropdown = new CustomDropdown({
+      showThumbs: false,
+      placeholder: 'None (static)',
+      onSelect: (item) => {
+        const slot = getActiveSlot();
+        if (slot.type !== 'cosmetic') return;
+        const animId = item.id === 'none' ? undefined : item.id;
+        updateSlotSilent(state.activeSlotIndex, { bloblingAnimId: animId });
+        this.scheduleBloblingRerender();
+      },
+    });
+    this.bloblingAnimDropdown.setItems([{ id: 'none', label: 'None (static)' }], 'none');
+
+    return el('div', { className: 'blobling-controls-section', style: 'display:none' }, [
+      el('h3', { className: 'blobling-heading', textContent: 'Blobling Rig' }),
+      el('p', { className: 'blobling-hint', textContent: 'Layer cosmetics to build your blobling.' }),
+      ...rows,
+      el('div', { className: 'blobling-anim-section' }, [
+        el('label', { textContent: 'Animation' }),
+        this.bloblingAnimDropdown.element,
+      ]),
+    ]);
+  }
+
+  /** Add a new blobling rig slot (finds first empty slot or uses active). */
+  private addBloblingLayer(): void {
+    const emptyIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
+    const targetIdx = emptyIdx >= 0 ? emptyIdx : state.activeSlotIndex;
+
+    updateSlot(targetIdx, {
+      type: 'cosmetic',
+      spriteKey: 'blobling',
+      spriteUrl: 'blobling:',
+      cosmeticLayers: {},
+      bloblingAnimId: undefined,
+      gifFrames: undefined,
+      isAnimated: false,
+      scale: 1,
+      customTint: { color: '#ffffff', opacity: 0 },
+      mutations: [],
+    });
+    setActiveSlot(targetIdx);
+    this.syncTextSlotUI(state.slots[targetIdx]);
+  }
+
+  /** Sync blobling rig controls UI from the slot's current state. */
+  private syncBloblingUI(slot: Slot): void {
+    if (slot.type !== 'cosmetic') return;
+    const cosData = state.cosmeticsData;
+
+    for (const cat of App.BLOBLING_LAYER_ORDER) {
+      const dropdown = this.bloblingCatDropdowns.get(cat);
+      if (!dropdown) continue;
+
+      const items: DropdownItem[] = [{ id: 'none', label: 'None' }];
+      if (cosData) {
+        const catData = cosData.categories.find(c => c.cat === cat);
+        if (catData) {
+          for (const item of catData.items) {
+            items.push({ id: item.id, label: item.name, thumbUrl: item.url });
+          }
+        }
+      }
+      const selectedId = slot.cosmeticLayers?.[cat] ?? 'none';
+      dropdown.setItems(items, selectedId);
+    }
+
+    // Populate animation dropdown
+    const animItems: DropdownItem[] = [{ id: 'none', label: 'None (static)' }];
+    const sd = state.spriteData;
+    if (sd) {
+      const animCat = sd.categories.find(c => c.cat === 'animations');
+      if (animCat) {
+        for (const item of animCat.items) {
+          if (item.type === 'animation') {
+            animItems.push({ id: item.id, label: item.name });
+          }
+        }
+      }
+    }
+    this.bloblingAnimDropdown.setItems(animItems, slot.bloblingAnimId ?? 'none');
+  }
+
+  /** Debounce blobling re-renders during rapid cosmetic changes. */
+  private scheduleBloblingRerender(): void {
+    if (this.bloblingRenderDebounce !== null) clearTimeout(this.bloblingRenderDebounce);
+    this.bloblingRenderDebounce = setTimeout(() => {
+      this.bloblingRenderDebounce = null;
+      this.rerenderBlobling(state.activeSlotIndex).catch(err => console.error('[MG] Blobling re-render failed:', err));
+    }, 150);
+  }
+
+  /** Re-render the blobling slot at `idx` into gifFrames (static or animated). */
+  private async rerenderBlobling(idx: number): Promise<void> {
+    const slot = state.slots[idx];
+    if (slot.type !== 'cosmetic' || slot.spriteUrl !== 'blobling:') return;
+
+    const cosData = state.cosmeticsData;
+    const FRAME_DELAY = 100; // ms — ~10fps
+
+    // Resolve all selected cosmetic layer URLs in render order
+    const cosmeticUrls: string[] = [];
+    for (const cat of App.BLOBLING_LAYER_ORDER) {
+      const cosmeticId = slot.cosmeticLayers?.[cat];
+      if (!cosmeticId) continue;
+      if (!cosData) continue;
+      const catData = cosData.categories.find(c => c.cat === cat);
+      const item = catData?.items.find(i => i.id === cosmeticId);
+      if (item?.url) cosmeticUrls.push(item.url);
+    }
+
+    const animId = slot.bloblingAnimId;
+
+    if (animId) {
+      // Animated: load animation frames, composite cosmetics on top of each frame
+      const sd = state.spriteData;
+      if (!sd) return;
+
+      const animEntry = sd.categories
+        .find(c => c.cat === 'animations')
+        ?.items.find(i => i.id === animId && i.type === 'animation');
+
+      if (!animEntry || animEntry.type !== 'animation' || animEntry.frames.length === 0) return;
+
+      const version = animEntry.url.match(/\/version\/([a-f0-9]+)\//i)?.[1] ?? state.gameVersion ?? '';
+      const frameUrls = this.resolveAnimFrameUrls(animEntry.frames, version);
+      if (frameUrls.length === 0) return;
+
+      const [animImages, cosmeticImages] = await Promise.all([
+        Promise.all(frameUrls.map(url => spriteLoader.load(url))),
+        Promise.all(cosmeticUrls.map(url => spriteLoader.load(url))),
+      ]);
+
+      // Guard: bail if slot changed while loading
+      const s = state.slots[idx];
+      if (s.type !== 'cosmetic' || s.bloblingAnimId !== animId) return;
+
+      const gifFrames = animImages.map(animImg => {
+        const canvas = document.createElement('canvas');
+        canvas.width = animImg.naturalWidth;
+        canvas.height = animImg.naturalHeight;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(animImg, 0, 0);
+        for (const cosImg of cosmeticImages) {
+          ctx.drawImage(cosImg, 0, 0, canvas.width, canvas.height);
+        }
+        return { canvas, delay: FRAME_DELAY };
+      });
+
+      s.gifFrames  = gifFrames;
+      s.isAnimated = true;
+      s.spriteUrl  = 'blobling:';
+      bus.emit(Events.RENDER_REQUEST, null);
+      this.refreshSlots();
+      if (idx === state.activeSlotIndex) this.startGifPreview();
+    } else {
+      // Static: composite all cosmetics layers
+      if (cosmeticUrls.length === 0) {
+        // No cosmetics — blank placeholder canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = 128;
+        canvas.height = 128;
+        const s = state.slots[idx];
+        if (s.type !== 'cosmetic') return;
+        s.gifFrames  = [{ canvas, delay: 0 }];
+        s.isAnimated = false;
+        bus.emit(Events.RENDER_REQUEST, null);
+        this.refreshSlots();
+        return;
+      }
+
+      const cosmeticImages = await Promise.all(cosmeticUrls.map(url => spriteLoader.load(url)));
+      const s = state.slots[idx];
+      if (s.type !== 'cosmetic' || s.spriteUrl !== 'blobling:') return;
+
+      const firstImg = cosmeticImages[0];
+      const canvas = document.createElement('canvas');
+      canvas.width  = firstImg.naturalWidth;
+      canvas.height = firstImg.naturalHeight;
+      const ctx = canvas.getContext('2d')!;
+      for (const img of cosmeticImages) {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      }
+
+      s.gifFrames  = [{ canvas, delay: 0 }];
+      s.isAnimated = false;
+      s.spriteUrl  = 'blobling:';
+      bus.emit(Events.RENDER_REQUEST, null);
+      this.refreshSlots();
+      if (idx === state.activeSlotIndex) this.stopGifPreview();
+    }
   }
 
   /** Debounce text re-renders so rapid typing doesn't flood the canvas pipeline. */
@@ -2000,8 +2251,9 @@ export class App {
       }
     }
 
-    // Blobling / cosmetics categories (individual outfit pieces from /assets/cosmetics)
-    if (state.cosmeticsData) {
+    // Blobling Rig: composite outfit builder + Blobling individual cosmetic categories
+    if (state.cosmeticsData && state.cosmeticsData.categories.length > 0) {
+      items.push({ id: 'blobling-rig', label: 'Blobling Rig' });
       for (const cat of state.cosmeticsData.categories) {
         items.push({ id: `cosmetic:${cat.cat}`, label: `Blobling: ${cat.cat}` });
       }
@@ -2053,6 +2305,11 @@ export class App {
           });
         }
       }
+    }
+
+    // Blobling Rig
+    if (cat === 'blobling-rig') {
+      items.push({ id: 'blobling-new', label: '+ Add Blobling Layer' });
     }
 
     // Blobling / cosmetics categories
@@ -2122,12 +2379,15 @@ export class App {
     // Pass restoreId so setItems selects silently rather than firing onSelect.
     // For full-cards: restore the active slot's card type if it's a full-card slot,
     // otherwise force a silent-select of the first item to avoid auto-triggering addFullCardPreset.
+    // For blobling-rig: always pass the first item id to prevent auto-triggering addBloblingLayer.
     const slot = getActiveSlot();
     let restoreId: string | undefined;
     if (cat === 'full-cards') {
       restoreId = slot.type === 'full-card'
         ? `full-card/${slot.fullCardData?.cardType}`
         : (items[0]?.id ?? undefined);
+    } else if (cat === 'blobling-rig') {
+      restoreId = items[0]?.id ?? undefined; // 'blobling-new' — prevents auto-trigger
     } else {
       restoreId = slot.spriteKey || undefined;
     }
@@ -2171,7 +2431,7 @@ export class App {
           const ctx = thumb.getContext('2d')!;
           const scale = Math.min(34 / gifCanvas.width, 34 / gifCanvas.height);
           ctx.drawImage(gifCanvas, (34 - gifCanvas.width * scale) / 2, (34 - gifCanvas.height * scale) / 2, gifCanvas.width * scale, gifCanvas.height * scale);
-        } else if (slot.type !== 'full-card' && slot.type !== 'text') {
+        } else if (slot.type !== 'full-card' && slot.type !== 'text' && slot.type !== 'cosmetic') {
           renderThumb(slot.spriteUrl, thumb);
         }
       } else {
@@ -2283,6 +2543,10 @@ export class App {
     } else if (slot.type === 'full-card') {
       const fcd = slot.fullCardData;
       this.metaEl.innerHTML = `<strong>Full Card</strong> &middot; ${fcd?.cardType ?? '?'} Card &middot; Slot ${state.activeSlotIndex + 1}`;
+    } else if (slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:') {
+      const layerCount = Object.keys(slot.cosmeticLayers ?? {}).length;
+      const animLabel = slot.bloblingAnimId ? ` &middot; Animated` : '';
+      this.metaEl.innerHTML = `<strong>Blobling Rig</strong> &middot; Slot ${state.activeSlotIndex + 1} &middot; ${layerCount} cosmetic${layerCount !== 1 ? 's' : ''}${animLabel}`;
     } else {
       const displayName = slot.spriteKey.split('/').pop() ?? slot.spriteKey;
       this.metaEl.innerHTML = `<strong>${displayName}</strong> &middot; Slot ${state.activeSlotIndex + 1} &middot; Mutations: ${muts} &middot; Scale: ${slot.scale}x`;
@@ -3075,6 +3339,10 @@ export class App {
         });
       }
 
+      if (slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:') {
+        return this.rerenderBlobling(idx);
+      }
+
       if (slot.type === 'full-card' && slot.fullCardData) {
         const data      = slot.fullCardData;
         const cardType  = data.cardType;
@@ -3115,6 +3383,21 @@ export class App {
     this.refreshSlots();
   }
 
+  /** Capture a small square JPEG of the current preview canvas for scene thumbnails. */
+  private captureSceneThumbnail(size = 64): string | undefined {
+    try {
+      const src = this.previewCanvas;
+      if (!src || src.width === 0 || src.height === 0) return undefined;
+      const thumb = document.createElement('canvas');
+      thumb.width = size;
+      thumb.height = size;
+      thumb.getContext('2d')!.drawImage(src, 0, 0, size, size);
+      return thumb.toDataURL('image/jpeg', 0.8);
+    } catch {
+      return undefined;
+    }
+  }
+
   // ── Scenes section ──────────────────────────────────────────────────────────
 
   private buildScenesSection(): HTMLElement {
@@ -3128,7 +3411,8 @@ export class App {
     saveBtn.addEventListener('click', () => {
       const name = this.sceneNameInput.value.trim();
       saveBtn.disabled = true;
-      saveNamedScene(name || 'Untitled')
+      const thumbnail = this.captureSceneThumbnail();
+      saveNamedScene(name || 'Untitled', thumbnail)
         .then(() => { this.sceneNameInput.value = ''; this.refreshScenesList(); })
         .catch(err => console.error('[MG] Save scene failed:', err))
         .finally(() => { saveBtn.disabled = false; });
@@ -3216,7 +3500,16 @@ export class App {
         this.refreshScenesList();
       });
 
+      const thumbEl = el('div', { className: 'scene-item-thumb' });
+      if (scene.thumbnail) {
+        const img = el('img') as HTMLImageElement;
+        img.src = scene.thumbnail;
+        img.alt = '';
+        thumbEl.append(img);
+      }
+
       const item = el('div', { className: 'scene-item' }, [
+        thumbEl,
         el('div', { className: 'scene-item-info' }, [
           el('span', { className: 'scene-item-name', textContent: scene.name }),
           el('span', { className: 'scene-item-date', textContent: dateStr }),

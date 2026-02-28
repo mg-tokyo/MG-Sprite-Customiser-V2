@@ -74,6 +74,8 @@ export interface SavedScene {
   savedAt: number;
   slots: Slot[];
   activeSlotIndex: number;
+  /** Small JPEG data URL of the canvas at save time (optional, older saves won't have it). */
+  thumbnail?: string;
 }
 
 export function listSavedScenes(): SavedScene[] {
@@ -123,13 +125,14 @@ async function cleanSlotsWithImages(slots: Slot[]): Promise<Slot[]> {
   );
 }
 
-export async function saveNamedScene(name: string): Promise<void> {
+export async function saveNamedScene(name: string, thumbnail?: string): Promise<void> {
   const scene: SavedScene = {
     _v: SCENE_SCHEMA_VERSION,
     name: name.trim() || 'Untitled',
     savedAt: Date.now(),
     slots: await cleanSlotsWithImages(state.slots),
     activeSlotIndex: state.activeSlotIndex,
+    thumbnail,
   };
   const scenes = listSavedScenes();
   scenes.unshift(scene); // newest first

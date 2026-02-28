@@ -110,6 +110,8 @@ export interface Slot {
   visible: boolean;
   locked: boolean;
   cosmeticLayers?: Record<string, string>;
+  /** Blobling rig: animation ID to apply (e.g. 'animation/Blobling/Walk'). */
+  bloblingAnimId?: string;
   textData?: TextData;
   fullCardData?: FullCardData;
   // GIF animation data (not persisted)
