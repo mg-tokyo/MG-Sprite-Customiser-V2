@@ -482,9 +482,19 @@ function drawProgressBarRow(
     ? Math.min(1, Math.max(0, options.value / options.max))
     : 0;
   const color = typeof options.color === 'number' ? toHex(options.color) : options.color;
-  const barInset = (options.showMaxLabel && !options.fullyGrown) ? BAR_INSET : 0;
-  const innerWidth = Math.max(0, barWidth - barInset * 2);
-  const barX = barLeft + barInset;
+  // Right inset is fixed (visual gap before right-side labels).
+  // Left inset must accommodate the current-STR number centered on the star at barLeft+12.
+  // For triple-digit numbers the text extends well past BAR_INSET, so measure dynamically.
+  const rightInset = (options.showMaxLabel && !options.fullyGrown) ? BAR_INSET : 0;
+  let leftInset = rightInset;
+  if (options.showMaxLabel && !options.fullyGrown && options.currentLabelValue) {
+    setFont(ctx, 24, 'bold', 'Greycliff CF');
+    const valW = measureTextWidth(ctx, options.currentLabelValue);
+    // Star center is at barLeft+12; text extends valW/2 to the right of that centre.
+    leftInset = Math.max(rightInset, Math.ceil(12 + valW / 2 + 5));
+  }
+  const innerWidth = Math.max(0, barWidth - leftInset - rightInset);
+  const barX = barLeft + leftInset;
   const barY = options.y - BAR_HEIGHT / 2;
 
   ctx.save();
