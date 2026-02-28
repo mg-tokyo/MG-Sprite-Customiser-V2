@@ -605,6 +605,7 @@ function drawWeightAgeRow(
     age?: HTMLImageElement | null;
     coin?: HTMLImageElement | null;
   },
+  minStartX?: number,
 ): void {
   setFont(ctx, 18, '400', 'Greycliff CF');
   const weightWidth = measureTextWidth(ctx, weightText);
@@ -615,7 +616,8 @@ function drawWeightAgeRow(
   const part3 = CS + 4 + sellWidth;
   const gap = 20;
   const total = part1 + gap + part2 + gap + part3;
-  const startX = -total / 2;
+  // Clamp leftmost edge to avoid overlapping the rarity badge (bottom-left corner)
+  const startX = Math.max(minStartX ?? -Infinity, -total / 2);
 
   ctx.fillStyle = COLOR_TEXT;
   ctx.textAlign = 'left';
@@ -986,6 +988,14 @@ export async function drawFullCardStats(
   const lockIcon = await loadSprite(data.isLocked ? 'sprite/ui/Locked' : 'sprite/ui/Unlocked');
   const rarity = (data.rarity ?? data.seedRarity ?? null) as FullCardRarity | null;
   const rarityIcon = rarity ? await loadSprite(RARITY_ICONS[rarity]) : null;
+  // Right edge of rarity badge (bottom-left corner of card) — used to clamp weight/age/sell row
+  let rarityBadgeRight: number | undefined;
+  if (rarityIcon) {
+    const riW = rarityIcon.naturalWidth;
+    const riH = rarityIcon.naturalHeight;
+    const riScale = RARITY_SIZE / Math.max(riW, riH);
+    rarityBadgeRight = -cardW / 2 + G5 + 15 + riW * riScale + 8; // +8 gap
+  }
 
   const weightIcon = await loadSprite('sprite/ui/Weight');
   const ageIcon = await loadSprite('sprite/ui/Age');
@@ -1156,7 +1166,7 @@ export async function drawFullCardStats(
         weight: weightIcon,
         age: ageIcon,
         coin: coinIcon,
-      });
+      }, rarityBadgeRight);
 
     // Abilities row
     const abilityEntries = data.petAbilityEntries ?? [];
