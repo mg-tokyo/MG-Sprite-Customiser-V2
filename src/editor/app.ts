@@ -3014,6 +3014,69 @@ export class App {
     this.downloadBtn.textContent = hasGif ? 'Download GIF' : 'Download PNG';
   }
 
+  /**
+   * After a scene load, text and full-card slots have no gifFrames (stripped on
+   * save). Re-render each one so they display immediately.
+   */
+  private async rerenderAllSpecialSlots(): Promise<void> {
+    type LayerSrc = HTMLImageElement | HTMLCanvasElement;
+    const getW = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.width  : s.naturalWidth;
+    const getH = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.height : s.naturalHeight;
+
+    const version = this.getUiSpriteVersion();
+    const v       = version ? `?v=${version}` : '';
+    const apiBase = 'https://mg-api.ariedam.fr/assets/sprites/ui';
+
+    const tasks = state.slots.map((slot, idx) => {
+      if (slot.type === 'text' && slot.textData) {
+        return renderTextToCanvas(slot.textData, slot.customTint.color).then(canvas => {
+          const s = state.slots[idx];
+          if (s.type !== 'text') return;
+          s.gifFrames  = [{ canvas, delay: 0 }];
+          s.isAnimated = true;
+        });
+      }
+
+      if (slot.type === 'full-card' && slot.fullCardData) {
+        const data      = slot.fullCardData;
+        const cardType  = data.cardType;
+        return (async () => {
+          const layerResults = await Promise.allSettled([
+            this.loadSpriteLayer(`${cardType}CardBottom`, `${apiBase}/${cardType}CardBottom.png${v}`),
+            this.loadSpriteLayer(`${cardType}CardMiddle`, `${apiBase}/${cardType}CardMiddle.png${v}`),
+          ]);
+          const layers: LayerSrc[] = layerResults.flatMap(r =>
+            r.status === 'fulfilled' && r.value ? [r.value] : [],
+          );
+          if (layers.length === 0) return;
+
+          const width  = Math.max(...layers.map(getW));
+          const height = Math.max(...layers.map(getH));
+          const canvas = document.createElement('canvas');
+          canvas.width  = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return;
+          for (const layer of layers) {
+            ctx.drawImage(layer as CanvasImageSource, (width - getW(layer)) / 2, (height - getH(layer)) / 2);
+          }
+          await drawFullCardStats(canvas, data, slot.mutations);
+
+          const s = state.slots[idx];
+          if (s.type !== 'full-card') return;
+          s.gifFrames  = [{ canvas, delay: 0 }];
+          s.isAnimated = true;
+        })();
+      }
+
+      return Promise.resolve();
+    });
+
+    await Promise.allSettled(tasks);
+    bus.emit(Events.RENDER_REQUEST, null);
+    this.refreshSlots();
+  }
+
   // ── Scenes section ──────────────────────────────────────────────────────────
 
   private buildScenesSection(): HTMLElement {
@@ -3053,6 +3116,7 @@ export class App {
         bus.emit(Events.SLOT_CHANGED, null);
         bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
         bus.emit(Events.RENDER_REQUEST, null);
+        this.rerenderAllSpecialSlots().catch(err => console.error('[MG] Scene re-render failed:', err));
       };
       reader.readAsText(file);
       importFileInput.value = '';
@@ -3091,6 +3155,7 @@ export class App {
         bus.emit(Events.SLOT_CHANGED, null);
         bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
         bus.emit(Events.RENDER_REQUEST, null);
+        this.rerenderAllSpecialSlots().catch(err => console.error('[MG] Scene re-render failed:', err));
       });
 
       const exportBtn = el('button', { className: 'btn-sm', textContent: 'Export' }) as HTMLButtonElement;
