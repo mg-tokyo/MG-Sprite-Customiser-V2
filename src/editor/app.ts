@@ -54,7 +54,7 @@ function scanContentBounds(
   const tmp = document.createElement('canvas');
   tmp.width = scanW;
   tmp.height = scanH;
-  const tmpCtx = tmp.getContext('2d')!;
+  const tmpCtx = tmp.getContext('2d', { willReadFrequently: true })!;
   tmpCtx.drawImage(source as CanvasImageSource, 0, 0, scanW, scanH);
 
   let data: Uint8ClampedArray;
@@ -463,14 +463,23 @@ export class App {
       });
     });
 
-    const updateTint = () => {
+    const previewTint = () => {
+      const slot = getActiveSlot();
+      slot.customTint = { color: this.customColor.value, opacity: parseFloat(this.customOpacity.value) };
+      if (slot.type === 'text') this.scheduleTextRerender();
+      else bus.emit(Events.RENDER_REQUEST, null);
+    };
+    const commitTint = () => {
       const slot = getActiveSlot();
       beginBatchUpdate();
-      updateSlotSilent(state.activeSlotIndex, { customTint: { color: this.customColor.value, opacity: parseFloat(this.customOpacity.value) } });
+      updateSlotSilent(state.activeSlotIndex, {
+        customTint: { color: this.customColor.value, opacity: parseFloat(this.customOpacity.value) },
+      });
       if (slot.type === 'text') this.scheduleTextRerender();
     };
-    this.customColor.addEventListener('input', updateTint);
-    this.customOpacity.addEventListener('input', updateTint);
+    this.customColor.addEventListener('input', previewTint);
+    this.customColor.addEventListener('change', commitTint);
+    this.customOpacity.addEventListener('input', commitTint);
 
     bus.on(Events.SLOT_SELECTED, () => {
       const slot = getActiveSlot();
@@ -584,6 +593,7 @@ export class App {
       this.refreshMutations();
       const slot = getActiveSlot();
       if (slot.type === 'full-card') this.syncFullCardUI(slot);
+      this.rerenderAllSpecialSlots().catch(err => console.error('[MG] Restore re-render failed:', err));
     });
 
     // Keyboard shortcuts
@@ -1134,16 +1144,13 @@ export class App {
     }
   }
 
-  /** Add a new text layer slot (finds first empty slot or appends at end logic). */
-    private addTextLayer(): void {
-    // Find the first empty slot and activate it
-    const emptyIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
-    // If no empty slot, use the current active one (overwrite)
-    const targetIdx = emptyIdx >= 0 ? emptyIdx : state.activeSlotIndex;
+  /** Add a new text layer slot on the currently selected layer. */
+  private addTextLayer(): void {
+    const targetIdx = state.activeSlotIndex;
 
     const td = defaultTextData();
     // Default color: white for textSlapper
-      updateSlot(targetIdx, {
+    updateSlot(targetIdx, {
         type: 'text',
         spriteKey: 'text-layer',
         spriteUrl: 'text:', // sentinel — tells renderSlot this is a text slot
@@ -1223,8 +1230,7 @@ export class App {
 
   /** Add a new blobling rig slot with random starter cosmetics. */
   private addBloblingLayer(): void {
-    const emptyIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
-    const targetIdx = emptyIdx >= 0 ? emptyIdx : state.activeSlotIndex;
+    const targetIdx = state.activeSlotIndex;
 
     // Seed with random cosmetics for a non-blank default look
     const cosmeticLayers: Record<string, string> = {};
@@ -2420,7 +2426,7 @@ export class App {
       const canvas = this.cardPickerCanvases.get(type);
       if (!canvas) return;
       // Skip if already rendered (non-blank)
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) return;
       const existing = ctx.getImageData(0, 0, 1, 1);
       if (existing.data[3] > 0) return;
@@ -2472,11 +2478,8 @@ export class App {
    * Mirrors the old preset behavior for users who want the live-stats editor.
    */
   private async addFullCardLayer(type: FullCardType): Promise<void> {
-    let targetIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
-    if (targetIdx < 0) {
-      addSlot();
-      targetIdx = state.slots.length - 1;
-    }
+    const targetIdx = this.resolveTargetSlotIndex(0);
+    if (targetIdx < 0) return;
 
     const data = defaultFullCardData(type);
     updateSlot(targetIdx, {
@@ -2640,12 +2643,10 @@ export class App {
     const getW = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.width : s.naturalWidth;
     const getH = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.height : s.naturalHeight;
 
-    for (const spec of specs) {
-      let targetIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
-      if (targetIdx < 0) {
-        addSlot();
-        targetIdx = state.slots.length - 1;
-      }
+    for (let i = 0; i < specs.length; i++) {
+      const spec = specs[i];
+      const targetIdx = this.resolveTargetSlotIndex(i);
+      if (targetIdx < 0) break;
 
       const src = await this.loadSpriteLayer(spec.name, spec.url).catch(() => null);
 
@@ -2660,7 +2661,7 @@ export class App {
         isAnimated = true;
       }
 
-      updateSlot(targetIdx, {
+    updateSlot(targetIdx, {
         type: 'custom',
         spriteKey: `${groupLabel} / ${spec.name}`,
         spriteUrl: spec.url,
@@ -2685,12 +2686,10 @@ export class App {
     const getW = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.width : s.naturalWidth;
     const getH = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.height : s.naturalHeight;
 
-    for (const url of urls) {
-      let targetIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
-      if (targetIdx < 0) {
-        addSlot();
-        targetIdx = state.slots.length - 1;
-      }
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+      const targetIdx = this.resolveTargetSlotIndex(i);
+      if (targetIdx < 0) break;
 
       const layerName = url.split('/').pop()?.split('?')[0].replace('.png', '') ?? '';
       const src = await this.loadSpriteLayer(layerName, url).catch(() => null);
@@ -2706,7 +2705,7 @@ export class App {
         isAnimated = true;
       }
 
-      updateSlot(targetIdx, {
+    updateSlot(targetIdx, {
         type: 'custom',
         spriteKey: `${baseLabel} / ${layerName}`,
         spriteUrl: url,
@@ -3275,6 +3274,20 @@ export class App {
     }
   }
 
+  private resolveTargetSlotIndex(offsetFromSelection: number): number {
+    const baseIndex = Math.max(0, state.activeSlotIndex);
+    const offset = Math.max(0, Math.floor(offsetFromSelection));
+    const target = baseIndex + offset;
+
+    while (state.slots.length <= target) {
+      const before = state.slots.length;
+      addSlot();
+      if (state.slots.length === before) return -1;
+    }
+
+    return target;
+  }
+
   private setupColumnResize(
     handle: HTMLDivElement,
     panel: 'layers' | 'assets',
@@ -3501,14 +3514,11 @@ export class App {
     };
   }
 
-  /** Paste the clipboard slot into the next available (or new) slot, offset by 20 px. */
-  private pasteCopiedSlot(): void {
+  /** Paste the clipboard slot into the selected layer (or offset from it), with a slight position offset. */
+  private pasteCopiedSlot(offsetFromSelection = 0): void {
     if (!this.copiedSlot) return;
-    let targetIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
-    if (targetIdx < 0) {
-      addSlot();
-      targetIdx = state.slots.length - 1;
-    }
+    const targetIdx = this.resolveTargetSlotIndex(offsetFromSelection);
+    if (targetIdx < 0) return;
     updateSlot(targetIdx, {
       ...this.copiedSlot,
       position: {
@@ -3522,7 +3532,7 @@ export class App {
   /** Copy active slot then immediately paste it (Ctrl+D). */
   private duplicateActiveSlot(): void {
     this.copyActiveSlot();
-    this.pasteCopiedSlot();
+    this.pasteCopiedSlot(1);
   }
 
   private setupCanvasDrag(): void {
@@ -3591,7 +3601,7 @@ export class App {
             // Stage 2: pixel-accurate alpha check
             const px = Math.round(localX / scale + rendered.width / 2);
             const py = Math.round(localY / scale + rendered.height / 2);
-            const ctx2d = rendered.getContext('2d');
+            const ctx2d = rendered.getContext('2d', { willReadFrequently: true });
             try {
               if (ctx2d && ctx2d.getImageData(px, py, 1, 1).data[3] > 10) return i;
             } catch {
@@ -3864,16 +3874,24 @@ export class App {
       this.downloadProgress.textContent = '';
     }
 
-    private async downloadGIF(): Promise<void> {
+  private async downloadGIF(): Promise<void> {
       this.downloadProgress.textContent = 'Rendering...';
       this.downloadBtn.disabled = true;
 
-    let maxFrames = 0;
+    const animatedFramesBySlot = new Map<Slot, { canvas: HTMLCanvasElement; delay: number }[]>();
     let primaryFrames: { canvas: HTMLCanvasElement; delay: number }[] = [];
     for (const slot of state.slots) {
-      if (slot.visible && slot.isAnimated && slot.gifFrames && slot.gifFrames.length > maxFrames) {
-        maxFrames = slot.gifFrames.length;
-        primaryFrames = slot.gifFrames;
+      if (!slot.visible || !slot.isAnimated || !slot.gifFrames || slot.gifFrames.length === 0) continue;
+      const validFrames = slot.gifFrames.filter((frame): frame is { canvas: HTMLCanvasElement; delay: number } => {
+        return !!frame
+          && frame.canvas instanceof HTMLCanvasElement
+          && frame.canvas.width > 0
+          && frame.canvas.height > 0;
+      });
+      if (validFrames.length === 0) continue;
+      animatedFramesBySlot.set(slot, validFrames);
+      if (validFrames.length > primaryFrames.length) {
+        primaryFrames = validFrames;
       }
     }
 
@@ -3896,7 +3914,7 @@ export class App {
       const staticCanvases = new Map<Slot, HTMLCanvasElement>();
       for (const slot of state.slots) {
       if (!slot.visible || !slot.spriteUrl) continue;
-      if (slot.isAnimated && slot.gifFrames && slot.gifFrames.length > 0) continue;
+      if (animatedFramesBySlot.has(slot)) continue;
         const rendered = await renderSlot(slot);
         if (rendered) staticCanvases.set(slot, rendered);
       }
@@ -3905,10 +3923,11 @@ export class App {
       const sizeMap = new Map<Slot, { w: number; h: number }>();
       for (const slot of state.slots) {
         if (!slot.visible || !slot.spriteUrl) continue;
-        if (slot.isAnimated && slot.gifFrames && slot.gifFrames.length > 0) {
+        const animFrames = animatedFramesBySlot.get(slot);
+        if (animFrames && animFrames.length > 0) {
           let maxW = 0;
           let maxH = 0;
-          for (const f of slot.gifFrames) {
+          for (const f of animFrames) {
             if (f.canvas.width > maxW) maxW = f.canvas.width;
             if (f.canvas.height > maxH) maxH = f.canvas.height;
           }
@@ -3938,9 +3957,10 @@ export class App {
         for (const slot of state.slots) {
           if (!slot.visible || !slot.spriteUrl) continue;
 
-          if (slot.isAnimated && slot.gifFrames && slot.gifFrames.length > 0) {
-          const fi = i % slot.gifFrames.length;
-          const src = slot.gifFrames[fi].canvas;
+          const animFrames = animatedFramesBySlot.get(slot);
+          if (animFrames && animFrames.length > 0) {
+          const fi = i % animFrames.length;
+          const src = animFrames[fi].canvas;
           const frameCanvas = document.createElement('canvas');
           frameCanvas.width = src.width;
           frameCanvas.height = src.height;
@@ -3984,7 +4004,8 @@ export class App {
         frameOut.width = outW;
         frameOut.height = outH;
         frameOut.getContext('2d')!.drawImage(cropped, 0, 0, outW, outH);
-        renderedFrames.push({ canvas: frameOut, delay: primaryFrames[i].delay });
+        const frameDelay = Number.isFinite(primaryFrames[i]?.delay) ? primaryFrames[i].delay : this.DEFAULT_ANIM_FRAME_DELAY;
+        renderedFrames.push({ canvas: frameOut, delay: frameDelay });
       }
 
     try {
@@ -4215,7 +4236,7 @@ export class App {
   // ── Helpers ──
 
   private frameHasVisibleAlpha(canvas: HTMLCanvasElement): boolean {
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return false;
     try {
       const alpha = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
