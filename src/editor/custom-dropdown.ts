@@ -32,6 +32,11 @@ interface DropdownOptions {
   onMultiChange?: (selectedIds: string[]) => void;
 }
 
+interface SetItemsOptions {
+  /** When true and restoreId is missing, do not auto-select the first item. */
+  suppressAutoSelectOnMissingRestore?: boolean;
+}
+
 export class CustomDropdown {
   private readonly wrap: HTMLElement;
   private readonly trigger: HTMLButtonElement;
@@ -148,9 +153,10 @@ export class CustomDropdown {
   /**
    * Repopulate the dropdown with a new set of items.
    * If restoreId is found in the new list, selects it silently (no callback).
-   * Otherwise auto-selects the first item and fires onSelect.
+   * Otherwise auto-selects the first item and fires onSelect, unless explicitly suppressed.
    */
-  setItems(items: DropdownItem[], restoreId?: string): void {
+  setItems(items: DropdownItem[], restoreId?: string, options?: SetItemsOptions): void {
+    const suppressAutoSelectOnMissingRestore = options?.suppressAutoSelectOnMissingRestore ?? false;
     this.observer.disconnect();
     this.items = items;
     this.itemEls = [];
@@ -228,6 +234,11 @@ export class CustomDropdown {
       // Restore silently — sprite is already loaded in slot
       this.applySelection(items[restoreIdx], this.itemEls[restoreIdx]);
     } else {
+      if (suppressAutoSelectOnMissingRestore) {
+        this.triggerLabel.textContent = this.placeholder;
+        if (this.showThumbs && !this.multiSelect) this.triggerThumb.style.display = 'none';
+        return;
+      }
       // Auto-select first item and notify
       this.applySelection(items[0], this.itemEls[0]);
       this.onSelectCb(items[0]);

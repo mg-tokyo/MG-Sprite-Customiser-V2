@@ -113,6 +113,9 @@ export class App {
   private timelineLabel!: HTMLElement;
   private dragIdx: number | null = null;
   private dragInsertBefore: number | null = null;
+  private selectedSlotIndexes = new Set<number>();
+  private groupDragIndexes: number[] = [];
+  private groupDragStartPos = new Map<number, { x: number; y: number }>();
   private frameScheduler = new FrameScheduler();
   // ── New layout refs ──
   private drawer!: Drawer;
@@ -177,6 +180,7 @@ export class App {
   private unicodeRow!: HTMLElement;
   private unicodeDropdown!: CustomDropdown;
   private textRenderDebounce: ReturnType<typeof setTimeout> | null = null;
+  private textRenderQueue = new Set<number>();
 
   // ── Scenes UI ──
   private scenesListEl!: HTMLElement;
@@ -333,6 +337,7 @@ export class App {
         const scene = importSceneJson(reader.result as string);
         if (!scene) { alert('Invalid scene file'); return; }
         pushUndo();
+        this.clearMultiSelection();
         state.slots = scene.slots;
         state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
         bus.emit(Events.SLOT_CHANGED, null);
@@ -351,7 +356,7 @@ export class App {
       onSelect: (item: DropdownItem) => {
         state.selectedCategory = item.id;
         this.browserSearchInput.value = '';
-        this.populateSprites();
+        this.populateSprites(false);
       },
     });
 
@@ -386,8 +391,17 @@ export class App {
       this.makeCheckLabel('Icons', optIcons),
       this.makeCheckLabel('Tall overlays', optOverlays),
     ]);
-    optIcons.addEventListener('change', () => updateSlot(state.activeSlotIndex, { options: { icons: optIcons.checked, overlays: optOverlays.checked } }));
-    optOverlays.addEventListener('change', () => updateSlot(state.activeSlotIndex, { options: { icons: optIcons.checked, overlays: optOverlays.checked } }));
+    const applySharedOptions = (): void => {
+      beginBatchUpdate();
+      const next = { icons: optIcons.checked, overlays: optOverlays.checked };
+      this.applyToSelection((slot) => {
+        slot.options = { ...next };
+      });
+      bus.emit(Events.SLOT_CHANGED, null);
+      bus.emit(Events.RENDER_REQUEST, null);
+    };
+    optIcons.addEventListener('change', applySharedOptions);
+    optOverlays.addEventListener('change', applySharedOptions);
 
     this.scaleLabel = el('label', { textContent: 'Scale' });
     this.scaleInput = el('input', {
@@ -418,64 +432,86 @@ export class App {
     this.timelineScrubber.addEventListener('input', () => { this.frameScheduler.seek(parseInt(this.timelineScrubber.value)); });
 
     this.scaleInput.addEventListener('input', () => {
-      const slot = getActiveSlot();
-      if (slot.type === 'text') {
-        const current = slot.textData?.fontSize ?? 36;
-        const parsed = parseFloat(this.scaleInput.value);
-        const fontSize = this.clampTextSize(Number.isFinite(parsed) ? parsed : current);
-        if (slot.textData) slot.textData = { ...slot.textData, fontSize };
-        this.scheduleTextRerender();
-      } else {
-        const parsed = parseFloat(this.scaleInput.value);
-        slot.scale = this.clampScale(Number.isFinite(parsed) ? parsed : slot.scale);
-        bus.emit(Events.RENDER_REQUEST, null);
-      }
+      const parsed = parseFloat(this.scaleInput.value);
+      const textIndexes: number[] = [];
+      let hasSpriteLikeChange = false;
+      this.applyToSelection((slot, index) => {
+        if (slot.type === 'text') {
+          const current = slot.textData?.fontSize ?? 36;
+          const fontSize = this.clampTextSize(Number.isFinite(parsed) ? parsed : current);
+          if (slot.textData) {
+            slot.textData = { ...slot.textData, fontSize };
+            textIndexes.push(index);
+          }
+        } else {
+          slot.scale = this.clampScale(Number.isFinite(parsed) ? parsed : slot.scale);
+          hasSpriteLikeChange = true;
+        }
+      });
+      if (textIndexes.length > 0) this.scheduleTextRerender(textIndexes);
+      if (hasSpriteLikeChange) bus.emit(Events.RENDER_REQUEST, null);
     });
     this.scaleInput.addEventListener('change', () => {
-      const slot = getActiveSlot();
+      const parsed = parseFloat(this.scaleInput.value);
+      const textIndexes: number[] = [];
       beginBatchUpdate();
-      if (slot.type === 'text') {
-        const current = slot.textData?.fontSize ?? 36;
-        const parsed = parseFloat(this.scaleInput.value);
-        const fontSize = this.clampTextSize(Number.isFinite(parsed) ? parsed : current);
-        if (slot.textData) {
-          updateSlotSilent(state.activeSlotIndex, { textData: { ...slot.textData, fontSize } });
-          this.scheduleTextRerender();
+      this.applyToSelection((slot, index) => {
+        if (slot.type === 'text') {
+          const current = slot.textData?.fontSize ?? 36;
+          const fontSize = this.clampTextSize(Number.isFinite(parsed) ? parsed : current);
+          if (slot.textData) {
+            slot.textData = { ...slot.textData, fontSize };
+            textIndexes.push(index);
+          }
+          return;
         }
-      } else {
-        const parsed = parseFloat(this.scaleInput.value);
         const scale = this.clampScale(Number.isFinite(parsed) ? parsed : slot.scale);
-        updateSlotSilent(state.activeSlotIndex, { scale });
-      }
+        slot.scale = scale;
+      });
+      bus.emit(Events.SLOT_CHANGED, null);
+      bus.emit(Events.RENDER_REQUEST, null);
+      if (textIndexes.length > 0) this.scheduleTextRerender(textIndexes);
     });
     this.rotationInput.addEventListener('input', () => {
       const parsed = parseFloat(this.rotationInput.value);
-      const slot = getActiveSlot();
-      slot.rotation = this.normalizeRotation(Number.isFinite(parsed) ? parsed : slot.rotation);
+      this.applyToSelection((slot) => {
+        slot.rotation = this.normalizeRotation(Number.isFinite(parsed) ? parsed : slot.rotation);
+      });
       bus.emit(Events.RENDER_REQUEST, null);
     });
     this.rotationInput.addEventListener('change', () => {
       const parsed = parseFloat(this.rotationInput.value);
-      const slot = getActiveSlot();
       beginBatchUpdate();
-      updateSlotSilent(state.activeSlotIndex, {
-        rotation: this.normalizeRotation(Number.isFinite(parsed) ? parsed : slot.rotation),
+      this.applyToSelection((slot) => {
+        slot.rotation = this.normalizeRotation(Number.isFinite(parsed) ? parsed : slot.rotation);
       });
+      bus.emit(Events.SLOT_CHANGED, null);
+      bus.emit(Events.RENDER_REQUEST, null);
     });
 
     const previewTint = () => {
-      const slot = getActiveSlot();
-      slot.customTint = { color: this.customColor.value, opacity: parseFloat(this.customOpacity.value) };
-      if (slot.type === 'text') this.scheduleTextRerender();
-      else bus.emit(Events.RENDER_REQUEST, null);
+      const opacity = parseFloat(this.customOpacity.value);
+      const textIndexes: number[] = [];
+      let hasSpriteLikeChange = false;
+      this.applyToSelection((slot, index) => {
+        slot.customTint = { color: this.customColor.value, opacity };
+        if (slot.type === 'text') textIndexes.push(index);
+        else hasSpriteLikeChange = true;
+      });
+      if (textIndexes.length > 0) this.scheduleTextRerender(textIndexes);
+      if (hasSpriteLikeChange) bus.emit(Events.RENDER_REQUEST, null);
     };
     const commitTint = () => {
-      const slot = getActiveSlot();
+      const opacity = parseFloat(this.customOpacity.value);
+      const textIndexes: number[] = [];
       beginBatchUpdate();
-      updateSlotSilent(state.activeSlotIndex, {
-        customTint: { color: this.customColor.value, opacity: parseFloat(this.customOpacity.value) },
+      this.applyToSelection((slot, index) => {
+        slot.customTint = { color: this.customColor.value, opacity };
+        if (slot.type === 'text') textIndexes.push(index);
       });
-      if (slot.type === 'text') this.scheduleTextRerender();
+      bus.emit(Events.SLOT_CHANGED, null);
+      bus.emit(Events.RENDER_REQUEST, null);
+      if (textIndexes.length > 0) this.scheduleTextRerender(textIndexes);
     };
     this.customColor.addEventListener('input', previewTint);
     this.customColor.addEventListener('change', commitTint);
@@ -569,6 +605,7 @@ export class App {
   private bindEvents(): void {
     // Render on changes
     bus.on(Events.SLOT_CHANGED, () => {
+      this.sanitizeSelection();
       this.refreshSlots();
       this.updateMeta();
       this.syncDownloadBtn();
@@ -578,6 +615,7 @@ export class App {
       this.syncInspector(slot);
     });
     bus.on(Events.SLOT_SELECTED, () => {
+      this.sanitizeSelection();
       this.refreshSlots();
       this.refreshMutations();
       this.updateMeta();
@@ -1194,7 +1232,11 @@ export class App {
       });
       // Pre-populate with just 'None' so the dropdown renders immediately;
       // syncBloblingUI will repopulate with the full cosmetics list.
-      dropdown.setItems([{ id: 'none', label: 'None' }], 'none');
+      dropdown.setItems(
+        [{ id: 'none', label: 'None' }],
+        'none',
+        { suppressAutoSelectOnMissingRestore: true },
+      );
       this.bloblingCatDropdowns.set(cat as BloblingLayerKey, dropdown);
 
       rows.push(el('div', { className: 'blobling-cat-row' }, [
@@ -1215,7 +1257,11 @@ export class App {
         this.scheduleBloblingRerender();
       },
     });
-    this.bloblingAnimDropdown.setItems([{ id: 'none', label: 'None (static)' }], 'none');
+    this.bloblingAnimDropdown.setItems(
+      [{ id: 'none', label: 'None (static)' }],
+      'none',
+      { suppressAutoSelectOnMissingRestore: true },
+    );
 
     return el('div', { className: 'blobling-controls-section' }, [
       el('h3', { className: 'blobling-heading', textContent: 'Blobling Rig' }),
@@ -1282,7 +1328,7 @@ export class App {
         }
       }
       const selectedId = slot.cosmeticLayers?.[cat] ?? 'none';
-      dropdown.setItems(items, selectedId);
+      dropdown.setItems(items, selectedId, { suppressAutoSelectOnMissingRestore: true });
     }
 
     // Populate animation dropdown from the static known list (no async needed).
@@ -1291,7 +1337,11 @@ export class App {
       animItems.push({ id: String(anim.id), label: anim.name });
     }
     const selectedAnimId = slot.bloblingAnimId ?? 'none';
-    this.bloblingAnimDropdown.setItems(animItems, selectedAnimId);
+    this.bloblingAnimDropdown.setItems(
+      animItems,
+      selectedAnimId,
+      { suppressAutoSelectOnMissingRestore: true },
+    );
 
     // Pre-load the Rive file in the background so it's ready when the user picks an animation.
     const rivUrl = getRiveFileUrl();
@@ -1444,27 +1494,37 @@ export class App {
   }
 
   /** Debounce text re-renders so rapid typing doesn't flood the canvas pipeline. */
-  private scheduleTextRerender(): void {
+  private scheduleTextRerender(targetIndexes?: number[]): void {
+    if (targetIndexes && targetIndexes.length > 0) {
+      for (const index of targetIndexes) this.textRenderQueue.add(index);
+    } else {
+      this.textRenderQueue.add(state.activeSlotIndex);
+    }
     if (this.textRenderDebounce !== null) clearTimeout(this.textRenderDebounce);
     this.textRenderDebounce = setTimeout(() => {
       this.textRenderDebounce = null;
-      this.rerenderTextLayer().catch((err) => console.error('[MG] Text render failed:', err));
+      const indexes = Array.from(this.textRenderQueue);
+      this.textRenderQueue.clear();
+      this.rerenderTextLayers(indexes).catch((err) => console.error('[MG] Text render failed:', err));
     }, 80);
   }
 
-  /** Re-render the active text slot's canvas and store it in gifFrames[0]. */
-  private async rerenderTextLayer(): Promise<void> {
-    const slot = getActiveSlot();
-    if (slot.type !== 'text' || !slot.textData) return;
-    const canvas = await renderTextToCanvas(slot.textData, slot.customTint.color);
-    // Update gifFrames in place without pushing undo (visual refresh only)
-    const currentSlot = state.slots[state.activeSlotIndex];
-    if (currentSlot.type !== 'text') return; // slot changed while awaiting
-    currentSlot.gifFrames = [{ canvas, delay: 0 }];
-    currentSlot.isAnimated = true;
-    currentSlot.spriteUrl  = 'text:'; // keep sentinel URL
+  /** Re-render one or more text slots and store each result in gifFrames[0]. */
+  private async rerenderTextLayers(targetIndexes: number[]): Promise<void> {
+    const uniqueTargets = Array.from(new Set(targetIndexes.filter((idx) => idx >= 0 && idx < state.slots.length)));
+    if (uniqueTargets.length === 0) return;
+    await Promise.all(uniqueTargets.map(async (index) => {
+      const slot = state.slots[index];
+      if (!slot || slot.type !== 'text' || !slot.textData) return;
+      const snapshot = slot.textData;
+      const canvas = await renderTextToCanvas(snapshot, slot.customTint.color);
+      const currentSlot = state.slots[index];
+      if (!currentSlot || currentSlot.type !== 'text' || currentSlot.textData !== snapshot) return;
+      currentSlot.gifFrames = [{ canvas, delay: 0 }];
+      currentSlot.isAnimated = true;
+      currentSlot.spriteUrl = 'text:'; // keep sentinel URL
+    }));
     bus.emit(Events.RENDER_REQUEST, null);
-    // Also refresh the slot button thumbnail
     this.refreshSlots();
   }
 
@@ -2821,7 +2881,11 @@ export class App {
 
     // setItems fires onSelect (→ populateSprites) if it has to auto-select.
     // We also call populateSprites() unconditionally to handle the silent-restore case.
-    this.categoryDropdown.setItems(items, state.selectedCategory || undefined);
+    this.categoryDropdown.setItems(
+      items,
+      state.selectedCategory || undefined,
+      { suppressAutoSelectOnMissingRestore: true },
+    );
 
     // Populate browser tab strip with same categories
     populateBrowserTabs(
@@ -2832,14 +2896,14 @@ export class App {
         state.selectedCategory = catId;
         this.categoryDropdown.selectById(catId);
         this.browserSearchInput.value = '';
-        this.populateSprites();
+        this.populateSprites(false);
       },
     );
 
-    this.populateSprites();
+    this.populateSprites(true);
   }
 
-  private populateSprites(): void {
+  private populateSprites(suppressAutoSelectOnMissingRestore: boolean): void {
     const cat = state.selectedCategory;
     const sd = state.spriteData;
     const items: DropdownItem[] = [];
@@ -2978,7 +3042,11 @@ export class App {
     } else {
       restoreId = slot.spriteKey || undefined;
     }
-    this.spriteDropdown.setItems(items, restoreId);
+    this.spriteDropdown.setItems(
+      items,
+      restoreId,
+      { suppressAutoSelectOnMissingRestore },
+    );
 
     // Cache items for browser grid + rebuild grid
     this.browserItems = items;
@@ -2995,11 +3063,13 @@ export class App {
   // ── Slots ──
 
   private refreshSlots(): void {
+    this.sanitizeSelection();
     this.slotContainer.innerHTML = '';
     for (let i = 0; i < state.slots.length; i++) {
       const slot = state.slots[i];
       const hasContent = !!slot.spriteUrl;
       const isActive   = i === state.activeSlotIndex;
+      const isSelected = this.isSlotSelected(i);
 
       // Type badge color
       const badgeColors: Record<string, string> = {
@@ -3042,7 +3112,7 @@ export class App {
       delBtn.addEventListener('click', (e) => { e.stopPropagation(); clearSlot(i); });
 
       const tile = el('div', {
-        className: `slot-tile${isActive ? ' active' : ''}${hasContent ? '' : ' empty'}`,
+        className: `slot-tile${isActive ? ' active' : ''}${isSelected ? ' selected' : ''}${hasContent ? '' : ' empty'}`,
         draggable: 'true',
         title: hasContent ? (slot.spriteKey.split('/').pop() ?? String(i + 1)) : String(i + 1),
       });
@@ -3052,9 +3122,18 @@ export class App {
         tile.append(plus);
       }
 
-      tile.addEventListener('click', () => setActiveSlot(i));
+      tile.addEventListener('click', (e) => {
+        if (e.metaKey || e.ctrlKey) {
+          this.toggleSlotInSelection(i);
+          setActiveSlot(i);
+          return;
+        }
+        this.clearMultiSelection();
+        setActiveSlot(i);
+      });
 
       tile.addEventListener('dragstart', () => {
+        this.clearMultiSelection();
         this.dragIdx = i;
         tile.classList.add('dragging');
       });
@@ -3112,6 +3191,7 @@ export class App {
   private refreshMutations(): void {
     this.mutationList.innerHTML = '';
     const slot = getActiveSlot();
+    const selectedIndexes = this.getEffectiveSelectionIndexes();
 
     for (const id of Object.keys(FILTERS)) {
       const isActive = slot.mutations.includes(id);
@@ -3122,13 +3202,17 @@ export class App {
       }) as HTMLElement;
       chip.style.background = MUTATION_CHIP_COLORS[id] ?? '#555';
       chip.addEventListener('click', () => {
-        const s = getActiveSlot();
-        const muts = [...s.mutations];
-        const idx = muts.indexOf(id);
-        if (idx >= 0) muts.splice(idx, 1);
-        else muts.push(id);
-        updateSlot(state.activeSlotIndex, { mutations: muts });
-        this.refreshMutations();
+        const activeSlot = getActiveSlot();
+        const shouldEnable = !activeSlot.mutations.includes(id);
+        beginBatchUpdate();
+        this.applyToSelection((targetSlot) => {
+          const next = new Set(targetSlot.mutations);
+          if (shouldEnable) next.add(id);
+          else next.delete(id);
+          targetSlot.mutations = Array.from(next);
+        }, selectedIndexes);
+        bus.emit(Events.SLOT_CHANGED, null);
+        bus.emit(Events.RENDER_REQUEST, null);
       });
       this.mutationList.append(chip);
     }
@@ -3286,6 +3370,46 @@ export class App {
     }
 
     return target;
+  }
+
+  private clearMultiSelection(): void {
+    this.selectedSlotIndexes.clear();
+  }
+
+  private sanitizeSelection(): void {
+    for (const index of Array.from(this.selectedSlotIndexes)) {
+      if (index < 0 || index >= state.slots.length) this.selectedSlotIndexes.delete(index);
+    }
+  }
+
+  private getEffectiveSelectionIndexes(): number[] {
+    this.sanitizeSelection();
+    if (this.selectedSlotIndexes.size > 0) {
+      return Array.from(this.selectedSlotIndexes).sort((a, b) => a - b);
+    }
+    if (state.activeSlotIndex < 0 || state.activeSlotIndex >= state.slots.length) return [];
+    return [state.activeSlotIndex];
+  }
+
+  private isSlotSelected(index: number): boolean {
+    return this.selectedSlotIndexes.size > 0 && this.selectedSlotIndexes.has(index);
+  }
+
+  private toggleSlotInSelection(index: number): void {
+    if (this.selectedSlotIndexes.has(index)) this.selectedSlotIndexes.delete(index);
+    else this.selectedSlotIndexes.add(index);
+  }
+
+  private applyToSelection(
+    updater: (slot: Slot, index: number) => void,
+    indexes = this.getEffectiveSelectionIndexes(),
+  ): number[] {
+    for (const index of indexes) {
+      const slot = state.slots[index];
+      if (!slot) continue;
+      updater(slot, index);
+    }
+    return indexes;
   }
 
   private setupColumnResize(
@@ -3644,17 +3768,27 @@ export class App {
 
       const hitIdx = hitTestSlot(canvasX, canvasY);
       if (hitIdx === null) return; // No sprite hit — don't start drag
-      if (hitIdx !== state.activeSlotIndex) {
-        setActiveSlot(hitIdx);
-      }
+      const hitWasSelected = this.isSlotSelected(hitIdx);
+      if (!hitWasSelected) this.clearMultiSelection();
+      if (hitIdx !== state.activeSlotIndex) setActiveSlot(hitIdx);
 
-      const slot = getActiveSlot();
-      if (slot.locked) return;
+      const dragIndexes = hitWasSelected ? this.getEffectiveSelectionIndexes() : [hitIdx];
+      if (dragIndexes.length === 0) return;
       isDragging = true;
       startX = e.clientX;
       startY = e.clientY;
-      slotStartX = slot.position.x;
-      slotStartY = slot.position.y;
+      this.groupDragIndexes = dragIndexes;
+      this.groupDragStartPos.clear();
+      for (const index of dragIndexes) {
+        const slot = state.slots[index];
+        if (!slot) continue;
+        this.groupDragStartPos.set(index, { x: slot.position.x, y: slot.position.y });
+      }
+      const activeStart = this.groupDragStartPos.get(state.activeSlotIndex);
+      if (activeStart) {
+        slotStartX = activeStart.x;
+        slotStartY = activeStart.y;
+      }
       this.previewCanvas.classList.add('dragging');
     });
 
@@ -3662,15 +3796,23 @@ export class App {
       if (!isDragging) return;
       const rect = this.previewCanvas.getBoundingClientRect();
       const cssScale = rect.width / this.previewCanvas.width;
-      const slot = getActiveSlot();
-      slot.position.x = this.snapAxis(slotStartX + (e.clientX - startX) / cssScale);
-      slot.position.y = this.snapAxis(slotStartY + (e.clientY - startY) / cssScale);
+      const dx = (e.clientX - startX) / cssScale;
+      const dy = (e.clientY - startY) / cssScale;
+      for (const index of this.groupDragIndexes) {
+        const slot = state.slots[index];
+        const startPos = this.groupDragStartPos.get(index);
+        if (!slot || !startPos) continue;
+        slot.position.x = this.snapAxis(startPos.x + dx);
+        slot.position.y = this.snapAxis(startPos.y + dy);
+      }
       this.render();
     });
 
     window.addEventListener('mouseup', () => {
       if (isDragging) {
         isDragging = false;
+        this.groupDragIndexes = [];
+        this.groupDragStartPos.clear();
         this.previewCanvas.classList.remove('dragging');
       }
     });
@@ -4455,6 +4597,7 @@ export class App {
       const loadBtn = el('button', { className: 'btn-sm', textContent: 'Load' }) as HTMLButtonElement;
       loadBtn.addEventListener('click', () => {
         pushUndo();
+        this.clearMultiSelection();
         state.slots = scene.slots;
         state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
         bus.emit(Events.SLOT_CHANGED, null);
