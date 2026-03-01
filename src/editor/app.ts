@@ -17,9 +17,15 @@ import type { DropdownItem } from './custom-dropdown';
 import { spriteLoader } from '../api/sprite-loader';
 import type { SpriteFrame } from '../api/types';
 import { renderTextToCanvas, defaultTextData } from './text-renderer';
-import { drawFullCardStats, defaultFullCardData, abilityColor } from './full-card-renderer';
+import { drawFullCardStats, abilityColor, defaultFullCardData } from './full-card-renderer';
 import { MG_FONTS, SYSTEM_FONTS, GOOGLE_FONTS_CURATED, UNICODE_STYLES, ensureFontLoaded } from './font-data';
 import { getRiveFileUrl, getBloblingAnimations, renderBloblingFrames, BLOBLING_ANIMATIONS, getExpressionIndex } from './blobling-rive';
+import { buildToolbar } from './toolbar';
+import { buildAssetBrowser, populateBrowserTabs, populateBrowserGrid } from './panels/asset-browser';
+import { Drawer } from './drawers/drawer';
+import { BLOBLING_LAYER_ORDER } from './drawers/blobling-drawer';
+import type { BloblingLayerKey } from './drawers/blobling-drawer';
+import { MUTATION_CHIP_COLORS } from './drawers/card-drawer';
 
 // ── Hit-test content bounds ──────────────────────────────────────────────────
 // Cache tight bounding boxes (content only, transparent padding stripped) so
@@ -81,19 +87,7 @@ function scanContentBounds(
   return { cx: bx + bw / 2, cy: by + bh / 2, hw: bw / 2, hv: bh / 2 };
 }
 
-// ── Mutation chip colors (for toggle-chip UI) ────────────────────────────────
-const MUTATION_CHIP_COLORS: Record<string, string> = {
-  Gold:          '#EBC800',
-  Rainbow:       'linear-gradient(90deg, #FF1744, #FF9100, #FFEA00, #00E676, #2979FF, #D500F9)',
-  Wet:           '#32B4C8',
-  Chilled:       '#64A0D2',
-  Frozen:        '#6482DC',
-  Thunderstruck: '#FFD700',
-  Dawnlit:       '#D146E7',
-  Ambershine:    '#BE6428',
-  Dawncharged:   '#8C50C8',
-  Ambercharged:  '#AA3C19',
-};
+// MUTATION_CHIP_COLORS imported from './drawers/card-drawer'
 
 
 // (card-tinting functions removed — card PNG sprites are pre-colored per type)
@@ -101,7 +95,6 @@ const MUTATION_CHIP_COLORS: Record<string, string> = {
 export class App {
   private categoryDropdown!: CustomDropdown;
   private spriteDropdown!: CustomDropdown;
-  private searchInput!: HTMLInputElement;
   private slotContainer!: HTMLElement;
   private mutationList!: HTMLElement;
   private customTintControls!: HTMLElement;
@@ -121,10 +114,23 @@ export class App {
   private dragIdx: number | null = null;
   private dragInsertBefore: number | null = null;
   private frameScheduler = new FrameScheduler();
+  // ── New layout refs ──
+  private drawer!: Drawer;
+  private mainEl!: HTMLElement;
+  private cardTypePickerEl!: HTMLElement;
+  private cardPickerCanvases = new Map<string, HTMLCanvasElement>();
+  private cardPickerMode: 'layers' | 'full' = 'layers';
+  private inspectorEl!: HTMLElement;
+  private browserTabsEl!: HTMLElement;
+  private browserGridEl!: HTMLElement;
+  private browserSearchInput!: HTMLInputElement;
+  private browserCleanup: (() => void) | null = null;
+  private optionsDiv!: HTMLElement;
+  private tintLabel!: HTMLElement;
+  private browserItems: DropdownItem[] = [];
 
   // ── Text layer UI ──
-  private spriteControls!: HTMLElement;   // search + sprite dropdown section (category is separate)
-  private textControls!: HTMLElement;     // text-layer-specific section
+  private textControls!: HTMLElement;     // text-layer-specific section (shown in drawer)
   private textArea!: HTMLTextAreaElement;
   private fontGroupDropdown!: CustomDropdown; // font category (MG / System / Google / Unicode)
   private fontItemDropdown!: CustomDropdown;  // individual font within group
@@ -143,13 +149,10 @@ export class App {
   private strokeWidthInput!: HTMLInputElement;
   private unicodeRow!: HTMLElement;
   private unicodeDropdown!: CustomDropdown;
-  private tintLabel!: HTMLElement;       // relabelled when text/full-card slot active
-  private addTextBtn!: HTMLButtonElement;
   private textRenderDebounce: ReturnType<typeof setTimeout> | null = null;
 
   // ── Scenes UI ──
   private scenesListEl!: HTMLElement;
-  private sceneNameInput!: HTMLInputElement;
 
   // ── Blobling Rig UI ──
   private bloblingControls!: HTMLElement;
@@ -227,6 +230,9 @@ export class App {
 
   private fullCardRenderDebounce: ReturnType<typeof setTimeout> | null = null;
 
+  // ── Copy / paste clipboard ──
+  private copiedSlot: Partial<Slot> | null = null;
+
   constructor(container: HTMLElement) {
     initTheme();
     container.innerHTML = '';
@@ -237,120 +243,33 @@ export class App {
   }
 
   private buildUI(container: HTMLElement): void {
-    // ── Header ──
-    const themeBtn = el('button', { id: 'themeToggle' });
-    themeBtn.textContent = state.theme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
-    themeBtn.title = 'Toggle Light/Dark Mode';
-    themeBtn.addEventListener('click', () => {
+    // ── Toolbar ──
+    const tb = buildToolbar();
+    this.downloadBtn = tb.downloadBtn;
+
+    tb.themeBtn.textContent = state.theme === 'dark' ? '☀' : '🌙';
+    tb.themeBtn.addEventListener('click', () => {
       toggleTheme();
-      themeBtn.textContent = state.theme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
+      tb.themeBtn.textContent = state.theme === 'dark' ? '☀' : '🌙';
     });
-
-    const header = el('header', {}, [
-      el('div', {}, [
-        el('h1', { textContent: 'MG Sprite Customiser' }),
-        el('p', { textContent: 'Choose a category, apply mutations, then download.' }),
-      ]),
-      themeBtn,
-    ]);
-
-    // ── Left Panel: Controls ──
-    this.slotContainer = el('div', { className: 'slots' });
-
-    this.searchInput = el('input', {
-      id: 'search',
-      type: 'text',
-      placeholder: 'Filter sprites\u2026',
-    }) as HTMLInputElement;
-
-    // Category dropdown — no thumbnails, just text
-    this.categoryDropdown = new CustomDropdown({
-      showThumbs: false,
-      placeholder: 'Select category\u2026',
-      onSelect: (item: DropdownItem) => {
-        if (!item.fullCardType && !item.cardPresetUrls) {
-          // no-op: lastSpriteSelection removed
-        }
-        state.selectedCategory = item.id;
-        // Clear search when changing category
-        this.searchInput.value = '';
-        this.populateSprites();
-      },
+    tb.undoBtn.addEventListener('click', () => undo());
+    tb.redoBtn.addEventListener('click', () => redo());
+    tb.downloadBtn.addEventListener('click', () => this.download());
+    tb.clearSlotBtn.addEventListener('click', () => clearSlot(state.activeSlotIndex));
+    tb.resetAllBtn.addEventListener('click', () => {
+      if (confirm('Reset all slots?')) {
+        for (let i = 0; i < state.slots.length; i++) clearSlot(i);
+      }
     });
+    tb.addTextBtn.addEventListener('click', () => this.addTextLayer());
+    tb.addCardBtn.addEventListener('click', () => this.showCardTypePicker('layers'));
+    tb.addFullCardBtn.addEventListener('click', () => this.showCardTypePicker('full'));
+    tb.addBloblingBtn.addEventListener('click', () => this.addBloblingLayer());
 
-    // Sprite dropdown — thumbnails from API
-    this.spriteDropdown = new CustomDropdown({
-      showThumbs: true,
-      placeholder: 'Select sprite\u2026',
-      // When a thumbnail scrolls into view in the dropdown, also warm SpriteLoader's
-      // in-memory cache (fetch→blob→Image, low priority). So by the time the user
-      // clicks, the canvas renderer finds it instantly without re-fetching.
-      onThumbVisible: (url) => spriteLoader.preloadUrls([url]),
-      onSelect: (item: DropdownItem) => {
-        if (item.id === 'blobling-new') {
-          this.addBloblingLayer();
-        } else if (item.fullCardType) {
-          this.addFullCardPreset(item.fullCardType as FullCardType);
-        } else if (item.cardPresetUrls && item.cardPresetUrls.length > 0) {
-          this.applyCardPreset(item.cardPresetUrls, item.label);
-        } else if (item.animFrameUrls && item.animFrameUrls.length > 0) {
-          // Show first frame immediately, then async-load all frames for animated playback
-          const firstUrl = item.animFrameUrls[0];
-          updateSlot(state.activeSlotIndex, {
-            type: 'sprite',
-            spriteKey: item.id,
-            spriteUrl: firstUrl,
-            gifFrames: undefined,
-            isAnimated: false,
-          });
-          this.stopGifPreview();
-          this.loadAtlasAnimation(state.activeSlotIndex, item.id, item.animFrameUrls);
-        } else {
-          const url = item.thumbUrl ?? '';
-          updateSlot(state.activeSlotIndex, {
-            type: 'sprite',
-            spriteKey: item.id,
-            spriteUrl: url,
-            gifFrames: undefined,
-            isAnimated: false,
-          });
-          this.stopGifPreview();
-        }
-      },
-    });
-
-    // ── Sprite controls section (hidden when text slot is active) ──
-    // Category dropdown lives OUTSIDE spriteControls so it is always visible.
-    this.spriteControls = el('div', { className: 'sprite-controls-section' });
-
-    // ── Text Layer Controls (hidden when sprite slot active) ──
-    this.textControls = el('div', { className: 'text-controls-section', style: 'display:none' });
-    this.buildTextControls();
-
-    // ── Full Card Controls (hidden unless full-card slot active) ──
-    this.fullCardControls = this.buildFullCardControls();
-
-    // ── Blobling Rig Controls (hidden unless cosmetic blobling slot active) ──
-    this.bloblingControls = this.buildBloblingControls();
-
-    // Populate sprite controls contents (search + sprite list only — no category here)
-    this.spriteControls.append(
-      el('label', { textContent: 'Search' }),
-      this.searchInput,
-      el('label', { textContent: 'Sprite' }),
-      this.spriteDropdown.element,
-    );
-
-    // Upload
-    const fileInput = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif', id: 'uploadFile' }) as HTMLInputElement;
-    const uploadBtn = el('button', { className: 'secondary', textContent: 'Upload PNG/GIF' });
-    uploadBtn.addEventListener('click', () => fileInput.click());
-    fileInput.style.display = 'none';
-    fileInput.addEventListener('change', async () => {
-      const file = fileInput.files?.[0];
+    tb.uploadInput.addEventListener('change', async () => {
+      const file = tb.uploadInput.files?.[0];
       if (!file) return;
       const name = file.name.replace(/\.[^.]+$/, '');
-
       if (file.type === 'image/gif' || file.name.toLowerCase().endsWith('.gif')) {
         const buffer = await file.arrayBuffer();
         const decoded = decodeGif(buffer);
@@ -358,36 +277,71 @@ export class App {
           decoded.frames[0].canvas.toBlob((b) => resolve(b!), 'image/png'),
         );
         const url = URL.createObjectURL(firstFrameBlob);
-        updateSlot(state.activeSlotIndex, {
-          type: 'custom',
-          spriteKey: name,
-          spriteUrl: url,
-          gifFrames: decoded.frames,
-          isAnimated: true,
-        });
+        updateSlot(state.activeSlotIndex, { type: 'custom', spriteKey: name, spriteUrl: url, gifFrames: decoded.frames, isAnimated: true });
         this.startGifPreview();
       } else {
         const url = URL.createObjectURL(file);
-        updateSlot(state.activeSlotIndex, {
-          type: 'custom',
-          spriteKey: name,
-          spriteUrl: url,
-          gifFrames: undefined,
-          isAnimated: false,
-        });
+        updateSlot(state.activeSlotIndex, { type: 'custom', spriteKey: name, spriteUrl: url, gifFrames: undefined, isAnimated: false });
         this.stopGifPreview();
       }
-      fileInput.value = '';
+      tb.uploadInput.value = '';
     });
 
-    // Add text layer button
-    this.addTextBtn = el('button', { className: 'secondary txt-add-btn', textContent: '+ Text Layer' }) as HTMLButtonElement;
-    this.addTextBtn.addEventListener('click', () => this.addTextLayer());
+    tb.sceneSaveBtn.addEventListener('click', () => {
+      const name = tb.sceneNameInput.value.trim();
+      tb.sceneSaveBtn.disabled = true;
+      const thumbnail = this.captureSceneThumbnail();
+      saveNamedScene(name || 'Untitled', thumbnail)
+        .then(() => { tb.sceneNameInput.value = ''; this.refreshScenesList(); })
+        .catch(err => console.error('[MG] Save scene failed:', err))
+        .finally(() => { tb.sceneSaveBtn.disabled = false; });
+    });
 
-    // Mutations
-    this.mutationList = el('div', { className: 'mutations' });
+    tb.sceneLoadInput.addEventListener('change', () => {
+      const file = tb.sceneLoadInput.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const scene = importSceneJson(reader.result as string);
+        if (!scene) { alert('Invalid scene file'); return; }
+        pushUndo();
+        state.slots = scene.slots;
+        state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
+        bus.emit(Events.SLOT_CHANGED, null);
+        bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
+        bus.emit(Events.RENDER_REQUEST, null);
+        this.rerenderAllSpecialSlots().catch(err => console.error('[MG] Scene re-render failed:', err));
+      };
+      reader.readAsText(file);
+      tb.sceneLoadInput.value = '';
+    });
 
-    // Custom tint / text color
+    // ── Category + Sprite dropdowns (hidden singletons — browser grid renders from their data) ──
+    this.categoryDropdown = new CustomDropdown({
+      showThumbs: false,
+      placeholder: 'Select category\u2026',
+      onSelect: (item: DropdownItem) => {
+        state.selectedCategory = item.id;
+        this.browserSearchInput.value = '';
+        this.populateSprites();
+      },
+    });
+
+    this.spriteDropdown = new CustomDropdown({
+      showThumbs: true,
+      placeholder: 'Select sprite\u2026',
+      onThumbVisible: (url) => spriteLoader.preloadUrls([url]),
+      onSelect: (item: DropdownItem) => this.applySpriteItem(item),
+    });
+
+    // ── Drawer content: text / full-card / blobling ──
+    this.textControls = el('div', { className: 'text-controls-section' });
+    this.buildTextControls();
+    this.fullCardControls = this.buildFullCardControls();
+    this.bloblingControls = this.buildBloblingControls();
+
+    // ── Inspector control elements (created once, reparented by syncInspector) ──
+    this.mutationList = el('div', { className: 'mutation-chips' });
     this.tintLabel = el('label', { textContent: 'Custom Tint' }) as HTMLElement;
     this.customColor = el('input', { type: 'color', id: 'customColor', value: '#ffffff' }) as HTMLInputElement;
     this.customOpacity = el('input', { type: 'range', id: 'customOpacity', min: '0', max: '1', step: '0.05', value: '0' }) as HTMLInputElement;
@@ -396,113 +350,40 @@ export class App {
       el('div', {}, [el('label', { textContent: 'Opacity' }), this.customOpacity]),
     ]);
 
-    // Options
     const optIcons = el('input', { type: 'checkbox', id: 'optIcons' }) as HTMLInputElement;
     optIcons.checked = true;
     const optOverlays = el('input', { type: 'checkbox', id: 'optOverlays' }) as HTMLInputElement;
     optOverlays.checked = true;
-    const optionsDiv = el('div', { className: 'toggles' }, [
+    this.optionsDiv = el('div', { className: 'toggles' }, [
       this.makeCheckLabel('Icons', optIcons),
       this.makeCheckLabel('Tall overlays', optOverlays),
     ]);
-
     optIcons.addEventListener('change', () => updateSlot(state.activeSlotIndex, { options: { icons: optIcons.checked, overlays: optOverlays.checked } }));
     optOverlays.addEventListener('change', () => updateSlot(state.activeSlotIndex, { options: { icons: optIcons.checked, overlays: optOverlays.checked } }));
 
-    // Scale / Rotation
     this.scaleLabel = el('label', { textContent: 'Scale' });
     this.scaleInput = el('input', { id: 'scale', type: 'range', min: '0.1', max: '4', step: '0.1', value: '1' }) as HTMLInputElement;
     this.rotationInput = el('input', { id: 'rotation', type: 'range', min: '0', max: '360', step: '5', value: '0' }) as HTMLInputElement;
 
-    // Timeline (for GIF playback)
     this.timelinePlayBtn = el('button', { className: 'btn-sm', textContent: 'Play' });
     this.timelineScrubber = el('input', { type: 'range', min: '0', max: '0', value: '0', className: 'timeline-scrubber' }) as HTMLInputElement;
     this.timelineLabel = el('span', { className: 'frame-label', textContent: '0/0' });
-    this.timelineBar = el('div', { className: 'timeline-bar' }, [
-      this.timelinePlayBtn,
-      this.timelineScrubber,
-      this.timelineLabel,
-    ]);
+    this.timelineBar = el('div', { className: 'timeline-bar' }, [this.timelinePlayBtn, this.timelineScrubber, this.timelineLabel]);
     this.timelineBar.style.display = 'none';
-
-    this.timelinePlayBtn.addEventListener('click', () => this.toggleGifPlay());
-    this.timelineScrubber.addEventListener('input', () => {
-      this.frameScheduler.seek(parseInt(this.timelineScrubber.value));
-    });
-
-    // Actions
-    this.downloadBtn = el('button', { id: 'download', textContent: 'Download PNG' }) as HTMLButtonElement;
-    const clearBtn = el('button', { className: 'secondary', textContent: 'Clear Slot' });
-    const resetBtn = el('button', { className: 'danger', textContent: 'Reset All' });
     this.downloadProgress = el('div', { className: 'download-progress' });
 
-    const controls = el('section', { className: 'panel', id: 'controls' }, [
-      el('h2', { textContent: 'Controls' }),
-      this.metaLabel('Layers', '(drag to reorder)'),
-      this.slotContainer,
-      // Category dropdown is always visible regardless of slot type
-      el('label', { textContent: 'Category' }),
-      this.categoryDropdown.element,
-      this.spriteControls,
-      this.textControls,
-      this.fullCardControls,
-      this.bloblingControls,
-      el('div', { className: 'upload-controls' }, [
-        el('div', { className: 'upload-actions' }, [uploadBtn, fileInput, this.addTextBtn]),
-      ]),
-      el('label', { textContent: 'Mutations' }),
-      this.mutationList,
-      this.tintLabel,
-      this.customTintControls,
-      el('label', { textContent: 'Options' }),
-      optionsDiv,
-      this.scaleLabel,
-      this.scaleInput,
-      el('label', { textContent: 'Rotation' }),
-      this.rotationInput,
-      this.timelineBar,
-      el('div', { className: 'actions' }, [this.downloadBtn, clearBtn, resetBtn]),
-      this.downloadProgress,
-      this.buildScenesSection(),
-    ]);
+    this.timelinePlayBtn.addEventListener('click', () => this.toggleGifPlay());
+    this.timelineScrubber.addEventListener('input', () => { this.frameScheduler.seek(parseInt(this.timelineScrubber.value)); });
 
-    // ── Right Panel: Preview ──
-    this.previewCanvas = document.createElement('canvas');
-    this.previewCanvas.width = 1024;
-    this.previewCanvas.height = 1024;
-
-    this.metaEl = el('div', { className: 'meta', id: 'meta' });
-
-    const previewDiv = el('div', { id: 'previewCanvas' }, [this.previewCanvas]);
-    const previewWrap = el('section', { className: 'panel', id: 'previewWrap' }, [
-      el('h2', { textContent: 'Preview' }),
-      previewDiv,
-      this.metaEl,
-    ]);
-
-    const main = el('main', {}, [controls, previewWrap]);
-    container.append(header, main);
-
-    // ── Wire up actions ──
-    this.downloadBtn.addEventListener('click', () => this.download());
-    clearBtn.addEventListener('click', () => clearSlot(state.activeSlotIndex));
-    resetBtn.addEventListener('click', () => {
-      if (confirm('Reset all slots?')) {
-        for (let i = 0; i < state.slots.length; i++) clearSlot(i);
-      }
-    });
-
-    // Scale / Rotation (debounced)
-      this.scaleInput.addEventListener('input', () => {
-        const slot = getActiveSlot();
-        beginBatchUpdate();
-        if (slot.type === 'text') {
-          // Scale slider = font size for text layers
-          const fontSize = Math.max(6, Math.min(200, parseFloat(this.scaleInput.value) || 36));
-          const td = { ...slot.textData!, fontSize };
-          updateSlotSilent(state.activeSlotIndex, { textData: td });
-          this.scheduleTextRerender();
-        } else {
+    this.scaleInput.addEventListener('input', () => {
+      const slot = getActiveSlot();
+      beginBatchUpdate();
+      if (slot.type === 'text') {
+        const fontSize = Math.max(6, Math.min(200, parseFloat(this.scaleInput.value) || 36));
+        const td = { ...slot.textData!, fontSize };
+        updateSlotSilent(state.activeSlotIndex, { textData: td });
+        this.scheduleTextRerender();
+      } else {
         updateSlotSilent(state.activeSlotIndex, { scale: parseFloat(this.scaleInput.value) || 1 });
       }
     });
@@ -511,20 +392,15 @@ export class App {
       updateSlotSilent(state.activeSlotIndex, { rotation: parseFloat(this.rotationInput.value) || 0 });
     });
 
-    // Custom tint (debounced) — for text slots this drives the text fill colour
     const updateTint = () => {
       const slot = getActiveSlot();
       beginBatchUpdate();
-      updateSlotSilent(state.activeSlotIndex, {
-        customTint: { color: this.customColor.value, opacity: parseFloat(this.customOpacity.value) },
-      });
+      updateSlotSilent(state.activeSlotIndex, { customTint: { color: this.customColor.value, opacity: parseFloat(this.customOpacity.value) } });
       if (slot.type === 'text') this.scheduleTextRerender();
-      // Full-card: tint is applied by renderSlot, no canvas rerender needed
     };
     this.customColor.addEventListener('input', updateTint);
     this.customOpacity.addEventListener('input', updateTint);
 
-    // Sync options checkboxes on slot change
     bus.on(Events.SLOT_SELECTED, () => {
       const slot = getActiveSlot();
       optIcons.checked = slot.options.icons;
@@ -533,31 +409,76 @@ export class App {
       this.customColor.value = slot.customTint.color;
       this.customOpacity.value = String(slot.customTint.opacity);
       this.syncTextSlotUI(slot);
-      if (slot.isAnimated && slot.gifFrames) {
-        this.startGifPreview();
-      } else {
-        this.stopGifPreview();
-      }
+      if (slot.isAnimated && slot.gifFrames) { this.startGifPreview(); } else { this.stopGifPreview(); }
     });
+
+    // ── Layout ──
+    this.slotContainer = el('div', { className: 'slot-grid' });
+    this.inspectorEl   = el('div', { className: 'inspector' });
+    this.scenesListEl  = el('div', { className: 'scenes-list' });
+    const scenesPanel = el('div', { className: 'scenes-section' }, [
+      el('h3', { className: 'scenes-heading', textContent: 'Scenes' }),
+      this.scenesListEl,
+    ]);
+    this.refreshScenesList();
+
+    const layersCol = el('div', { className: 'sc2-col-layers' }, [
+      el('div', { className: 'inspector-section' }, [
+        el('span', { className: 'inspector-section-title', textContent: 'Layers' }),
+        this.slotContainer,
+      ]),
+      this.inspectorEl,
+      scenesPanel,
+    ]);
+
+    // Browser column
+    const { el: browserEl, tabsEl, searchInput: bsInput, gridEl } = buildAssetBrowser();
+    this.browserTabsEl     = tabsEl;
+    this.browserGridEl     = gridEl;
+    this.browserSearchInput = bsInput;
+    bsInput.addEventListener('input', () => this.updateBrowserGrid(bsInput.value));
+
+    // Canvas column
+    this.previewCanvas = document.createElement('canvas');
+    this.previewCanvas.id     = 'previewCanvas';
+    this.previewCanvas.width  = 1024;
+    this.previewCanvas.height = 1024;
+    this.metaEl = el('div', { className: 'meta', id: 'meta' });
+    const canvasCol = el('div', { className: 'sc2-col-canvas' }, [this.previewCanvas, this.metaEl]);
+
+    // Card type picker overlay (hidden until Add Card is clicked)
+    this.buildCardTypePicker();
+
+    // Drawer
+    this.drawer  = new Drawer();
+    this.mainEl  = el('div', { className: 'sc2-main' });
+    this.drawer.attachMain(this.mainEl);
+    this.mainEl.append(layersCol, browserEl, canvasCol, this.drawer.el);
+
+    const appEl = el('div', { className: 'sc2-app' }, [tb.el, this.mainEl]);
+    container.append(appEl);
   }
 
   private bindEvents(): void {
-    // Search → filter sprite dropdown items in-place (no rebuild)
-    this.searchInput.addEventListener('input', () => {
-      this.spriteDropdown.filter(this.searchInput.value);
-    });
-
     // Render on changes
-    bus.on(Events.SLOT_CHANGED, () => { this.refreshSlots(); this.updateMeta(); this.syncDownloadBtn(); this.render(); this.syncTextSlotUI(getActiveSlot()); });
+    bus.on(Events.SLOT_CHANGED, () => {
+      this.refreshSlots();
+      this.updateMeta();
+      this.syncDownloadBtn();
+      this.render();
+      const slot = getActiveSlot();
+      this.syncTextSlotUI(slot);
+      this.syncInspector(slot);
+    });
     bus.on(Events.SLOT_SELECTED, () => {
       this.refreshSlots();
       this.refreshMutations();
       this.updateMeta();
       this.syncDownloadBtn();
       const slot = getActiveSlot();
-      // Sync dropdown selection to the newly active slot's sprite (silent — no reload)
       if (slot.type !== 'text' && slot.type !== 'full-card' && slot.type !== 'cosmetic') this.spriteDropdown.selectById(slot.spriteKey);
       this.syncTextSlotUI(slot);
+      this.syncInspector(slot);
     });
     bus.on(Events.RENDER_REQUEST, () => this.render());
     bus.on(Events.DATA_LOADED, () => {
@@ -569,9 +490,26 @@ export class App {
 
     // Keyboard shortcuts
     window.addEventListener('keydown', (e) => {
+      // Never fire when typing in an input / textarea / contenteditable
+      const active = document.activeElement;
+      const inInput = active instanceof HTMLInputElement
+        || active instanceof HTMLTextAreaElement
+        || (active instanceof HTMLElement && active.isContentEditable);
+
       if (e.ctrlKey || e.metaKey) {
         if (e.key === 'z') { e.preventDefault(); undo(); }
         if (e.key === 'y') { e.preventDefault(); redo(); }
+        if (!inInput) {
+          if (e.key === 'c') { e.preventDefault(); this.copyActiveSlot(); }
+          if (e.key === 'v') { e.preventDefault(); this.pasteCopiedSlot(); }
+          if (e.key === 'd') { e.preventDefault(); this.duplicateActiveSlot(); }
+        }
+      }
+
+      // Delete active slot — only when no text input is focused
+      if (!inInput && (e.key === 'Delete' || e.key === 'Backspace')) {
+        e.preventDefault();
+        clearSlot(state.activeSlotIndex);
       }
     });
 
@@ -879,36 +817,30 @@ export class App {
     }
   }
 
-  /** Sync visible/hidden and slider range when switching between slot types. */
+  /** Open the appropriate drawer for the active slot type, and sync content from slot state. */
   private syncTextSlotUI(slot: Slot): void {
     const isText     = slot.type === 'text';
     const isFullCard = slot.type === 'full-card';
     const isCosmetic = slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:';
 
-    // Category dropdown is always visible (lives above spriteControls in the DOM).
-    // Only hide the sprite list for text/blobling slots.
-    this.spriteControls.style.display   = (isText || isCosmetic) ? 'none' : '';
-    this.textControls.style.display     = isText     ? '' : 'none';
-    this.fullCardControls.style.display = isFullCard ? '' : 'none';
-    this.bloblingControls.style.display = isCosmetic ? '' : 'none';
-    this.tintLabel.textContent = isText ? 'Text Color' : (isFullCard ? 'Card Tint' : 'Custom Tint');
+    // Open/close drawer
+    if (isText) {
+      this.drawer.open('Text Editor', this.textControls);
+    } else if (isFullCard) {
+      this.drawer.open('Card Editor', this.fullCardControls);
+    } else if (isCosmetic) {
+      this.drawer.open('Blobling Rig', this.bloblingControls);
+    } else {
+      // Close drawer only if it was showing a special-slot panel
+      const cur = this.drawer.currentContent();
+      if (cur === this.textControls || cur === this.fullCardControls || cur === this.bloblingControls) {
+        this.drawer.close();
+      }
+    }
 
     if (isCosmetic) {
-      // Blobling slot: scale slider in normal sprite mode
-      this.scaleLabel.textContent = 'Scale';
-      this.scaleInput.min  = '0.1';
-      this.scaleInput.max  = '4';
-      this.scaleInput.step = '0.1';
-      this.scaleInput.value = String(slot.scale);
       this.syncBloblingUI(slot);
     } else if (isText) {
-        // Switch scale slider → font size mode
-        this.scaleLabel.textContent = 'Font Size';
-        this.scaleInput.min  = '6';
-        this.scaleInput.max  = '200';
-        this.scaleInput.step = '1';
-        this.scaleInput.value = String(slot.textData?.fontSize ?? 36);
-
       // Sync text-specific controls from slot state
       if (slot.textData) {
         this.textArea.value = slot.textData.content;
@@ -924,11 +856,7 @@ export class App {
         this.strokeColorInput.value = slot.textData.strokeColor;
         this.strokeWidthInput.value = String(slot.textData.strokeWidth);
         this.unicodeDropdown.selectById(slot.textData.unicodeStyle ?? 'none');
-        // Sync font group + item dropdowns from saved textData.
-        // Use setItems(items, restoreId) so CustomDropdown takes the silent
-        // restore path — calling onFontGroupSelect would trigger setItems with
-        // no restoreId, auto-selecting the first item and firing onSelectCb →
-        // applyFontSelection → updateSlot → SLOT_CHANGED → infinite loop.
+        // Sync font group + item dropdowns from saved textData (silent restore).
         const { fontFamily, fontWeight } = slot.textData;
         const mgDef  = MG_FONTS.find(f => f.family === fontFamily && f.weight === fontWeight);
         const sysDef = SYSTEM_FONTS.find(f => f.family === fontFamily);
@@ -956,18 +884,107 @@ export class App {
           this.unicodeRow.style.display = 'none';
         }
       }
+    } else if (isFullCard) {
+      this.syncFullCardUI(slot);
+    }
+  }
+
+  /** Rebuild the inspector panel based on the active slot type. */
+  private syncInspector(slot: Slot): void {
+    const isText     = slot.type === 'text';
+    const isFullCard = slot.type === 'full-card';
+    const isCosmetic = slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:';
+    const isSprite   = !isText && !isFullCard && !isCosmetic;
+
+    this.inspectorEl.innerHTML = '';
+
+    // Scale + rotation section (always present)
+    if (isText) {
+      this.scaleLabel.textContent = 'Font Size';
+      this.scaleInput.min  = '6';
+      this.scaleInput.max  = '200';
+      this.scaleInput.step = '1';
+      this.scaleInput.value = String(slot.textData?.fontSize ?? 36);
     } else {
-      // Sprite or full-card: scale slider stays in sprite scale mode (0.1–4)
       this.scaleLabel.textContent = 'Scale';
       this.scaleInput.min  = '0.1';
       this.scaleInput.max  = '4';
       this.scaleInput.step = '0.1';
       this.scaleInput.value = String(slot.scale);
-
-      if (isFullCard) {
-        this.syncFullCardUI(slot);
-      }
     }
+    this.rotationInput.value = String(slot.rotation);
+    const transformSection = el('div', { className: 'inspector-section' }, [
+      this.scaleLabel, this.scaleInput,
+      el('span', { className: 'inspector-section-title', textContent: 'Rotation' }),
+      this.rotationInput,
+    ]);
+
+    if (isText) {
+      const editBtn = el('button', { className: 'inspector-edit-btn', textContent: 'Edit Text' }) as HTMLButtonElement;
+      editBtn.addEventListener('click', () => this.drawer.open('Text Editor', this.textControls));
+      this.inspectorEl.append(editBtn, transformSection);
+    } else if (isFullCard) {
+      this.tintLabel.textContent = 'Card Tint';
+      const editBtn = el('button', { className: 'inspector-edit-btn', textContent: 'Edit Card' }) as HTMLButtonElement;
+      editBtn.addEventListener('click', () => this.drawer.open('Card Editor', this.fullCardControls));
+      const tintSection = el('div', { className: 'inspector-section' }, [this.tintLabel, this.customTintControls]);
+      this.inspectorEl.append(editBtn, transformSection, tintSection);
+    } else if (isCosmetic) {
+      const editBtn = el('button', { className: 'inspector-edit-btn', textContent: 'Edit Blobling' }) as HTMLButtonElement;
+      editBtn.addEventListener('click', () => this.drawer.open('Blobling Rig', this.bloblingControls));
+      this.inspectorEl.append(editBtn, transformSection);
+    } else if (isSprite) {
+      this.tintLabel.textContent = 'Custom Tint';
+      const mutSection  = el('div', { className: 'inspector-section' }, [
+        el('span', { className: 'inspector-section-title', textContent: 'Mutations' }),
+        this.mutationList,
+      ]);
+      const tintSection = el('div', { className: 'inspector-section' }, [this.tintLabel, this.customTintControls]);
+      const optSection  = el('div', { className: 'inspector-section' }, [
+        el('span', { className: 'inspector-section-title', textContent: 'Options' }),
+        this.optionsDiv,
+      ]);
+      this.inspectorEl.append(mutSection, tintSection, transformSection, optSection, this.timelineBar);
+    }
+    this.inspectorEl.append(this.downloadProgress);
+  }
+
+  /** Apply a DropdownItem selection to the active slot (shared by dropdown + browser grid). */
+  private applySpriteItem(item: DropdownItem): void {
+    if (item.id === 'blobling-new') {
+      this.addBloblingLayer();
+    } else if (item.cardPresetUrls && item.cardPresetUrls.length > 0) {
+      // Route through addCardLayers so all elements appear pixel-perfectly positioned.
+      // item.id is 'cardpreset/{Type}' (e.g. 'cardpreset/Pet').
+      const cardType = item.id.split('/')[1] as FullCardType | undefined;
+      if (cardType) {
+        this.addCardLayers(cardType).catch(err => console.error('[Card] Layer load failed:', err));
+      } else {
+        this.addCardUrlsAsLayers(item.cardPresetUrls, item.label)
+          .catch(err => console.error('[Card] Layer load failed:', err));
+      }
+    } else if (item.animFrameUrls && item.animFrameUrls.length > 0) {
+      const firstUrl = item.animFrameUrls[0];
+      updateSlot(state.activeSlotIndex, { type: 'sprite', spriteKey: item.id, spriteUrl: firstUrl, gifFrames: undefined, isAnimated: false });
+      this.stopGifPreview();
+      this.loadAtlasAnimation(state.activeSlotIndex, item.id, item.animFrameUrls);
+    } else {
+      const url = item.thumbUrl ?? '';
+      updateSlot(state.activeSlotIndex, { type: 'sprite', spriteKey: item.id, spriteUrl: url, gifFrames: undefined, isAnimated: false });
+      this.stopGifPreview();
+    }
+  }
+
+  /** Rebuild the browser grid from current cached items, optionally filtered by query. */
+  private updateBrowserGrid(query?: string): void {
+    const q = query ?? this.browserSearchInput.value ?? '';
+    this.browserCleanup?.();
+    this.browserCleanup = populateBrowserGrid(
+      this.browserGridEl,
+      this.browserItems,
+      q,
+      (item) => this.applySpriteItem(item),
+    );
   }
 
   /** Highlight the currently active alignment button. */
@@ -1004,14 +1021,14 @@ export class App {
   }
 
   // ── Blobling Rig ─────────────────────────────────────────────────────────────
-
-  private static readonly BLOBLING_LAYER_ORDER = ['Bottom', 'Mid', 'Top', 'Expression'] as const;
+  // BLOBLING_LAYER_ORDER imported from './drawers/blobling-drawer':
+  // ['Banner', 'Bottom', 'Mid', 'Top', 'Expression', 'Status', 'FaceProp']
 
   /** Build the blobling rig controls panel (called once in buildUI). */
   private buildBloblingControls(): HTMLElement {
     const rows: HTMLElement[] = [];
 
-    for (const cat of App.BLOBLING_LAYER_ORDER) {
+    for (const cat of BLOBLING_LAYER_ORDER) {
       const dropdown = new CustomDropdown({
         showThumbs: true,
         placeholder: 'None',
@@ -1031,7 +1048,7 @@ export class App {
       // Pre-populate with just 'None' so the dropdown renders immediately;
       // syncBloblingUI will repopulate with the full cosmetics list.
       dropdown.setItems([{ id: 'none', label: 'None' }], 'none');
-      this.bloblingCatDropdowns.set(cat, dropdown);
+      this.bloblingCatDropdowns.set(cat as BloblingLayerKey, dropdown);
 
       rows.push(el('div', { className: 'blobling-cat-row' }, [
         el('span', { className: 'blobling-cat-label', textContent: cat }),
@@ -1053,7 +1070,7 @@ export class App {
     });
     this.bloblingAnimDropdown.setItems([{ id: 'none', label: 'None (static)' }], 'none');
 
-    return el('div', { className: 'blobling-controls-section', style: 'display:none' }, [
+    return el('div', { className: 'blobling-controls-section' }, [
       el('h3', { className: 'blobling-heading', textContent: 'Blobling Rig' }),
       el('p', { className: 'blobling-hint', textContent: 'Layer cosmetics to build your blobling.' }),
       ...rows,
@@ -1064,16 +1081,28 @@ export class App {
     ]);
   }
 
-  /** Add a new blobling rig slot (finds first empty slot or uses active). */
+  /** Add a new blobling rig slot with random starter cosmetics. */
   private addBloblingLayer(): void {
     const emptyIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
     const targetIdx = emptyIdx >= 0 ? emptyIdx : state.activeSlotIndex;
+
+    // Seed with random cosmetics for a non-blank default look
+    const cosmeticLayers: Record<string, string> = {};
+    if (state.cosmeticsData) {
+      for (const cat of ['Bottom', 'Mid', 'Top', 'Expression'] as const) {
+        const catData = state.cosmeticsData.categories.find(c => c.cat === cat);
+        if (catData && catData.items.length > 0) {
+          const pick = catData.items[Math.floor(Math.random() * catData.items.length)];
+          cosmeticLayers[cat] = pick.id;
+        }
+      }
+    }
 
     updateSlot(targetIdx, {
       type: 'cosmetic',
       spriteKey: 'blobling',
       spriteUrl: 'blobling:',
-      cosmeticLayers: {},
+      cosmeticLayers,
       bloblingAnimId: undefined,
       gifFrames: undefined,
       isAnimated: false,
@@ -1082,7 +1111,10 @@ export class App {
       mutations: [],
     });
     setActiveSlot(targetIdx);
-    this.syncTextSlotUI(state.slots[targetIdx]);
+    const slot = state.slots[targetIdx];
+    this.syncBloblingUI(slot);
+    this.drawer.open('Blobling Rig', this.bloblingControls);
+    this.scheduleBloblingRerender();
   }
 
   /** Sync blobling rig controls UI from the slot's current state. */
@@ -1090,8 +1122,8 @@ export class App {
     if (slot.type !== 'cosmetic') return;
     const cosData = state.cosmeticsData;
 
-    for (const cat of App.BLOBLING_LAYER_ORDER) {
-      const dropdown = this.bloblingCatDropdowns.get(cat);
+    for (const cat of BLOBLING_LAYER_ORDER) {
+      const dropdown = this.bloblingCatDropdowns.get(cat as BloblingLayerKey);
       if (!dropdown) continue;
 
       const items: DropdownItem[] = [{ id: 'none', label: 'None' }];
@@ -1140,10 +1172,18 @@ export class App {
 
     const cosData = state.cosmeticsData;
 
-    // Resolve cosmetic URLs for Bottom/Mid/Top (Rive image assets) and Expression (SM input).
+    // Resolve cosmetic URLs per layer role:
+    //   Rive image assets: Bottom, Mid, Top
+    //   Expression SM input: Expression
+    //   PNG overlays (behind Rive): Banner
+    //   PNG overlays (above Rive): Status, FaceProp
     const riveCosmeticUrls: Record<string, string> = {};
     let expressionUrl: string | undefined;
-    for (const cat of App.BLOBLING_LAYER_ORDER) {
+    let bannerUrl: string | undefined;
+    let statusUrl: string | undefined;
+    let facePropUrl: string | undefined;
+
+    for (const cat of BLOBLING_LAYER_ORDER) {
       const cosmeticId = slot.cosmeticLayers?.[cat];
       if (!cosmeticId || !cosData) continue;
       const catData = cosData.categories.find(c => c.cat === cat);
@@ -1151,8 +1191,14 @@ export class App {
       if (!item?.url) continue;
       if (cat === 'Expression') {
         expressionUrl = item.url;
+      } else if (cat === 'Banner') {
+        bannerUrl = item.url;
+      } else if (cat === 'Status') {
+        statusUrl = item.url;
+      } else if (cat === 'FaceProp') {
+        facePropUrl = item.url;
       } else {
-        riveCosmeticUrls[cat] = item.url;
+        riveCosmeticUrls[cat] = item.url; // Bottom, Mid, Top
       }
     }
 
@@ -1160,7 +1206,7 @@ export class App {
     const animId = slot.bloblingAnimId;
 
     if (animId && animId !== 'none') {
-      // Animated: render Rive animation with cosmetics + expression state machine input.
+      // Animated: render Rive animation with cosmetics + expression.
       const rivUrl = getRiveFileUrl();
       if (!rivUrl) { console.warn('[Blobling] No Rive URL'); return; }
 
@@ -1169,6 +1215,28 @@ export class App {
 
       const riveFrames = await renderBloblingFrames(rivUrl, animIndex, riveCosmeticUrls, expressionIndex);
       if (riveFrames.length === 0) return;
+
+      // Composite Banner (behind) and Status/FaceProp (above) onto each Rive frame.
+      const overlayUrls = [bannerUrl, statusUrl, facePropUrl].filter((u): u is string => !!u);
+      if (overlayUrls.length > 0 || bannerUrl) {
+        const [bannerImg, ...aboveImgs] = await Promise.all(
+          [bannerUrl, statusUrl, facePropUrl]
+            .map(u => u ? spriteLoader.load(u) : Promise.resolve(null)),
+        );
+        for (const frame of riveFrames) {
+          const src = frame.canvas;
+          const out = document.createElement('canvas');
+          out.width  = src.width;
+          out.height = src.height;
+          const ctx = out.getContext('2d')!;
+          if (bannerImg) ctx.drawImage(bannerImg, 0, 0, out.width, out.height);
+          ctx.drawImage(src, 0, 0);
+          for (const overlay of aboveImgs) {
+            if (overlay) ctx.drawImage(overlay, 0, 0, out.width, out.height);
+          }
+          frame.canvas = out;
+        }
+      }
 
       // Guard: bail if slot changed while rendering.
       const s = state.slots[idx];
@@ -1181,9 +1249,18 @@ export class App {
       this.refreshSlots();
       if (idx === state.activeSlotIndex) this.startGifPreview();
     } else {
-      // Static: composite Bottom/Mid/Top/Expression as PNG layers (no Rive runtime needed).
-      const allUrls = [...Object.values(riveCosmeticUrls)];
-      if (expressionUrl) allUrls.push(expressionUrl);
+      // Static: composite all PNG layers in order.
+      // Banner first (behind), then Bottom/Mid/Top/Expression, then Status/FaceProp (above).
+      const orderedUrls: (string | undefined)[] = [
+        bannerUrl,
+        riveCosmeticUrls['Bottom'],
+        riveCosmeticUrls['Mid'],
+        riveCosmeticUrls['Top'],
+        expressionUrl,
+        statusUrl,
+        facePropUrl,
+      ];
+      const allUrls = orderedUrls.filter((u): u is string => !!u);
 
       if (allUrls.length === 0) {
         const canvas = document.createElement('canvas');
@@ -1833,10 +1910,9 @@ export class App {
       this.fullCardItemMutationsContainer,
     ]);
 
-    const section = el('div', { className: 'full-card-controls-section', style: 'display:none' });
+    const section = el('div', { className: 'full-card-controls-section' });
     section.append(
       this.fullCardTypeLabel,
-      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Name' }), this.fullCardNameInput]),
       el('label', { className: 'full-card-locked-wrap' }, [this.fullCardLockedCheck, document.createTextNode(' Locked')]),
       this.fullCardPetSection,
       this.fullCardPlantSection,
@@ -1973,7 +2049,6 @@ export class App {
     if (!data) return;
 
     this.fullCardTypeLabel.textContent = `${data.cardType} Card`;
-    this.fullCardNameInput.value = data.itemName;
     this.fullCardLockedCheck.checked = data.isLocked ?? false;
 
     const isPet   = data.cardType === 'Pet';
@@ -2122,23 +2197,376 @@ export class App {
     return result;
   }
 
-  /** Load a full-card preset into the active slot (mirrors applyCardPreset flow). */
-  private addFullCardPreset(cardType: FullCardType): void {
-    this.stopGifPreview();
-    const data = defaultFullCardData(cardType);
-    updateSlot(state.activeSlotIndex, {
-      type:         'full-card',
-      spriteKey:    `full-card/${cardType}`,
-      spriteUrl:    'full-card:',
-      fullCardData: data,
-      gifFrames:    undefined,
-      isAnimated:   true,
-      scale:        1,
-      customTint:   { color: '#ffffff', opacity: 0 },
-      mutations:    [],
+  /** Build the card-type selection overlay with canvas previews (appended to body once). */
+  private buildCardTypePicker(): void {
+    const CARD_TYPES: FullCardType[] = ['Pet', 'Plant', 'Crop', 'Seed', 'Egg', 'Tool', 'Decor'];
+    const pickerTitle = el('div', { className: 'card-type-picker-title', textContent: 'Choose card type' });
+    const tiles = CARD_TYPES.map((type) => {
+      // Canvas placeholder — filled async by renderCardPickerThumbs()
+      const canvas = document.createElement('canvas');
+      canvas.width  = 180;
+      canvas.height = 240;
+      this.cardPickerCanvases.set(type, canvas);
+
+      const tile = el('button', { className: 'card-type-tile' }) as HTMLButtonElement;
+      tile.append(canvas, el('span', { className: 'card-type-tile-label', textContent: type }));
+      tile.addEventListener('click', () => {
+        this.cardTypePickerEl.style.display = 'none';
+        if (this.cardPickerMode === 'full') {
+          this.addFullCardLayer(type).catch(err => console.error('[Card] Full-card add failed:', err));
+        } else {
+          this.addCardLayers(type).catch(err => console.error('[Card] Layer load failed:', err));
+        }
+      });
+      return tile;
     });
-    this.syncTextSlotUI(state.slots[state.activeSlotIndex]);
+
+    const cancelBtn = el('button', {
+      className: 'card-type-picker-cancel',
+      textContent: 'Cancel',
+    }) as HTMLButtonElement;
+    cancelBtn.addEventListener('click', () => {
+      this.cardTypePickerEl.style.display = 'none';
+    });
+
+    this.cardTypePickerEl = el('div', { className: 'card-type-picker', style: 'display:none' }, [
+      el('div', { className: 'card-type-picker-inner' }, [
+        pickerTitle,
+        el('div', { className: 'card-type-tiles' }, tiles),
+        cancelBtn,
+      ]),
+    ]);
+    this.cardTypePickerEl.addEventListener('click', (e) => {
+      if (e.target === this.cardTypePickerEl) this.cardTypePickerEl.style.display = 'none';
+    });
+    document.body.appendChild(this.cardTypePickerEl);
+  }
+
+  /** Show the card type picker in the given mode and (async) fill preview canvases. */
+  private showCardTypePicker(mode: 'layers' | 'full'): void {
+    this.cardPickerMode = mode;
+    const titleEl = this.cardTypePickerEl.querySelector('.card-type-picker-title');
+    if (titleEl) {
+      titleEl.textContent = mode === 'full'
+        ? 'Choose card type (full editor)'
+        : 'Choose card type';
+    }
+    this.cardTypePickerEl.style.display = 'flex';
+    this.renderCardPickerThumbs().catch(() => {/* best effort */});
+  }
+
+  /**
+   * Async: load Bottom + Middle for each card type and composite into the picker canvas.
+   * Only runs if the canvas is still blank (avoids re-fetching on repeat opens).
+   */
+  private async renderCardPickerThumbs(): Promise<void> {
+    const CARD_TYPES: FullCardType[] = ['Pet', 'Plant', 'Crop', 'Seed', 'Egg', 'Tool', 'Decor'];
+    const version = this.getUiSpriteVersion();
+    const v = version ? `?v=${version}` : '';
+    const base = 'https://mg-api.ariedam.fr/assets/sprites/ui';
+
+    await Promise.allSettled(CARD_TYPES.map(async (type) => {
+      const canvas = this.cardPickerCanvases.get(type);
+      if (!canvas) return;
+      // Skip if already rendered (non-blank)
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const existing = ctx.getImageData(0, 0, 1, 1);
+      if (existing.data[3] > 0) return;
+
+      const bottomUrl = `${base}/${type}CardBottom.png${v}`;
+      const middleUrl = `${base}/${type}CardMiddle.png${v}`;
+
+      const [botResult, midResult] = await Promise.allSettled([
+        this.loadSpriteLayer(`${type}CardBottom`, bottomUrl),
+        this.loadSpriteLayer(`${type}CardMiddle`, middleUrl),
+      ]);
+
+      type LayerSrc = HTMLImageElement | HTMLCanvasElement;
+      const layers: LayerSrc[] = [botResult, midResult]
+        .filter((r): r is PromiseFulfilledResult<LayerSrc | null> => r.status === 'fulfilled')
+        .map(r => r.value)
+        .filter((v): v is LayerSrc => v !== null);
+
+      if (layers.length === 0) return;
+
+      const getW = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.width : s.naturalWidth;
+      const getH = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.height : s.naturalHeight;
+      const srcW = Math.max(...layers.map(getW));
+      const srcH = Math.max(...layers.map(getH));
+      if (srcW === 0 || srcH === 0) return;
+
+      const scale = Math.min(canvas.width / srcW, canvas.height / srcH);
+      const dw = srcW * scale;
+      const dh = srcH * scale;
+      const dx = (canvas.width  - dw) / 2;
+      const dy = (canvas.height - dh) / 2;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (const layer of layers) {
+        ctx.drawImage(layer as CanvasImageSource, dx, dy, dw, dh);
+      }
+    }));
+  }
+
+  /**
+   * Load all individual sprite layers that make up a card, pixel-perfectly pre-positioned
+   * using the exact layout constants from full-card-renderer.ts.
+   *
+   * All cards are 500×720.  Positions are offsets from canvas centre (same coord space as
+   * full-card-renderer which does ctx.translate(cardW/2, cardH/2)).
+   */
+  /**
+   * Add a single full-card slot (type='full-card') and open the card editor drawer.
+   * Mirrors the old preset behavior for users who want the live-stats editor.
+   */
+  private async addFullCardLayer(type: FullCardType): Promise<void> {
+    let targetIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
+    if (targetIdx < 0) {
+      addSlot();
+      targetIdx = state.slots.length - 1;
+    }
+
+    const data = defaultFullCardData(type);
+    updateSlot(targetIdx, {
+      type:        'full-card',
+      spriteKey:   `full-card/${type}`,
+      spriteUrl:   'full-card:',
+      fullCardData: data,
+      mutations:   [],
+      scale:       1,
+      rotation:    0,
+      position:    { x: 0, y: 0 },
+      customTint:  { color: '#ffffff', opacity: 0 },
+    });
+
+    setActiveSlot(targetIdx);
+    this.syncFullCardUI(state.slots[targetIdx]);
+    this.drawer.open('Card Editor', this.fullCardControls);
     this.scheduleFullCardRerender();
+  }
+
+  private async addCardLayers(type: FullCardType): Promise<void> {
+    // ── card dimensions (all types identical) ─────────────────────────────────
+    const CW = 500, CH = 720;
+
+    // ── layout constants (from full-card-renderer.ts) ─────────────────────────
+    const G5          = 8;
+    const AH          = 60,  KH = 65,  XH = 0.44, HZ = 0.78;
+    const JH          = 25,  RH = 88,  QM = 22;
+    const LOCK_SIZE   = 75;
+    const RARITY_SIZE = 64;
+    const ICON_SIZE   = 70;
+    const ICON_NAT    = 88;   // all type icons are 88×88
+    const CS          = 28;   // display size for bottom-row small icons
+    const GAP         = 20;   // separator gap between bottom-row items
+    const PART        = CS + 4; // space per icon+gap column
+
+    // ── natural sprite dimensions (measured live from mg-api.ariedam.fr) ──────
+    const NAT = {
+      Locked:      { w: 64,  h: 84  },
+      RarityCommon:{ w: 55,  h: 55  },
+      StrengthStar:{ w: 53,  h: 55  },
+      Coin:        { w: 87,  h: 95  },
+      Weight:      { w: 29,  h: 34  },
+      Age:         { w: 27,  h: 32  },
+    };
+
+    // ── exact positions (card-centre coords ≡ slot.position offsets from canvas centre) ──
+
+    // Type icon — top-left: drawImage at (-CW/2+G5+10, -CH/2+G5+9), size ICON_SIZE
+    const iconScale = ICON_SIZE / ICON_NAT;                   // 70/88 ≈ 0.7955
+    const iconX     = (-CW / 2 + G5 + 10) + ICON_SIZE / 2;   // -232 + 35 = -197
+    const iconY     = (-CH / 2 + G5 + 9)  + ICON_SIZE / 2;   // -343 + 35 = -308
+
+    // Lock — top-right: drawImageCentered(cx, cy, LOCK_SIZE)
+    const lockScale = LOCK_SIZE / Math.max(NAT.Locked.w, NAT.Locked.h);  // 75/84
+    const lockX     = CW / 2 - 4 - LOCK_SIZE / 2;   //  208.5
+    const lockY     = -CH / 2 + 4 + LOCK_SIZE / 2;  // -318.5
+
+    // Rarity gem — bottom-left: drawImage at (x, y-dh, dw, dh) where
+    //   x = -CW/2+G5+15, y = CH/2-G5-17, scale = RARITY_SIZE/max(w,h)
+    const rarScale  = RARITY_SIZE / Math.max(NAT.RarityCommon.w, NAT.RarityCommon.h); // 64/55
+    const rarDim    = NAT.RarityCommon.w * rarScale;                                   // ≈ 64
+    const rarX      = (-CW / 2 + G5 + 15) + rarDim / 2;   // -227 + 32 = -195
+    const rarY      = (CH  / 2 - G5 - 17) - rarDim / 2;   //  335 - 32 =  303
+
+    // ── stats area positions ─────────────────────────────────────────────────
+    // From renderer: r = -CH/2+AH+KH = -235; n = (CH-AH*2)*XH = 264
+    // nameY = r+n+JH = 54;  detailsY = nameY+RH/2+QM = 120
+    // bottomOffset = CH/2-detailsY-58 = 182;  bottomRowY = 302
+    const detailsY  = (-CH / 2 + AH + KH) + (CH - AH * 2) * XH + JH + RH / 2 + QM; // 120
+    const bottomY   = CH / 2 - detailsY - 58 + detailsY;                             // 302
+    const rowWidth  = CW * HZ;         // 390
+    // barRight (showMaxLabel, k=50): rowLeft+rowWidth-50 = -195+390-50 = 145
+    const barRight  = -rowWidth / 2 + rowWidth - 50;                                  // 145
+
+    // StrengthStar — right of strength bar, drawImageCentered(maxStarX, detailsY, 40)
+    //   maxStarX = barRight + 36  (non-fully-grown: shows next + max)
+    const strStarSize  = 40;
+    const strStarScale = strStarSize / Math.max(NAT.StrengthStar.w, NAT.StrengthStar.h);
+    const strStarX     = barRight + 36;  // 181
+
+    // Bottom-row icons: for an empty-text card startX = −(3*PART + 2*GAP)/2 = −68
+    //   Weight center: startX + dw/2
+    //   Age    center: startX + PART + GAP + dw/2
+    //   Coin   center: startX + PART*2 + GAP*2 + dw/2
+    const scW = CS / Math.max(NAT.Weight.w, NAT.Weight.h);      // 28/34 ≈ 0.824
+    const scA = CS / Math.max(NAT.Age.w,    NAT.Age.h);         // 28/32 = 0.875
+    const scC = CS / Math.max(NAT.Coin.w,   NAT.Coin.h);        // 28/95 ≈ 0.295
+    const wDw = NAT.Weight.w * scW;   // ≈ 23.9
+    const aDw = NAT.Age.w    * scA;   // ≈ 23.6
+    const cDw = NAT.Coin.w   * scC;   // ≈ 25.7
+
+    // Pet row: weight | • | age | • | coin  (startX = −68)
+    const PET_START   = -((PART * 3 + GAP * 2) / 2);
+    const petWeightX  = PET_START + wDw / 2;
+    const petAgeX     = PET_START + PART + GAP + aDw / 2;
+    const petCoinX    = PET_START + PART * 2 + GAP * 2 + cDw / 2;
+
+    // Plant/Crop row: weight | • | coin  (startX = −42)
+    const PLT_START   = -((PART * 2 + GAP) / 2);
+    const pltWeightX  = PLT_START + wDw / 2;
+    const pltCoinX    = PLT_START + PART + GAP + cDw / 2;
+
+    // ── URL builder ─────────────────────────────────────────────────────────
+    const version = this.getUiSpriteVersion();
+    const v   = version ? `?v=${version}` : '';
+    const base = 'https://mg-api.ariedam.fr/assets/sprites/ui';
+    const u   = (name: string) => `${base}/${name}.png${v}`;
+
+    const ICON_NAME: Record<FullCardType, string> = {
+      Pet: 'PetIcon', Plant: 'PlantIcon', Crop: 'CropIcon',
+      Seed: 'SeedIcon', Egg: 'EggIcon', Tool: 'ToolIcon', Decor: 'DecorIcon',
+    };
+
+    type LayerSpec = { name: string; url: string; position: { x: number; y: number }; scale: number };
+
+    // ── assemble layer specs ─────────────────────────────────────────────────
+    const specs: LayerSpec[] = [
+      // Card frame — always centered
+      { name: `${type}CardBottom`, url: u(`${type}CardBottom`), position: { x: 0, y: 0 }, scale: 1 },
+      { name: `${type}CardMiddle`, url: u(`${type}CardMiddle`), position: { x: 0, y: 0 }, scale: 1 },
+      // Type icon — top-left
+      { name: ICON_NAME[type], url: u(ICON_NAME[type]), position: { x: iconX, y: iconY }, scale: iconScale },
+      // Lock — top-right
+      { name: 'Locked', url: u('Locked'), position: { x: lockX, y: lockY }, scale: lockScale },
+      // Rarity gem — bottom-left
+      { name: 'RarityCommon', url: u('RarityCommon'), position: { x: rarX, y: rarY }, scale: rarScale },
+    ];
+
+    if (type === 'Pet') {
+      specs.push(
+        { name: 'StrengthStar', url: u('StrengthStar'), position: { x: strStarX, y: detailsY }, scale: strStarScale },
+        { name: 'Weight',       url: u('Weight'),       position: { x: petWeightX, y: bottomY }, scale: scW },
+        { name: 'Age',          url: u('Age'),          position: { x: petAgeX,    y: bottomY }, scale: scA },
+        { name: 'Coin',         url: u('Coin'),         position: { x: petCoinX,   y: bottomY }, scale: scC },
+      );
+    } else if (type === 'Plant' || type === 'Crop') {
+      specs.push(
+        { name: 'Weight', url: u('Weight'), position: { x: pltWeightX, y: bottomY }, scale: scW },
+        { name: 'Coin',   url: u('Coin'),   position: { x: pltCoinX,   y: bottomY }, scale: scC },
+      );
+    } else if (type === 'Seed' || type === 'Egg') {
+      specs.push(
+        { name: 'Coin', url: u('Coin'), position: { x: cDw / 2, y: bottomY }, scale: scC },
+      );
+    }
+
+    await this.addPositionedCardLayers(specs, `${type} Card`);
+  }
+
+  /**
+   * Load each layer spec as a separate independent slot, applying the pre-calculated
+   * position and scale so the card elements appear at their correct in-game locations.
+   */
+  private async addPositionedCardLayers(
+    specs: Array<{ name: string; url: string; position: { x: number; y: number }; scale: number }>,
+    groupLabel: string,
+  ): Promise<void> {
+    this.stopGifPreview();
+    type LayerSrc = HTMLImageElement | HTMLCanvasElement;
+    const getW = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.width : s.naturalWidth;
+    const getH = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.height : s.naturalHeight;
+
+    for (const spec of specs) {
+      let targetIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
+      if (targetIdx < 0) {
+        addSlot();
+        targetIdx = state.slots.length - 1;
+      }
+
+      const src = await this.loadSpriteLayer(spec.name, spec.url).catch(() => null);
+
+      let gifFrames: { canvas: HTMLCanvasElement; delay: number }[] | undefined;
+      let isAnimated = false;
+      if (src) {
+        const canvas = document.createElement('canvas');
+        canvas.width  = getW(src);
+        canvas.height = getH(src);
+        canvas.getContext('2d')!.drawImage(src as CanvasImageSource, 0, 0);
+        gifFrames = [{ canvas, delay: 0 }];
+        isAnimated = true;
+      }
+
+      updateSlot(targetIdx, {
+        type: 'custom',
+        spriteKey: `${groupLabel} / ${spec.name}`,
+        spriteUrl: spec.url,
+        gifFrames,
+        isAnimated,
+        scale:    spec.scale,
+        position: spec.position,
+        rotation: 0,
+        customTint: { color: '#ffffff', opacity: 0 },
+        mutations: [],
+      });
+    }
+  }
+
+  /**
+   * Load each URL as a separate independent slot (no compositing, default position/scale).
+   * Used by browser-grid card items and card preset URLs from dropdown items.
+   */
+  private async addCardUrlsAsLayers(urls: string[], baseLabel: string): Promise<void> {
+    this.stopGifPreview();
+    type LayerSrc = HTMLImageElement | HTMLCanvasElement;
+    const getW = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.width : s.naturalWidth;
+    const getH = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.height : s.naturalHeight;
+
+    for (const url of urls) {
+      let targetIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
+      if (targetIdx < 0) {
+        addSlot();
+        targetIdx = state.slots.length - 1;
+      }
+
+      const layerName = url.split('/').pop()?.split('?')[0].replace('.png', '') ?? '';
+      const src = await this.loadSpriteLayer(layerName, url).catch(() => null);
+
+      let gifFrames: { canvas: HTMLCanvasElement; delay: number }[] | undefined;
+      let isAnimated = false;
+      if (src) {
+        const canvas = document.createElement('canvas');
+        canvas.width  = getW(src);
+        canvas.height = getH(src);
+        canvas.getContext('2d')!.drawImage(src as CanvasImageSource, 0, 0);
+        gifFrames = [{ canvas, delay: 0 }];
+        isAnimated = true;
+      }
+
+      updateSlot(targetIdx, {
+        type: 'custom',
+        spriteKey: `${baseLabel} / ${layerName}`,
+        spriteUrl: url,
+        gifFrames,
+        isAnimated,
+        scale: 1,
+        rotation: 0,
+        customTint: { color: '#ffffff', opacity: 0 },
+        mutations: [],
+      });
+    }
   }
 
   /** Debounce full-card re-renders (same pattern as text layer). */
@@ -2224,8 +2652,7 @@ export class App {
       }
       // Card preset categories — only shown when the ui atlas is available
       if (sd.categories.some(c => c.cat === 'ui')) {
-        items.push({ id: 'cards',      label: 'Cards (preset)' });
-        items.push({ id: 'full-cards', label: 'Full Cards (stats)' });
+        items.push({ id: 'cards', label: 'Cards (preset)' });
       }
     }
 
@@ -2250,6 +2677,20 @@ export class App {
     // setItems fires onSelect (→ populateSprites) if it has to auto-select.
     // We also call populateSprites() unconditionally to handle the silent-restore case.
     this.categoryDropdown.setItems(items, state.selectedCategory || undefined);
+
+    // Populate browser tab strip with same categories
+    populateBrowserTabs(
+      this.browserTabsEl,
+      items.map(i => ({ id: i.id, label: i.label })),
+      state.selectedCategory || items[0]?.id || '',
+      (catId) => {
+        state.selectedCategory = catId;
+        this.categoryDropdown.selectById(catId);
+        this.browserSearchInput.value = '';
+        this.populateSprites();
+      },
+    );
+
     this.populateSprites();
   }
 
@@ -2365,9 +2806,6 @@ export class App {
     }
 
     // Pass restoreId so setItems selects silently rather than firing onSelect.
-    // For full-cards: restore the active slot's card type if it's a full-card slot,
-    // otherwise force a silent-select of the first item to avoid auto-triggering addFullCardPreset.
-    // For blobling-rig: always pass the first item id to prevent auto-triggering addBloblingLayer.
     const slot = getActiveSlot();
     let restoreId: string | undefined;
     if (cat === 'full-cards') {
@@ -2375,18 +2813,20 @@ export class App {
         ? `full-card/${slot.fullCardData?.cardType}`
         : (items[0]?.id ?? undefined);
     } else if (cat === 'blobling-rig') {
-      restoreId = items[0]?.id ?? undefined; // 'blobling-new' — prevents auto-trigger
+      restoreId = items[0]?.id ?? undefined;
     } else {
       restoreId = slot.spriteKey || undefined;
     }
     this.spriteDropdown.setItems(items, restoreId);
 
+    // Cache items for browser grid + rebuild grid
+    this.browserItems = items;
+    this.updateBrowserGrid();
+
     // Asynchronously generate composited thumbnails for card categories
     if (cat === 'cards' || cat === 'full-cards') this.generateCardListThumbnails(items);
 
     // Pre-warm SpriteLoader for the entire category at low priority.
-    // By the time the user browses and picks a sprite, it will already be in the
-    // in-memory LRU cache → zero lag on preview render.
     const thumbUrls = items.map(i => i.thumbUrl).filter((u): u is string => !!u);
     spriteLoader.preloadUrls(thumbUrls);
   }
@@ -2398,69 +2838,88 @@ export class App {
     for (let i = 0; i < state.slots.length; i++) {
       const slot = state.slots[i];
       const hasContent = !!slot.spriteUrl;
-      const isActive = i === state.activeSlotIndex;
+      const isActive   = i === state.activeSlotIndex;
 
-      const btn = el('button', {
-        className: `slot-btn${isActive ? ' active' : ''}${hasContent ? ' occupied' : ''}`,
-        draggable: 'true',
-        title: hasContent ? slot.spriteKey.split('/').pop() ?? String(i + 1) : String(i + 1),
-      });
+      // Type badge color
+      const badgeColors: Record<string, string> = {
+        sprite: 'var(--badge-sprite)',
+        text: 'var(--badge-text)',
+        'full-card': 'var(--badge-card)',
+        cosmetic: 'var(--badge-blobling)',
+        custom: 'var(--badge-custom)',
+      };
+
+      // Thumbnail canvas
+      const thumb = document.createElement('canvas');
+      thumb.className = 'slot-thumb';
+      thumb.width  = 64;
+      thumb.height = 64;
 
       if (hasContent && slot.spriteUrl) {
-        const thumb = document.createElement('canvas');
-        thumb.className = 'slot-thumb';
-        thumb.width = 34;
-        thumb.height = 34;
-        btn.appendChild(thumb);
-        // Card presets store the composited canvas in gifFrames[0] — render it directly
-        // instead of loading from spriteUrl (which is just the CardBottom layer URL).
         const gifCanvas = slot.gifFrames?.[0]?.canvas;
         if (gifCanvas instanceof HTMLCanvasElement && gifCanvas.width > 0) {
           const ctx = thumb.getContext('2d')!;
-          const scale = Math.min(34 / gifCanvas.width, 34 / gifCanvas.height);
-          ctx.drawImage(gifCanvas, (34 - gifCanvas.width * scale) / 2, (34 - gifCanvas.height * scale) / 2, gifCanvas.width * scale, gifCanvas.height * scale);
+          const scale = Math.min(64 / gifCanvas.width, 64 / gifCanvas.height);
+          ctx.drawImage(gifCanvas,
+            (64 - gifCanvas.width * scale) / 2, (64 - gifCanvas.height * scale) / 2,
+            gifCanvas.width * scale, gifCanvas.height * scale,
+          );
         } else if (slot.type !== 'full-card' && slot.type !== 'text' && slot.type !== 'cosmetic') {
           renderThumb(slot.spriteUrl, thumb);
         }
-      } else {
-        btn.textContent = String(i + 1);
       }
 
-      btn.addEventListener('click', () => setActiveSlot(i));
+      // Type badge dot
+      const badge = el('span', { className: 'slot-type-badge' }) as HTMLElement;
+      badge.style.background = badgeColors[slot.type] ?? 'var(--badge-custom)';
 
-      btn.addEventListener('dragstart', () => {
-        this.dragIdx = i;
-        btn.classList.add('dragging');
+      // Slot number
+      const numEl = el('span', { className: 'slot-num', textContent: String(i + 1) });
+
+      // Delete button
+      const delBtn = el('button', { className: 'slot-delete', textContent: '×', title: 'Remove slot' }) as HTMLButtonElement;
+      delBtn.addEventListener('click', (e) => { e.stopPropagation(); clearSlot(i); });
+
+      const tile = el('div', {
+        className: `slot-tile${isActive ? ' active' : ''}${hasContent ? '' : ' empty'}`,
+        draggable: 'true',
+        title: hasContent ? (slot.spriteKey.split('/').pop() ?? String(i + 1)) : String(i + 1),
       });
+      tile.append(thumb, badge, numEl, delBtn);
+      if (!hasContent) {
+        const plus = el('span', { className: 'slot-empty-plus', textContent: '+' });
+        tile.append(plus);
+      }
 
-      btn.addEventListener('dragend', () => {
+      tile.addEventListener('click', () => setActiveSlot(i));
+
+      tile.addEventListener('dragstart', () => {
+        this.dragIdx = i;
+        tile.classList.add('dragging');
+      });
+      tile.addEventListener('dragend', () => {
         this.dragIdx = null;
         this.dragInsertBefore = null;
         this.clearDropIndicators();
       });
-
-      btn.addEventListener('dragover', (e) => {
+      tile.addEventListener('dragover', (e) => {
         e.preventDefault();
         if (this.dragIdx === null) return;
-        const rect = btn.getBoundingClientRect();
-        const midX = rect.left + rect.width / 2;
+        const rect = tile.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
         this.clearDropIndicators();
-        if (e.clientX < midX) {
-          btn.classList.add('drop-before');
+        if (e.clientY < midY) {
+          tile.classList.add('drop-before');
           this.dragInsertBefore = i;
         } else {
-          btn.classList.add('drop-after');
+          tile.classList.add('drop-after');
           this.dragInsertBefore = i + 1;
         }
       });
-
-      btn.addEventListener('dragleave', (e) => {
-        if (!btn.contains(e.relatedTarget as Node)) {
-          btn.classList.remove('drop-before', 'drop-after');
-        }
+      tile.addEventListener('dragleave', (e) => {
+        if (!tile.contains(e.relatedTarget as Node)) tile.classList.remove('drop-before', 'drop-after');
       });
-
-      btn.addEventListener('drop', (e) => {
+      tile.addEventListener('drop', (e) => {
         e.preventDefault();
         this.clearDropIndicators();
         if (this.dragIdx !== null && this.dragInsertBefore !== null) {
@@ -2470,20 +2929,20 @@ export class App {
         this.dragInsertBefore = null;
       });
 
-      this.slotContainer.append(btn);
+      this.slotContainer.append(tile);
     }
 
     if (state.slots.length < MAX_SLOTS) {
-      const addBtn = el('button', { className: 'slot-btn slot-add-btn', title: 'Add layer' });
-      addBtn.textContent = '+';
-      addBtn.addEventListener('click', () => addSlot());
-      this.slotContainer.append(addBtn);
+      const addTile = el('div', { className: 'slot-tile slot-add-tile', title: 'Add layer' });
+      addTile.textContent = '+';
+      addTile.addEventListener('click', () => addSlot());
+      this.slotContainer.append(addTile);
     }
   }
 
   private clearDropIndicators(): void {
-    for (const btn of this.slotContainer.querySelectorAll('.slot-btn')) {
-      btn.classList.remove('drop-before', 'drop-after');
+    for (const tile of this.slotContainer.querySelectorAll('.slot-tile')) {
+      tile.classList.remove('drop-before', 'drop-after', 'dragging');
     }
   }
 
@@ -2495,10 +2954,13 @@ export class App {
 
     for (const id of Object.keys(FILTERS)) {
       const isActive = slot.mutations.includes(id);
-      const label = el('label', {}, []) as HTMLLabelElement;
-      const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
-      cb.checked = isActive;
-      cb.addEventListener('change', () => {
+      const chip = el('span', {
+        className: `mutation-chip${isActive ? ' active' : ''}`,
+        textContent: id,
+        title: id,
+      }) as HTMLElement;
+      chip.style.background = MUTATION_CHIP_COLORS[id] ?? '#555';
+      chip.addEventListener('click', () => {
         const s = getActiveSlot();
         const muts = [...s.mutations];
         const idx = muts.indexOf(id);
@@ -2507,11 +2969,9 @@ export class App {
         updateSlot(state.activeSlotIndex, { mutations: muts });
         this.refreshMutations();
       });
-      label.append(cb, ` ${id}`);
-      this.mutationList.append(label);
+      this.mutationList.append(chip);
     }
 
-    this.customTintControls.style.display = 'grid';
     this.customColor.value = slot.customTint.color;
     this.customOpacity.value = String(slot.customTint.opacity);
   }
@@ -2549,6 +3009,56 @@ export class App {
   }
 
   // ── Canvas Drag ──
+
+  // ── Copy / paste / duplicate ──────────────────────────────────────────────
+
+  /** Snapshot the active slot's data into the clipboard. */
+  private copyActiveSlot(): void {
+    const slot = getActiveSlot();
+    if (!slot.spriteUrl && slot.type !== 'text' && slot.type !== 'cosmetic') return;
+    // Keep gifFrames by reference (canvas elements are reused read-only).
+    this.copiedSlot = {
+      type:          slot.type,
+      spriteKey:     slot.spriteKey,
+      spriteUrl:     slot.spriteUrl,
+      mutations:     [...slot.mutations],
+      options:       { ...slot.options },
+      customTint:    { ...slot.customTint },
+      position:      { ...slot.position },
+      scale:         slot.scale,
+      rotation:      slot.rotation,
+      visible:       slot.visible,
+      gifFrames:     slot.gifFrames,
+      isAnimated:    slot.isAnimated,
+      fullCardData:  slot.fullCardData  ? { ...slot.fullCardData }  : undefined,
+      textData:      slot.textData      ? { ...slot.textData }      : undefined,
+      cosmeticLayers:slot.cosmeticLayers? { ...slot.cosmeticLayers }: undefined,
+    };
+  }
+
+  /** Paste the clipboard slot into the next available (or new) slot, offset by 20 px. */
+  private pasteCopiedSlot(): void {
+    if (!this.copiedSlot) return;
+    let targetIdx = state.slots.findIndex(s => !s.spriteUrl && s.type !== 'text');
+    if (targetIdx < 0) {
+      addSlot();
+      targetIdx = state.slots.length - 1;
+    }
+    updateSlot(targetIdx, {
+      ...this.copiedSlot,
+      position: {
+        x: (this.copiedSlot.position?.x ?? 0) + 20,
+        y: (this.copiedSlot.position?.y ?? 0) + 20,
+      },
+    });
+    setActiveSlot(targetIdx);
+  }
+
+  /** Copy active slot then immediately paste it (Ctrl+D). */
+  private duplicateActiveSlot(): void {
+    this.copyActiveSlot();
+    this.pasteCopiedSlot();
+  }
 
   private setupCanvasDrag(): void {
     let isDragging = false;
@@ -3184,66 +3694,6 @@ export class App {
     }
   }
 
-  /**
-   * Composite all card layers (Bottom → Middle → Top) into a single canvas and load
-   * it into the active slot without any blob-URL or re-fetch roundtrip.
-   *
-   * Each layer is attempted via mg-api first; on 403 it falls back to direct atlas
-   * extraction (loadSpriteLayer). The composited canvas is stored as gifFrames[0] —
-   * the same in-memory path used for uploaded GIFs.
-   */
-  private async applyCardPreset(urls: string[], label: string): Promise<void> {
-    this.stopGifPreview();
-
-    type LayerSrc = HTMLImageElement | HTMLCanvasElement;
-    const layerResults = await Promise.allSettled(
-      urls.map(url => {
-        const layerName = url.split('/').pop()?.split('?')[0].replace('.png', '') ?? '';
-        return this.loadSpriteLayer(layerName, url);
-      }),
-    );
-
-    const getW = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.width : s.naturalWidth;
-    const getH = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.height : s.naturalHeight;
-
-    const layers: LayerSrc[] = layerResults
-      .filter((r): r is PromiseFulfilledResult<LayerSrc | null> => r.status === 'fulfilled')
-      .map(r => r.value)
-      .filter((v): v is LayerSrc => v !== null);
-
-    if (layers.length === 0) {
-      console.error('[MG] Failed to load any card preset layers');
-      return;
-    }
-
-    try {
-      const width  = Math.max(...layers.map(getW));
-      const height = Math.max(...layers.map(getH));
-      const canvas = document.createElement('canvas');
-      canvas.width  = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('No 2d context');
-      for (const layer of layers) {
-        const lw = getW(layer);
-        const lh = getH(layer);
-        ctx.drawImage(layer as CanvasImageSource, (width - lw) / 2, (height - lh) / 2);
-      }
-
-      updateSlot(state.activeSlotIndex, {
-        type: 'custom',
-        spriteKey: label,
-        spriteUrl: urls[0],              // CardBottom URL — slot thumbnail falls back to this
-        gifFrames: [{ canvas, delay: 0 }],
-        isAnimated: true,
-      });
-
-      // Update dropdown trigger thumbnail to show the composited card
-      this.spriteDropdown.setTriggerCanvas(canvas);
-    } catch (err) {
-      console.error('[MG] Failed to composite card preset:', err);
-    }
-  }
 
   /**
    * Resolve animation frame IDs to mg-api PNG URLs by searching all sprite-data categories.
@@ -3389,63 +3839,6 @@ export class App {
 
   // ── Scenes section ──────────────────────────────────────────────────────────
 
-  private buildScenesSection(): HTMLElement {
-    this.sceneNameInput = el('input', {
-      type: 'text',
-      className: 'scene-name-input',
-      placeholder: 'Scene name\u2026',
-    }) as HTMLInputElement;
-
-    const saveBtn = el('button', { className: 'secondary', textContent: 'Save' }) as HTMLButtonElement;
-    saveBtn.addEventListener('click', () => {
-      const name = this.sceneNameInput.value.trim();
-      saveBtn.disabled = true;
-      const thumbnail = this.captureSceneThumbnail();
-      saveNamedScene(name || 'Untitled', thumbnail)
-        .then(() => { this.sceneNameInput.value = ''; this.refreshScenesList(); })
-        .catch(err => console.error('[MG] Save scene failed:', err))
-        .finally(() => { saveBtn.disabled = false; });
-    });
-
-    this.scenesListEl = el('div', { className: 'scenes-list' });
-
-    const importFileInput = el('input', { type: 'file', accept: '.json' }) as HTMLInputElement;
-    importFileInput.style.display = 'none';
-    const importBtn = el('button', { className: 'secondary', textContent: 'Import JSON' }) as HTMLButtonElement;
-    importBtn.addEventListener('click', () => importFileInput.click());
-    importFileInput.addEventListener('change', () => {
-      const file = importFileInput.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        const scene = importSceneJson(reader.result as string);
-        if (!scene) {
-          alert('Invalid scene file');
-          return;
-        }
-        pushUndo();
-        state.slots = scene.slots;
-        state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
-        bus.emit(Events.SLOT_CHANGED, null);
-        bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
-        bus.emit(Events.RENDER_REQUEST, null);
-        this.rerenderAllSpecialSlots().catch(err => console.error('[MG] Scene re-render failed:', err));
-      };
-      reader.readAsText(file);
-      importFileInput.value = '';
-    });
-
-    const section = el('div', { className: 'scenes-section' }, [
-      el('h3', { className: 'scenes-heading', textContent: 'Scenes' }),
-      el('div', { className: 'scenes-save-row' }, [this.sceneNameInput, saveBtn]),
-      this.scenesListEl,
-      el('div', { className: 'scenes-import-row' }, [importBtn, importFileInput]),
-    ]);
-
-    this.refreshScenesList();
-    return section;
-  }
-
   private refreshScenesList(): void {
     this.scenesListEl.innerHTML = '';
     const scenes = listSavedScenes();
@@ -3510,12 +3903,6 @@ export class App {
   }
 
   // ── End scenes section ───────────────────────────────────────────────────────
-
-  private metaLabel(text: string, hint: string): HTMLElement {
-    const lbl = el('label', {}, []);
-    lbl.innerHTML = `${text} <span class="meta" style="font-weight:normal">${hint}</span>`;
-    return lbl;
-  }
 
   private makeCheckLabel(text: string, input: HTMLInputElement): HTMLLabelElement {
     const label = el('label', {}, []) as HTMLLabelElement;
