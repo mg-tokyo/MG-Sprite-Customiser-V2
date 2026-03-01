@@ -332,7 +332,7 @@ body {
 }
 .slot-tile:hover { border-color: var(--muted); }
 .slot-tile.active { border-color: var(--accent); }
-.slot-tile.selected { border-color: var(--muted); }
+.slot-tile.selected { border-color: var(--accent); }
 .slot-tile.active.selected { border-color: var(--accent); }
 .slot-tile.empty {
   border-style: dashed;

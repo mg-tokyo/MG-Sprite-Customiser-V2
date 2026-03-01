@@ -181,6 +181,9 @@ export class App {
   private unicodeDropdown!: CustomDropdown;
   private textRenderDebounce: ReturnType<typeof setTimeout> | null = null;
   private textRenderQueue = new Set<number>();
+  private scaleGestureSelection: number[] | null = null;
+  private scaleGestureBaselines = new Map<number, { kind: 'text' | 'visual'; value: number }>();
+  private scaleGestureActiveBaseline = 1;
 
   // ── Scenes UI ──
   private scenesListEl!: HTMLElement;
@@ -433,44 +436,18 @@ export class App {
 
     this.scaleInput.addEventListener('input', () => {
       const parsed = parseFloat(this.scaleInput.value);
-      const textIndexes: number[] = [];
-      let hasSpriteLikeChange = false;
-      this.applyToSelection((slot, index) => {
-        if (slot.type === 'text') {
-          const current = slot.textData?.fontSize ?? 36;
-          const fontSize = this.clampTextSize(Number.isFinite(parsed) ? parsed : current);
-          if (slot.textData) {
-            slot.textData = { ...slot.textData, fontSize };
-            textIndexes.push(index);
-          }
-        } else {
-          slot.scale = this.clampScale(Number.isFinite(parsed) ? parsed : slot.scale);
-          hasSpriteLikeChange = true;
-        }
-      });
+      const { textIndexes, hasVisualChange } = this.applyScaleGestureValue(parsed);
       if (textIndexes.length > 0) this.scheduleTextRerender(textIndexes);
-      if (hasSpriteLikeChange) bus.emit(Events.RENDER_REQUEST, null);
+      if (hasVisualChange) bus.emit(Events.RENDER_REQUEST, null);
     });
     this.scaleInput.addEventListener('change', () => {
       const parsed = parseFloat(this.scaleInput.value);
-      const textIndexes: number[] = [];
       beginBatchUpdate();
-      this.applyToSelection((slot, index) => {
-        if (slot.type === 'text') {
-          const current = slot.textData?.fontSize ?? 36;
-          const fontSize = this.clampTextSize(Number.isFinite(parsed) ? parsed : current);
-          if (slot.textData) {
-            slot.textData = { ...slot.textData, fontSize };
-            textIndexes.push(index);
-          }
-          return;
-        }
-        const scale = this.clampScale(Number.isFinite(parsed) ? parsed : slot.scale);
-        slot.scale = scale;
-      });
+      const { textIndexes } = this.applyScaleGestureValue(parsed);
       bus.emit(Events.SLOT_CHANGED, null);
       bus.emit(Events.RENDER_REQUEST, null);
       if (textIndexes.length > 0) this.scheduleTextRerender(textIndexes);
+      this.resetScaleGestureState();
     });
     this.rotationInput.addEventListener('input', () => {
       const parsed = parseFloat(this.rotationInput.value);
@@ -518,6 +495,7 @@ export class App {
     this.customOpacity.addEventListener('input', commitTint);
 
     bus.on(Events.SLOT_SELECTED, () => {
+      this.resetScaleGestureState();
       const slot = getActiveSlot();
       optIcons.checked = slot.options.icons;
       optOverlays.checked = slot.options.overlays;
@@ -1013,13 +991,21 @@ export class App {
         const gfDef  = GOOGLE_FONTS_CURATED.find(f => f.family === fontFamily);
         if (mgDef) {
           this.fontGroupDropdown.selectById('mg');
-          this.fontItemDropdown.setItems(MG_FONTS.map(f => ({ id: f.id, label: f.label })), mgDef.id);
+          this.fontItemDropdown.setItems(
+            MG_FONTS.map(f => ({ id: f.id, label: f.label })),
+            mgDef.id,
+            { suppressAutoSelectOnMissingRestore: true },
+          );
           this.fontGoogleSearch.style.display = 'none';
           this.fontGoogleResults.style.display = 'none';
           this.unicodeRow.style.display = 'none';
         } else if (sysDef) {
           this.fontGroupDropdown.selectById('system');
-          this.fontItemDropdown.setItems(SYSTEM_FONTS.map(f => ({ id: f.id, label: f.label })), sysDef.id);
+          this.fontItemDropdown.setItems(
+            SYSTEM_FONTS.map(f => ({ id: f.id, label: f.label })),
+            sysDef.id,
+            { suppressAutoSelectOnMissingRestore: true },
+          );
           this.fontGoogleSearch.style.display = 'none';
           this.fontGoogleResults.style.display = 'none';
           this.unicodeRow.style.display = 'none';
@@ -1028,6 +1014,7 @@ export class App {
           this.fontItemDropdown.setItems(
             [...GOOGLE_FONTS_CURATED.map(f => ({ id: f.id, label: f.label })), { id: 'gf-search', label: '\uD83D\uDD0D Search all Google Fonts\u2026' }],
             gfDef.id,
+            { suppressAutoSelectOnMissingRestore: true },
           );
           this.fontGoogleSearch.style.display = 'none';
           this.fontGoogleResults.style.display = 'none';
@@ -3416,6 +3403,75 @@ export class App {
     return indexes;
   }
 
+  private resetScaleGestureState(): void {
+    this.scaleGestureSelection = null;
+    this.scaleGestureBaselines.clear();
+    this.scaleGestureActiveBaseline = 1;
+  }
+
+  private getSlotScaleValue(slot: Slot): { kind: 'text' | 'visual'; value: number } | null {
+    if (slot.type === 'text') {
+      if (!slot.textData) return null;
+      return { kind: 'text', value: this.clampTextSize(slot.textData.fontSize) };
+    }
+    return { kind: 'visual', value: this.clampScale(slot.scale) };
+  }
+
+  private captureScaleGestureState(): void {
+    const indexes = this.getEffectiveSelectionIndexes();
+    if (indexes.length === 0) return;
+    const activeSlot = getActiveSlot();
+    const active = this.getSlotScaleValue(activeSlot);
+    if (!active) return;
+
+    this.scaleGestureSelection = [...indexes];
+    this.scaleGestureBaselines.clear();
+    for (const index of indexes) {
+      const slot = state.slots[index];
+      if (!slot) continue;
+      const value = this.getSlotScaleValue(slot);
+      if (!value) continue;
+      this.scaleGestureBaselines.set(index, value);
+    }
+    this.scaleGestureActiveBaseline = Math.max(active.value, 0.0001);
+  }
+
+  private applyScaleGestureValue(rawValue: number): { textIndexes: number[]; hasVisualChange: boolean } {
+    if (!this.scaleGestureSelection || this.scaleGestureSelection.length === 0) {
+      this.captureScaleGestureState();
+    }
+    if (!this.scaleGestureSelection || this.scaleGestureSelection.length === 0) {
+      return { textIndexes: [], hasVisualChange: false };
+    }
+
+    const activeSlot = getActiveSlot();
+    const active = this.getSlotScaleValue(activeSlot);
+    if (!active) return { textIndexes: [], hasVisualChange: false };
+
+    const targetActive = active.kind === 'text'
+      ? this.clampTextSize(Number.isFinite(rawValue) ? rawValue : active.value)
+      : this.clampScale(Number.isFinite(rawValue) ? rawValue : active.value);
+    const ratio = targetActive / Math.max(this.scaleGestureActiveBaseline, 0.0001);
+
+    const textIndexes: number[] = [];
+    let hasVisualChange = false;
+    for (const index of this.scaleGestureSelection) {
+      const slot = state.slots[index];
+      const baseline = this.scaleGestureBaselines.get(index);
+      if (!slot || !baseline) continue;
+      const nextValue = baseline.value * ratio;
+      if (baseline.kind === 'text') {
+        if (!slot.textData) continue;
+        slot.textData = { ...slot.textData, fontSize: this.clampTextSize(nextValue) };
+        textIndexes.push(index);
+      } else {
+        slot.scale = this.clampScale(nextValue);
+        hasVisualChange = true;
+      }
+    }
+    return { textIndexes, hasVisualChange };
+  }
+
   private setupColumnResize(
     handle: HTMLDivElement,
     panel: 'layers' | 'assets',
@@ -3667,6 +3723,22 @@ export class App {
     let isDragging = false;
     let startX = 0, startY = 0;
     let slotStartX = 0, slotStartY = 0;
+    let dragDidMove = false;
+    let dragUndoPushed = false;
+
+    const finishDrag = (): void => {
+      if (!isDragging) return;
+      isDragging = false;
+      this.groupDragIndexes = [];
+      this.groupDragStartPos.clear();
+      this.previewCanvas.classList.remove('dragging');
+      if (dragDidMove) {
+        bus.emit(Events.SLOT_CHANGED, null);
+        bus.emit(Events.RENDER_REQUEST, null);
+      }
+      dragDidMove = false;
+      dragUndoPushed = false;
+    };
 
     /**
      * Hit-test all visible slots (topmost first).
@@ -3779,6 +3851,8 @@ export class App {
       const dragIndexes = hitWasSelected ? this.getEffectiveSelectionIndexes() : [hitIdx];
       if (dragIndexes.length === 0) return;
       isDragging = true;
+      dragDidMove = false;
+      dragUndoPushed = false;
       startX = e.clientX;
       startY = e.clientY;
       this.groupDragIndexes = dragIndexes;
@@ -3802,6 +3876,13 @@ export class App {
       const cssScale = rect.width / this.previewCanvas.width;
       const dx = (e.clientX - startX) / cssScale;
       const dy = (e.clientY - startY) / cssScale;
+      if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+        if (!dragUndoPushed) {
+          pushUndo();
+          dragUndoPushed = true;
+        }
+        dragDidMove = true;
+      }
       for (const index of this.groupDragIndexes) {
         const slot = state.slots[index];
         const startPos = this.groupDragStartPos.get(index);
@@ -3812,14 +3893,7 @@ export class App {
       this.render();
     });
 
-    window.addEventListener('mouseup', () => {
-      if (isDragging) {
-        isDragging = false;
-        this.groupDragIndexes = [];
-        this.groupDragStartPos.clear();
-        this.previewCanvas.classList.remove('dragging');
-      }
-    });
+    window.addEventListener('mouseup', finishDrag);
 
     // ── Touch: single-finger drag + two-finger pinch-scale / twist-rotate ──
 
@@ -3844,6 +3918,8 @@ export class App {
         const slot = getActiveSlot();
         if (slot.locked) return;
         isDragging = true;
+        dragDidMove = false;
+        dragUndoPushed = false;
         startX = touch.clientX;
         startY = touch.clientY;
         slotStartX = slot.position.x;
@@ -3851,8 +3927,7 @@ export class App {
         this.previewCanvas.classList.add('dragging');
       } else if (e.touches.length === 2) {
         // Second finger down: cancel any active drag, begin pinch/twist
-        isDragging = false;
-        this.previewCanvas.classList.remove('dragging');
+        finishDrag();
         const t0 = e.touches[0];
         const t1 = e.touches[1];
         pinchStartDist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
@@ -3868,9 +3943,18 @@ export class App {
         const touch = e.touches[0];
         const rect = this.previewCanvas.getBoundingClientRect();
         const cssScale = rect.width / this.previewCanvas.width;
+        const dx = (touch.clientX - startX) / cssScale;
+        const dy = (touch.clientY - startY) / cssScale;
+        if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+          if (!dragUndoPushed) {
+            pushUndo();
+            dragUndoPushed = true;
+          }
+          dragDidMove = true;
+        }
         const slot = getActiveSlot();
-        slot.position.x = this.snapAxis(slotStartX + (touch.clientX - startX) / cssScale);
-        slot.position.y = this.snapAxis(slotStartY + (touch.clientY - startY) / cssScale);
+        slot.position.x = this.snapAxis(slotStartX + dx);
+        slot.position.y = this.snapAxis(slotStartY + dy);
         this.render();
       } else if (e.touches.length === 2) {
         const t0 = e.touches[0];
@@ -3893,17 +3977,8 @@ export class App {
       }
     }, { passive: false });
 
-    window.addEventListener('touchend', () => {
-      if (isDragging) {
-        isDragging = false;
-        this.previewCanvas.classList.remove('dragging');
-      }
-    });
-
-    window.addEventListener('touchcancel', () => {
-      isDragging = false;
-      this.previewCanvas.classList.remove('dragging');
-    });
+    window.addEventListener('touchend', finishDrag);
+    window.addEventListener('touchcancel', finishDrag);
   }
 
   // ── Download ──
