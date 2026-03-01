@@ -23,9 +23,12 @@ export async function renderSlot(slot: Slot, gifFrameIndex?: number): Promise<HT
   if (!slot.spriteUrl) return null;
   // Text and full-card layers render from gifFrames only.
   // Skip icons/overlays/anchor logic — go straight to the gifFrames path.
-  if (slot.type === 'text' || slot.type === 'full-card') {
+  if (slot.type === 'text' || slot.type === 'full-card' || slot.spriteUrl === 'pet-bar:') {
     if (!slot.gifFrames || slot.gifFrames.length === 0) return null;
-    const src = slot.gifFrames[0].canvas;
+    const fi = slot.isAnimated && slot.gifFrames.length > 1
+      ? Math.max(0, Math.min(gifFrameIndex ?? 0, slot.gifFrames.length - 1))
+      : 0;
+    const src = slot.gifFrames[fi].canvas;
     if (!(src instanceof HTMLCanvasElement) || src.width === 0) return null;
     const canvas = document.createElement('canvas');
     canvas.width = src.width;
@@ -318,7 +321,7 @@ export async function renderAll(output: HTMLCanvasElement): Promise<void> {
 
   for (const slot of state.slots) {
     if (!slot.visible) continue;
-    if (slot.type === 'text' || slot.type === 'full-card' ||
+    if (slot.type === 'text' || slot.type === 'full-card' || slot.spriteUrl === 'pet-bar:' ||
         (slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:')) {
       // These slot types render from gifFrames only — skip if not ready
       if (!slot.gifFrames || slot.gifFrames.length === 0) continue;

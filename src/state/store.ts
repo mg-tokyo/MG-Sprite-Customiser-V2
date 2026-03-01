@@ -64,6 +64,42 @@ export interface FullCardData {
   // Custom bar labels (pet card only)
   petStrLabel?: string;    // defaults to 'Strength' if blank
   petHungerLabel?: string; // defaults to 'Hunger' if blank
+  /** Pet strength/hunger bar fill colors. */
+  petStrColor?: string;
+  petHungerColor?: string;
+  /** Left padding between label area and bar track. */
+  petStrLabelPadding?: number;
+  petHungerLabelPadding?: number;
+  /** Optional custom icon refs (sprite id or direct image URL). */
+  petStrCurrentIcon?: string;
+  petStrNextIcon?: string;
+  petStrMaxIcon?: string;
+}
+
+export type PetBarKind = 'hunger' | 'strength';
+
+export interface PetBarData {
+  kind: PetBarKind;
+  /** Label shown at the left side of the bar. */
+  label: string;
+  /** Row width used by the renderer. */
+  length: number;
+  /** Progress fill percent (0..100). */
+  progressPct: number;
+  /** Fill color for this bar. */
+  barColor?: string;
+  /** Left padding between label area and bar track. */
+  labelPadding?: number;
+  /** Strength-only value labels. */
+  currentStr?: string;
+  nextStr?: string;
+  maxStr?: string;
+  /** Strength-only icon refs (sprite id or direct image URL). */
+  currentIcon?: string;
+  nextIcon?: string;
+  maxIcon?: string;
+  /** Hunger-only diet slots. */
+  dietSlots?: FullCardSpriteSlot[];
 }
 
 export interface TextData {
@@ -114,6 +150,7 @@ export interface Slot {
   bloblingAnimId?: string;
   textData?: TextData;
   fullCardData?: FullCardData;
+  petBarData?: PetBarData;
   // GIF animation data (not persisted)
   gifFrames?: { canvas: HTMLCanvasElement; delay: number }[];
   isAnimated?: boolean;

@@ -1,5 +1,5 @@
 
-import type { FullCardData, FullCardType, FullCardRarity, FullCardSpriteSlot } from '../state/store';
+import type { FullCardData, FullCardType, FullCardRarity, FullCardSpriteSlot, PetBarData, PetBarKind } from '../state/store';
 import { state } from '../state/store';
 import { spriteLoader } from '../api/sprite-loader';
 import type { SpriteFrame } from '../api/types';
@@ -33,6 +33,14 @@ const NAME_LINE_HEIGHT = 28;
 const BAR_HEIGHT = 18;
 const BAR_RADIUS = 15;
 const BAR_TRACK = '#545454';
+export const PET_BAR_LENGTH_MIN = 120;
+export const PET_BAR_LENGTH_MAX = 1200;
+export const PET_BAR_LENGTH_DEFAULT = 390;
+export const PET_BAR_LABEL_PAD_MIN = 40;
+export const PET_BAR_LABEL_PAD_MAX = 260;
+export const PET_BAR_LABEL_PAD_DEFAULT = 130;
+const PET_BAR_CANVAS_WIDTH = 560;
+const PET_BAR_CANVAS_HEIGHT = 132;
 
 const COLOR_TEXT = '#FFFFFF';
 const COLOR_STRENGTH_TEXT = '#FFFB6D';
@@ -418,8 +426,9 @@ function drawProgressBarRow(
     colorByPct?: (pct: number) => string;
   },
   icons: {
-    progressStar?: HTMLImageElement | null;
-    strengthStar?: HTMLImageElement | null;
+    currentIcon?: HTMLImageElement | null;
+    nextIcon?: HTMLImageElement | null;
+    maxIcon?: HTMLImageElement | null;
   },
 ): void {
   const rowLeft = -options.rowWidth / 2;
@@ -463,10 +472,10 @@ function drawProgressBarRow(
   });
 
   // Current strength star (left of bar)
-  if (options.showMaxLabel && options.currentLabelValue && !options.fullyGrown && icons.progressStar) {
+  if (options.showMaxLabel && options.currentLabelValue && !options.fullyGrown && icons.currentIcon) {
     const starX = barLeft + 12;
     const starY = options.y;
-    drawImageCentered(ctx, icons.progressStar, starX, starY, 45);
+    drawImageCentered(ctx, icons.currentIcon, starX, starY, 45);
     setFont(ctx, 24, 'bold', 'Greycliff CF');
     ctx.fillStyle = COLOR_STRENGTH_TEXT;
     ctx.strokeStyle = COLOR_PROGRESS_STROKE_ALT;
@@ -514,9 +523,9 @@ function drawProgressBarRow(
   ctx.restore();
 
   // Right-side markers
-  if (options.showMaxLabel && options.maxLabelValue && icons.strengthStar) {
+  if (options.showMaxLabel && options.maxLabelValue && icons.maxIcon) {
     const rightY = options.y;
-    if (options.nextLabelValue && options.nextLabelValue !== options.maxLabelValue && icons.progressStar) {
+    if (options.nextLabelValue && options.nextLabelValue !== options.maxLabelValue && icons.nextIcon) {
       const textX = barRight + 8;
       setFont(ctx, 24, 'bold', 'Greycliff CF');
       ctx.fillStyle = COLOR_STRENGTH_TEXT;
@@ -526,12 +535,12 @@ function drawProgressBarRow(
       ctx.textBaseline = 'middle';
       const textWidth = measureTextWidth(ctx, options.nextLabelValue);
       const starX = textX - textWidth / 2;
-      drawImageCentered(ctx, icons.progressStar, starX, rightY, 45);
+      drawImageCentered(ctx, icons.nextIcon, starX, rightY, 45);
       ctx.strokeText(options.nextLabelValue, textX, rightY - 5);
       ctx.fillText(options.nextLabelValue, textX, rightY - 5);
 
       const maxStarX = barRight + 36;
-      drawImageCentered(ctx, icons.strengthStar, maxStarX, rightY, 40);
+      drawImageCentered(ctx, icons.maxIcon, maxStarX, rightY, 40);
       setFont(ctx, 24, 'bold', 'Greycliff CF');
       ctx.fillStyle = COLOR_STRENGTH_TEXT;
       ctx.strokeStyle = COLOR_STRENGTH_STROKE;
@@ -542,7 +551,7 @@ function drawProgressBarRow(
       ctx.fillText(options.maxLabelValue, maxStarX, rightY - 5);
     } else {
       const maxStarX = barRight + 8;
-      drawImageCentered(ctx, icons.strengthStar, maxStarX, rightY, 40);
+      drawImageCentered(ctx, icons.maxIcon, maxStarX, rightY, 40);
       setFont(ctx, 24, 'bold', 'Greycliff CF');
       ctx.fillStyle = COLOR_STRENGTH_TEXT;
       ctx.strokeStyle = COLOR_STRENGTH_STROKE;
@@ -552,8 +561,8 @@ function drawProgressBarRow(
       ctx.strokeText(options.maxLabelValue, maxStarX, rightY - 5);
       ctx.fillText(options.maxLabelValue, maxStarX, rightY - 5);
     }
-  } else if (options.barLabel && !options.showMaxLabel && icons.strengthStar) {
-    drawImageCentered(ctx, icons.strengthStar, barRight + 8, options.y, 45);
+  } else if (options.barLabel && !options.showMaxLabel && icons.maxIcon) {
+    drawImageCentered(ctx, icons.maxIcon, barRight + 8, options.y, 45);
   }
 }
 
@@ -962,6 +971,167 @@ function isTallSprite(spriteId: string | null): boolean {
   return /tall-?plant/i.test(spriteId);
 }
 
+function clampPetBarLength(value: number): number {
+  if (!Number.isFinite(value)) return PET_BAR_LENGTH_DEFAULT;
+  return Math.max(PET_BAR_LENGTH_MIN, Math.min(PET_BAR_LENGTH_MAX, Math.round(value)));
+}
+
+function clampPct(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
+
+function clampLabelPadding(value: number): number {
+  if (!Number.isFinite(value)) return PET_BAR_LABEL_PAD_DEFAULT;
+  return Math.max(PET_BAR_LABEL_PAD_MIN, Math.min(PET_BAR_LABEL_PAD_MAX, Math.round(value)));
+}
+
+export function defaultPetBarData(kind: PetBarKind): PetBarData {
+  if (kind === 'strength') {
+    return {
+      kind,
+      label: 'Strength',
+      length: PET_BAR_LENGTH_DEFAULT,
+      labelPadding: PET_BAR_LABEL_PAD_DEFAULT,
+      progressPct: 0,
+      barColor: '#0067B4',
+      currentStr: '50',
+      nextStr: '51',
+      maxStr: '80',
+      currentIcon: 'sprite/ui/ProgressStar',
+      nextIcon: 'sprite/ui/ProgressStar',
+      maxIcon: 'sprite/ui/StrengthStar',
+    };
+  }
+  return {
+    kind,
+    label: 'Hunger',
+    length: PET_BAR_LENGTH_DEFAULT,
+    labelPadding: PET_BAR_LABEL_PAD_DEFAULT,
+    progressPct: 100,
+    barColor: '#5EAC46',
+    dietSlots: [],
+  };
+}
+
+function normalizePetBarData(data: PetBarData): PetBarData {
+  const kind: PetBarKind = data.kind === 'strength' ? 'strength' : 'hunger';
+  const base = defaultPetBarData(kind);
+  const label = (data.label ?? '').trim() || base.label;
+  const progressPct = clampPct(data.progressPct ?? base.progressPct);
+  const length = clampPetBarLength(data.length ?? base.length);
+  const labelPadding = clampLabelPadding(data.labelPadding ?? base.labelPadding ?? PET_BAR_LABEL_PAD_DEFAULT);
+  const barColor = (data.barColor ?? base.barColor ?? '').trim() || (kind === 'strength' ? '#0067B4' : '#5EAC46');
+  if (kind === 'strength') {
+    const currentStr = (data.currentStr ?? base.currentStr ?? '').trim();
+    const parsedCurrent = parseInt(currentStr, 10);
+    const nextStr = (data.nextStr ?? '').trim() || (Number.isFinite(parsedCurrent) ? String(parsedCurrent + 1) : '');
+    const maxStr = (data.maxStr ?? base.maxStr ?? '').trim();
+    return {
+      kind,
+      label,
+      length,
+      labelPadding,
+      progressPct,
+      barColor,
+      currentStr,
+      nextStr,
+      maxStr,
+      currentIcon: (data.currentIcon ?? base.currentIcon ?? '').trim() || undefined,
+      nextIcon: (data.nextIcon ?? base.nextIcon ?? '').trim() || undefined,
+      maxIcon: (data.maxIcon ?? base.maxIcon ?? '').trim() || undefined,
+    };
+  }
+  return {
+    kind,
+    label,
+    length,
+    labelPadding,
+    progressPct,
+    barColor,
+    dietSlots: (data.dietSlots ?? []).map(slot => ({ ...slot })),
+  };
+}
+
+export async function renderPetBarCanvas(input: PetBarData): Promise<HTMLCanvasElement> {
+  const data = normalizePetBarData(input);
+  await ensureCardFontsLoaded();
+  const labelSpace = clampLabelPadding(data.labelPadding ?? PET_BAR_LABEL_PAD_DEFAULT);
+  const outerPad = 36;
+
+  const [progressStar, strengthStar] = await Promise.all([
+    loadSprite('sprite/ui/ProgressStar'),
+    loadSprite('sprite/ui/StrengthStar'),
+  ]);
+
+  let rightPad = 96;
+  let rowWidth = labelSpace + data.length + rightPad;
+  let dietCanvases: (HTMLImageElement | HTMLCanvasElement)[] = [];
+  if (data.kind === 'hunger') {
+    dietCanvases = await renderSlotList(data.dietSlots ?? []);
+    rightPad = Math.max(24, dietCanvases.length * 34 + 12);
+    rowWidth = labelSpace + data.length + rightPad;
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(PET_BAR_CANVAS_WIDTH, Math.ceil(rowWidth + outerPad * 2));
+  canvas.height = PET_BAR_CANVAS_HEIGHT;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return canvas;
+
+  ctx.save();
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+
+  if (data.kind === 'strength') {
+    const [currentIconCustom, nextIconCustom, maxIconCustom] = await Promise.all([
+      loadSprite(data.currentIcon),
+      loadSprite(data.nextIcon),
+      loadSprite(data.maxIcon),
+    ]);
+    const currentText = (data.currentStr ?? '').trim();
+    const nextText = (data.nextStr ?? '').trim();
+    const maxText = (data.maxStr ?? '').trim();
+    const currentNum = parseInt(currentText, 10);
+    const maxNum = parseInt(maxText, 10);
+    const fullyGrown = Number.isFinite(currentNum) && Number.isFinite(maxNum) && maxNum > 0 && currentNum >= maxNum;
+    drawProgressBarRow(ctx, {
+      label: data.label,
+      value: data.progressPct,
+      max: 100,
+      color: data.barColor ?? '#0067B4',
+      y: 0,
+      rowWidth,
+      showMaxLabel: true,
+      leftPad: labelSpace,
+      rightPad,
+      maxLabelValue: maxText,
+      nextLabelValue: nextText,
+      currentLabelValue: currentText,
+      fullyGrown,
+    }, {
+      currentIcon: currentIconCustom ?? progressStar,
+      nextIcon: nextIconCustom ?? progressStar,
+      maxIcon: maxIconCustom ?? strengthStar,
+    });
+  } else {
+    drawProgressBarRow(ctx, {
+      label: data.label,
+      value: data.progressPct,
+      max: 100,
+      color: data.barColor ?? '#5EAC46',
+      y: 0,
+      rowWidth,
+      leftPad: labelSpace,
+      rightPad,
+      colorByPct: (pct) => pct <= HUNGER_LOW_THRESHOLD ? HUNGER_LOW_COLOR : (data.barColor ?? '#5EAC46'),
+    }, { maxIcon: strengthStar });
+    drawDietSpritesOnly(ctx, 0, rowWidth, dietCanvases);
+  }
+
+  ctx.restore();
+  return canvas;
+}
+
 export async function drawFullCardStats(
   canvas: HTMLCanvasElement,
   data: FullCardData,
@@ -1062,7 +1232,7 @@ export async function drawFullCardStats(
       y: detailsY + cursorY,
       rowWidth,
       barLabel,
-    }, { strengthStar });
+    }, { maxIcon: strengthStar });
     cursorY += 32 + 12;
 
     if (slotCount > 1) {
@@ -1119,42 +1289,62 @@ export async function drawFullCardStats(
 
   // Pet rows — use direct values from FullCardData
   if (data.cardType === 'Pet') {
-    const currentStr = parseInt(data.petStr ?? '0') || 0;
-    const maxStr     = parseInt(data.petMaxStr ?? '0') || 0;
+    const currentStrText = (data.petStr ?? '').trim();
+    const maxStrText = (data.petMaxStr ?? '').trim();
+    const currentStrNum = parseInt(currentStrText, 10);
+    const maxStrNum = parseInt(maxStrText, 10);
     const strPct     = data.petStrPct ?? 0;
     const barValue   = strPct / 100;
-    const isMax      = maxStr > 0 && currentStr >= maxStr;
+    const isMax = Number.isFinite(maxStrNum) && maxStrNum > 0
+      && Number.isFinite(currentStrNum) && currentStrNum >= maxStrNum;
+    const nextStrText = Number.isFinite(currentStrNum)
+      ? String(currentStrNum + 1)
+      : '';
 
+    const [currentIconCustom, nextIconCustom, maxIconCustom] = await Promise.all([
+      loadSprite(data.petStrCurrentIcon),
+      loadSprite(data.petStrNextIcon),
+      loadSprite(data.petStrMaxIcon),
+    ]);
+    const strLabelPadding = clampLabelPadding(data.petStrLabelPadding ?? 82);
+    const strColor = (data.petStrColor ?? '#0067B4').trim() || '#0067B4';
     drawProgressBarRow(ctx, {
       label: data.petStrLabel?.trim() || 'Strength',
       value: barValue,
       max: 1,
-      color: isMax ? '#25AAE2' : '#0067B4',
+      color: strColor,
       y: detailsY + cursorY,
       rowWidth,
       showMaxLabel: true,
-      maxLabelValue: String(maxStr || ''),
-      nextLabelValue: String(currentStr + 1),
-      currentLabelValue: String(currentStr),
+      leftPad: strLabelPadding,
+      rightPad: 50,
+      maxLabelValue: maxStrText,
+      nextLabelValue: nextStrText,
+      currentLabelValue: currentStrText,
       fullyGrown: isMax,
-    }, { progressStar, strengthStar });
+    }, {
+      currentIcon: currentIconCustom ?? progressStar,
+      nextIcon: nextIconCustom ?? progressStar,
+      maxIcon: maxIconCustom ?? strengthStar,
+    });
     cursorY += 32 + 14;
 
     const hungerPct = data.petHungerPct ?? 100;
     const dietSlots = data.petDietSlots ?? [];
-    const leftPad   = rowWidth * 0.35 - 55;
+    const leftPad   = clampLabelPadding(data.petHungerLabelPadding ?? (rowWidth * 0.35 - 55));
     const rightPad  = dietSlots.length * 34 + 12; // step(34) * N + gap
+    const hungerColor = (data.petHungerColor ?? '#5EAC46').trim() || '#5EAC46';
     drawProgressBarRow(ctx, {
       label: data.petHungerLabel?.trim() || 'Hunger',
       value: hungerPct,
       max: 100,
-      color: '#5EAC46',
+      color: hungerColor,
       y: detailsY + cursorY,
       rowWidth,
       leftPad,
       rightPad,
-      colorByPct: (pct) => pct <= HUNGER_LOW_THRESHOLD ? HUNGER_LOW_COLOR : '#5EAC46',
-    }, { strengthStar });
+      colorByPct: (pct) => pct <= HUNGER_LOW_THRESHOLD ? HUNGER_LOW_COLOR : hungerColor,
+    }, { maxIcon: strengthStar });
 
     const dietCanvases = await renderSlotList(dietSlots);
     drawDietSpritesOnly(ctx, detailsY + cursorY, rowWidth, dietCanvases);
@@ -1234,6 +1424,13 @@ export function defaultFullCardData(cardType: FullCardType): FullCardData {
       data.petStr = '50';
       data.petMaxStr = '80';
       data.petStrPct = 0;
+      data.petStrColor = '#0067B4';
+      data.petHungerColor = '#5EAC46';
+      data.petStrLabelPadding = 82;
+      data.petHungerLabelPadding = 82;
+      data.petStrCurrentIcon = 'sprite/ui/ProgressStar';
+      data.petStrNextIcon = 'sprite/ui/ProgressStar';
+      data.petStrMaxIcon = 'sprite/ui/StrengthStar';
       data.petHungerPct = 100;
       data.petDietSlots = [];
       data.petAbilityEntries = [];

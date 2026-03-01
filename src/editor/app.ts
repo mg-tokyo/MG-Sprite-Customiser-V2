@@ -1,6 +1,6 @@
 import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlot, reorderSlots, pushUndo, addSlot, MAX_SLOTS } from '../state/store';
 import { listSavedScenes, saveNamedScene, deleteNamedScene, exportSceneJson, importSceneJson } from '../state/persistence';
-import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity, FullCardAbilityEntry, FullCardSpriteSlot } from '../state/store';
+import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity, FullCardAbilityEntry, FullCardSpriteSlot, PetBarData, PetBarKind } from '../state/store';
 import { initTheme, toggleTheme } from './theme';
 import { FILTERS } from '../renderer/mutation-defs';
 import { renderAll, renderSlot } from '../renderer/canvas-renderer';
@@ -17,7 +17,7 @@ import type { DropdownItem } from './custom-dropdown';
 import { spriteLoader } from '../api/sprite-loader';
 import type { SpriteFrame } from '../api/types';
 import { renderTextToCanvas, defaultTextData } from './text-renderer';
-import { drawFullCardStats, abilityColor, defaultFullCardData } from './full-card-renderer';
+import { drawFullCardStats, abilityColor, defaultFullCardData, defaultPetBarData, renderPetBarCanvas, PET_BAR_LENGTH_MIN, PET_BAR_LENGTH_MAX, PET_BAR_LABEL_PAD_MIN, PET_BAR_LABEL_PAD_MAX, PET_BAR_LABEL_PAD_DEFAULT } from './full-card-renderer';
 import { MG_FONTS, SYSTEM_FONTS, GOOGLE_FONTS_CURATED, UNICODE_STYLES, ensureFontLoaded } from './font-data';
 import { getRiveFileUrl, getBloblingAnimations, renderBloblingFrames, BLOBLING_ANIMATIONS, getExpressionIndex } from './blobling-rive';
 import { buildToolbar } from './toolbar';
@@ -87,6 +87,8 @@ function scanContentBounds(
   return { cx: bx + bw / 2, cy: by + bh / 2, hw: bw / 2, hv: bh / 2 };
 }
 
+type SlotListType = 'diet' | 'crop' | 'egg' | 'petbar-diet';
+
 // MUTATION_CHIP_COLORS imported from './drawers/card-drawer'
 
 
@@ -138,6 +140,8 @@ export class App {
   private readonly TEXT_SIZE_MAX = 300;
   private readonly TEXT_SIZE_STEP = 1;
   private readonly ROTATION_STEP = 1;
+  private readonly PET_BAR_LENGTH_STEP = 1;
+  private readonly PET_BAR_LABEL_PAD_STEP = 1;
   private readonly SNAP_GRID_SIZE = 16;
   private readonly NORMALIZE_RATIO_TOLERANCE_LOG = 0.12;
   private snapEnabled = false;
@@ -246,6 +250,15 @@ export class App {
   // Pet bar label inputs
   private fullCardPetStrLabelInput!: HTMLInputElement;
   private fullCardPetHungerLabelInput!: HTMLInputElement;
+  private fullCardPetStrColorInput!: HTMLInputElement;
+  private fullCardPetHungerColorInput!: HTMLInputElement;
+  private fullCardPetStrPadInput!: HTMLInputElement;
+  private fullCardPetStrPadDisplay!: HTMLElement;
+  private fullCardPetHungerPadInput!: HTMLInputElement;
+  private fullCardPetHungerPadDisplay!: HTMLElement;
+  private fullCardPetCurrentIconInput!: HTMLInputElement;
+  private fullCardPetNextIconInput!: HTMLInputElement;
+  private fullCardPetMaxIconInput!: HTMLInputElement;
   // Tool fields
   private fullCardToolSection!: HTMLElement;
   private fullCardToolCountInput!: HTMLInputElement;
@@ -256,13 +269,39 @@ export class App {
   // Slot picker overlay and mutation popover (singletons)
   private fcSlotPickerOverlay!: HTMLElement;
   private fcMutPopover!: HTMLElement;
-  private fcActiveSlotCtx: { list: 'diet' | 'crop' | 'egg'; index: number } | null = null;
+  private fcActiveSlotCtx: { list: SlotListType; index: number } | null = null;
+  private fcActiveSpriteTargetInput: HTMLInputElement | null = null;
+  private spriteRefThumbImgs = new Map<HTMLInputElement, HTMLImageElement>();
+  private spriteRefThumbEmpty = new Map<HTMLInputElement, HTMLElement>();
   // In-memory slot data (kept in sync with controls)
   private fcDietSlots: FullCardSpriteSlot[] = [];
   private fcCropSlots: FullCardSpriteSlot[] = [];
   private fcEggHatchSlots: FullCardSpriteSlot[] = [];
 
   private fullCardRenderDebounce: ReturnType<typeof setTimeout> | null = null;
+
+  // -- Standalone pet bar UI --
+  private petBarControls!: HTMLElement;
+  private petBarTypeLabel!: HTMLElement;
+  private petBarLabelInput!: HTMLInputElement;
+  private petBarLengthInput!: HTMLInputElement;
+  private petBarLengthDisplay!: HTMLElement;
+  private petBarProgressInput!: HTMLInputElement;
+  private petBarProgressDisplay!: HTMLElement;
+  private petBarCurrentStrInput!: HTMLInputElement;
+  private petBarNextStrInput!: HTMLInputElement;
+  private petBarMaxStrInput!: HTMLInputElement;
+  private petBarColorInput!: HTMLInputElement;
+  private petBarLabelPadInput!: HTMLInputElement;
+  private petBarLabelPadDisplay!: HTMLElement;
+  private petBarCurrentIconInput!: HTMLInputElement;
+  private petBarNextIconInput!: HTMLInputElement;
+  private petBarMaxIconInput!: HTMLInputElement;
+  private petBarStrengthSection!: HTMLElement;
+  private petBarDietSection!: HTMLElement;
+  private petBarDietSlotList!: HTMLElement;
+  private petBarDietSlots: FullCardSpriteSlot[] = [];
+  private petBarRenderDebounce: ReturnType<typeof setTimeout> | null = null;
 
   // ── Copy / paste clipboard ──
   private copiedSlot: Partial<Slot> | null = null;
@@ -299,6 +338,8 @@ export class App {
     tb.addTextBtn.addEventListener('click', () => this.addTextLayer());
     tb.addCardBtn.addEventListener('click', () => this.showCardTypePicker('layers'));
     tb.addFullCardBtn.addEventListener('click', () => this.showCardTypePicker('full'));
+    tb.addHungerBarBtn.addEventListener('click', () => this.addPetBarLayer('hunger'));
+    tb.addStrengthBarBtn.addEventListener('click', () => this.addPetBarLayer('strength'));
     tb.addBloblingBtn.addEventListener('click', () => this.addBloblingLayer());
 
     tb.uploadInput.addEventListener('change', async () => {
@@ -312,11 +353,25 @@ export class App {
           decoded.frames[0].canvas.toBlob((b) => resolve(b!), 'image/png'),
         );
         const url = URL.createObjectURL(firstFrameBlob);
-        updateSlot(state.activeSlotIndex, { type: 'custom', spriteKey: name, spriteUrl: url, gifFrames: decoded.frames, isAnimated: true });
+        updateSlot(state.activeSlotIndex, {
+          type: 'custom',
+          spriteKey: name,
+          spriteUrl: url,
+          gifFrames: decoded.frames,
+          isAnimated: true,
+          petBarData: undefined,
+        });
         this.startGifPreview();
       } else {
         const url = URL.createObjectURL(file);
-        updateSlot(state.activeSlotIndex, { type: 'custom', spriteKey: name, spriteUrl: url, gifFrames: undefined, isAnimated: false });
+        updateSlot(state.activeSlotIndex, {
+          type: 'custom',
+          spriteKey: name,
+          spriteUrl: url,
+          gifFrames: undefined,
+          isAnimated: false,
+          petBarData: undefined,
+        });
         this.stopGifPreview();
       }
       tb.uploadInput.value = '';
@@ -374,6 +429,7 @@ export class App {
     this.textControls = el('div', { className: 'text-controls-section' });
     this.buildTextControls();
     this.fullCardControls = this.buildFullCardControls();
+    this.petBarControls = this.buildPetBarControls();
     this.bloblingControls = this.buildBloblingControls();
 
     // ── Inspector control elements (created once, reparented by syncInspector) ──
@@ -599,7 +655,9 @@ export class App {
       this.updateMeta();
       this.syncDownloadBtn();
       const slot = getActiveSlot();
-      if (slot.type !== 'text' && slot.type !== 'full-card' && slot.type !== 'cosmetic') this.spriteDropdown.selectById(slot.spriteKey);
+      if (slot.type !== 'text' && slot.type !== 'full-card' && slot.type !== 'cosmetic' && slot.spriteUrl !== 'pet-bar:') {
+        this.spriteDropdown.selectById(slot.spriteKey);
+      }
       this.syncTextSlotUI(slot);
       this.syncInspector(slot);
     });
@@ -609,6 +667,7 @@ export class App {
       this.refreshMutations();
       const slot = getActiveSlot();
       if (slot.type === 'full-card') this.syncFullCardUI(slot);
+      if (slot.spriteUrl === 'pet-bar:' && slot.petBarData) this.syncPetBarUI(slot);
       this.rerenderAllSpecialSlots().catch(err => console.error('[MG] Restore re-render failed:', err));
     });
 
@@ -949,6 +1008,7 @@ export class App {
   private syncTextSlotUI(slot: Slot): void {
     const isText     = slot.type === 'text';
     const isFullCard = slot.type === 'full-card';
+    const isPetBar   = slot.spriteUrl === 'pet-bar:' && !!slot.petBarData;
     const isCosmetic = slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:';
 
     // Open/close drawer
@@ -956,12 +1016,14 @@ export class App {
       this.drawer.open('Text Editor', this.textControls);
     } else if (isFullCard) {
       this.drawer.open('Card Editor', this.fullCardControls);
+    } else if (isPetBar) {
+      this.drawer.open('Pet Bar', this.petBarControls);
     } else if (isCosmetic) {
       this.drawer.open('Blobling Rig', this.bloblingControls);
     } else {
       // Close drawer only if it was showing a special-slot panel
       const cur = this.drawer.currentContent();
-      if (cur === this.textControls || cur === this.fullCardControls || cur === this.bloblingControls) {
+      if (cur === this.textControls || cur === this.fullCardControls || cur === this.petBarControls || cur === this.bloblingControls) {
         this.drawer.close();
       }
     }
@@ -1023,6 +1085,8 @@ export class App {
       }
     } else if (isFullCard) {
       this.syncFullCardUI(slot);
+    } else if (isPetBar) {
+      this.syncPetBarUI(slot);
     }
   }
 
@@ -1030,8 +1094,9 @@ export class App {
   private syncInspector(slot: Slot): void {
     const isText     = slot.type === 'text';
     const isFullCard = slot.type === 'full-card';
+    const isPetBar   = slot.spriteUrl === 'pet-bar:' && !!slot.petBarData;
     const isCosmetic = slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:';
-    const isSprite   = !isText && !isFullCard && !isCosmetic;
+    const isSprite   = !isText && !isFullCard && !isPetBar && !isCosmetic;
 
     this.inspectorEl.innerHTML = '';
 
@@ -1080,34 +1145,36 @@ export class App {
 
     if (isText) {
       this.tintLabel.textContent = 'Text Tint';
-      const editBtn = el('button', { className: 'inspector-edit-btn', textContent: 'Edit Text' }) as HTMLButtonElement;
-      editBtn.addEventListener('click', () => this.drawer.open('Text Editor', this.textControls));
       const mutSection = el('div', { className: 'inspector-section' }, [
         el('span', { className: 'inspector-section-title', textContent: 'Mutations' }),
         this.mutationList,
       ]);
       const tintSection = el('div', { className: 'inspector-section' }, [this.tintLabel, this.customTintControls]);
-      this.inspectorEl.append(editBtn, mutSection, tintSection, transformSection);
+      this.inspectorEl.append(mutSection, tintSection, transformSection);
     } else if (isFullCard) {
       this.tintLabel.textContent = 'Card Tint';
-      const editBtn = el('button', { className: 'inspector-edit-btn', textContent: 'Edit Card' }) as HTMLButtonElement;
-      editBtn.addEventListener('click', () => this.drawer.open('Card Editor', this.fullCardControls));
       const mutSection = el('div', { className: 'inspector-section' }, [
         el('span', { className: 'inspector-section-title', textContent: 'Mutations' }),
         this.mutationList,
       ]);
       const tintSection = el('div', { className: 'inspector-section' }, [this.tintLabel, this.customTintControls]);
-      this.inspectorEl.append(editBtn, mutSection, tintSection, transformSection);
+      this.inspectorEl.append(mutSection, tintSection, transformSection);
+    } else if (isPetBar) {
+      this.tintLabel.textContent = 'Bar Tint';
+      const mutSection = el('div', { className: 'inspector-section' }, [
+        el('span', { className: 'inspector-section-title', textContent: 'Mutations' }),
+        this.mutationList,
+      ]);
+      const tintSection = el('div', { className: 'inspector-section' }, [this.tintLabel, this.customTintControls]);
+      this.inspectorEl.append(mutSection, tintSection, transformSection);
     } else if (isCosmetic) {
       this.tintLabel.textContent = 'Custom Tint';
-      const editBtn = el('button', { className: 'inspector-edit-btn', textContent: 'Edit Blobling' }) as HTMLButtonElement;
-      editBtn.addEventListener('click', () => this.drawer.open('Blobling Rig', this.bloblingControls));
       const mutSection  = el('div', { className: 'inspector-section' }, [
         el('span', { className: 'inspector-section-title', textContent: 'Mutations' }),
         this.mutationList,
       ]);
       const tintSection = el('div', { className: 'inspector-section' }, [this.tintLabel, this.customTintControls]);
-      this.inspectorEl.append(editBtn, mutSection, tintSection, transformSection);
+      this.inspectorEl.append(mutSection, tintSection, transformSection);
     } else if (isSprite) {
       this.tintLabel.textContent = 'Custom Tint';
       const mutSection  = el('div', { className: 'inspector-section' }, [
@@ -1140,16 +1207,37 @@ export class App {
       }
     } else if (item.animFrameUrls && item.animFrameUrls.length > 0) {
       const firstUrl = item.animFrameUrls[0];
-      updateSlot(state.activeSlotIndex, { type: 'sprite', spriteKey: item.id, spriteUrl: firstUrl, gifFrames: undefined, isAnimated: false });
+      updateSlot(state.activeSlotIndex, {
+        type: 'sprite',
+        spriteKey: item.id,
+        spriteUrl: firstUrl,
+        gifFrames: undefined,
+        isAnimated: false,
+        petBarData: undefined,
+      });
       this.stopGifPreview();
       this.loadAtlasAnimation(state.activeSlotIndex, item.id, item.animFrameUrls);
     } else if (item.sheetAnim && item.thumbUrl) {
-      updateSlot(state.activeSlotIndex, { type: 'sprite', spriteKey: item.id, spriteUrl: item.thumbUrl, gifFrames: undefined, isAnimated: false });
+      updateSlot(state.activeSlotIndex, {
+        type: 'sprite',
+        spriteKey: item.id,
+        spriteUrl: item.thumbUrl,
+        gifFrames: undefined,
+        isAnimated: false,
+        petBarData: undefined,
+      });
       this.stopGifPreview();
       this.loadSheetAnimation(state.activeSlotIndex, item.id, item.thumbUrl, item.sheetAnim);
     } else {
       const url = item.thumbUrl ?? '';
-      updateSlot(state.activeSlotIndex, { type: 'sprite', spriteKey: item.id, spriteUrl: url, gifFrames: undefined, isAnimated: false });
+      updateSlot(state.activeSlotIndex, {
+        type: 'sprite',
+        spriteKey: item.id,
+        spriteUrl: url,
+        gifFrames: undefined,
+        isAnimated: false,
+        petBarData: undefined,
+      });
       this.stopGifPreview();
     }
   }
@@ -1184,6 +1272,8 @@ export class App {
         spriteKey: 'text-layer',
         spriteUrl: 'text:', // sentinel — tells renderSlot this is a text slot
         textData: td,
+        fullCardData: undefined,
+        petBarData: undefined,
         gifFrames: undefined,
         isAnimated: true, // marks as 'use gifFrames path' after first render
         scale: 1,
@@ -1287,6 +1377,9 @@ export class App {
       spriteUrl: 'blobling:',
       cosmeticLayers,
       bloblingAnimId: undefined,
+      textData: undefined,
+      fullCardData: undefined,
+      petBarData: undefined,
       gifFrames: undefined,
       isAnimated: false,
       scale: 1,
@@ -1546,9 +1639,27 @@ export class App {
 
     const grid = el('div', { className: 'fc-slot-picker-grid' });
 
+    const uploadInput = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif' }) as HTMLInputElement;
+    uploadInput.style.display = 'none';
+    const uploadBtn = el('button', { textContent: 'Upload' }) as HTMLButtonElement;
+    uploadBtn.addEventListener('click', () => uploadInput.click());
+    uploadInput.addEventListener('change', () => {
+      const file = uploadInput.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+        if (!dataUrl) return;
+        this.applySlotPickerSelection(dataUrl);
+        overlay.style.display = 'none';
+      };
+      reader.readAsDataURL(file);
+      uploadInput.value = '';
+    });
+
     const clearBtn = el('button', { textContent: 'Clear' }) as HTMLButtonElement;
     const closeBtn = el('button', { textContent: 'Close' }) as HTMLButtonElement;
-    const footer = el('div', { className: 'fc-slot-picker-footer' }, [clearBtn, closeBtn]);
+    const footer = el('div', { className: 'fc-slot-picker-footer' }, [uploadBtn, clearBtn, closeBtn, uploadInput]);
 
     overlay.append(search, catSelect, grid, footer);
     document.body.append(overlay);
@@ -1659,8 +1770,9 @@ export class App {
     (overlay as any)._rebuild = rebuildGrid;
   }
 
-  private openSlotPicker(trigger: HTMLElement, listType: 'diet' | 'crop' | 'egg', index: number): void {
+  private openSlotPicker(trigger: HTMLElement, listType: SlotListType, index: number): void {
     this.fcActiveSlotCtx = { list: listType, index };
+    this.fcActiveSpriteTargetInput = null;
     const overlay = this.fcSlotPickerOverlay;
     const rebuild = (overlay as any)._rebuild as (() => void) | undefined;
     if (rebuild) rebuild();
@@ -1679,7 +1791,33 @@ export class App {
     overlay.style.display = 'flex';
   }
 
+  private openSpriteValuePicker(trigger: HTMLElement, targetInput: HTMLInputElement): void {
+    this.fcActiveSlotCtx = null;
+    this.fcActiveSpriteTargetInput = targetInput;
+    const overlay = this.fcSlotPickerOverlay;
+    const rebuild = (overlay as any)._rebuild as (() => void) | undefined;
+    if (rebuild) rebuild();
+    const rect = trigger.getBoundingClientRect();
+    const overlayW = 300;
+    const overlayH = 400;
+    let left = rect.right + 4;
+    let top = rect.top;
+    if (left + overlayW > window.innerWidth) left = rect.left - overlayW - 4;
+    if (left < 0) left = 4;
+    if (top + overlayH > window.innerHeight) top = window.innerHeight - overlayH - 8;
+    if (top < 0) top = 4;
+    overlay.style.left = `${left}px`;
+    overlay.style.top = `${top}px`;
+    overlay.style.display = 'flex';
+  }
+
   private applySlotPickerSelection(spriteKey: string): void {
+    if (this.fcActiveSpriteTargetInput) {
+      this.fcActiveSpriteTargetInput.value = spriteKey;
+      this.fcActiveSpriteTargetInput.dispatchEvent(new Event('input', { bubbles: true }));
+      this.scheduleCardOrPetBarRerender();
+      return;
+    }
     const ctx = this.fcActiveSlotCtx;
     if (!ctx) return;
     const slots = this.getSlotArray(ctx.list);
@@ -1687,7 +1825,7 @@ export class App {
       slots[ctx.index] = { ...slots[ctx.index], spriteKey };
     }
     this.renderSlotListUI(ctx.list);
-    this.scheduleFullCardRerender();
+    this.scheduleCardOrPetBarRerender();
   }
 
   /** Build the per-slot mutation popover (singleton, appended to document.body). */
@@ -1713,7 +1851,7 @@ export class App {
           slots[ctx.index] = { ...slots[ctx.index], mutations: active };
         }
         this.renderSlotListUI(ctx.list);
-        this.scheduleFullCardRerender();
+        this.scheduleCardOrPetBarRerender();
       });
       chips.append(chip);
     }
@@ -1725,7 +1863,7 @@ export class App {
     }, true);
   }
 
-  private openMutPopover(trigger: HTMLElement, listType: 'diet' | 'crop' | 'egg', index: number): void {
+  private openMutPopover(trigger: HTMLElement, listType: SlotListType, index: number): void {
     this.fcActiveSlotCtx = { list: listType, index };
     const popover = this.fcMutPopover;
     const slots = this.getSlotArray(listType);
@@ -1743,13 +1881,14 @@ export class App {
     popover.style.display = 'block';
   }
 
-  private getSlotArray(listType: 'diet' | 'crop' | 'egg'): FullCardSpriteSlot[] {
+  private getSlotArray(listType: SlotListType): FullCardSpriteSlot[] {
     if (listType === 'diet') return this.fcDietSlots;
     if (listType === 'crop') return this.fcCropSlots;
+    if (listType === 'petbar-diet') return this.petBarDietSlots;
     return this.fcEggHatchSlots;
   }
 
-  private makeSlotRow(listType: 'diet' | 'crop' | 'egg', index: number, slot: FullCardSpriteSlot): HTMLElement {
+  private makeSlotRow(listType: SlotListType, index: number, slot: FullCardSpriteSlot): HTMLElement {
     const thumb = document.createElement('img');
     thumb.className = 'full-card-slot-thumb';
     // No crossOrigin — thumbnails are display-only, don't need canvas access.
@@ -1761,7 +1900,9 @@ export class App {
     }
 
     const rawName = slot.spriteKey
-      ? (slot.spriteKey.split('?')[0].split('/').pop()?.replace(/\.(png|webp|gif|jpg)$/i, '') ?? '(empty)')
+      ? (slot.spriteKey.startsWith('data:') || slot.spriteKey.startsWith('blob:')
+          ? 'Custom Image'
+          : (slot.spriteKey.split('?')[0].split('/').pop()?.replace(/\.(png|webp|gif|jpg)$/i, '') ?? '(empty)'))
       : '(empty)';
     const name = el('span', { className: 'full-card-slot-name', textContent: rawName });
 
@@ -1789,7 +1930,7 @@ export class App {
       const slots = this.getSlotArray(listType);
       slots.splice(index, 1);
       this.renderSlotListUI(listType);
-      this.scheduleFullCardRerender();
+      this.scheduleCardOrPetBarRerender();
     });
 
     const children: HTMLElement[] = [thumb as unknown as HTMLElement, name as HTMLElement, mutBtn, removeBtn];
@@ -1804,6 +1945,7 @@ export class App {
       pctInput.addEventListener('input', () => {
         const slots = this.getSlotArray(listType);
         if (slots[index]) slots[index] = { ...slots[index], pctText: pctInput.value };
+        this.scheduleCardOrPetBarRerender();
       });
       children.splice(3, 0, pctInput);
     }
@@ -1811,9 +1953,10 @@ export class App {
     return el('div', { className: 'full-card-slot-row' }, children);
   }
 
-  private renderSlotListUI(listType: 'diet' | 'crop' | 'egg'): void {
+  private renderSlotListUI(listType: SlotListType): void {
     let container: HTMLElement;
     if (listType === 'diet') container = this.fullCardDietSlotList;
+    else if (listType === 'petbar-diet') container = this.petBarDietSlotList;
     else if (listType === 'crop') {
       this.renderSlotListInContainer(this.fullCardPlantCropSlotList, 'crop');
       container = this.fullCardCropSlotList;
@@ -1821,7 +1964,7 @@ export class App {
     this.renderSlotListInContainer(container, listType);
   }
 
-  private renderSlotListInContainer(container: HTMLElement, listType: 'diet' | 'crop' | 'egg'): void {
+  private renderSlotListInContainer(container: HTMLElement, listType: SlotListType): void {
     container.innerHTML = '';
     const slots = this.getSlotArray(listType);
     slots.forEach((slot, index) => {
@@ -1840,9 +1983,15 @@ export class App {
         const other = container === this.fullCardCropSlotList ? this.fullCardPlantCropSlotList : this.fullCardCropSlotList;
         if (other) this.renderSlotListInContainer(other, 'crop');
       }
-      this.scheduleFullCardRerender();
+      this.scheduleCardOrPetBarRerender();
     });
     container.append(addBtn);
+  }
+
+  private scheduleCardOrPetBarRerender(): void {
+    const slot = getActiveSlot();
+    if (slot.spriteUrl === 'pet-bar:' && slot.petBarData) this.schedulePetBarRerender();
+    else this.scheduleFullCardRerender();
   }
 
   private fcBuildSpriteUrl(spriteKey: string): string | null {
@@ -1857,6 +2006,66 @@ export class App {
       }
     }
     return null;
+  }
+
+  private refreshSpriteRefThumbnail(input: HTMLInputElement): void {
+    const img = this.spriteRefThumbImgs.get(input);
+    const empty = this.spriteRefThumbEmpty.get(input);
+    if (!img || !empty) return;
+    const key = (input.value ?? '').trim();
+    const url = this.fcBuildSpriteUrl(key);
+    if (!url) {
+      img.removeAttribute('src');
+      img.style.display = 'none';
+      empty.textContent = key ? 'No preview' : 'None';
+      empty.style.display = 'flex';
+      return;
+    }
+    empty.style.display = 'none';
+    img.style.display = 'block';
+    img.src = url;
+  }
+
+  private makeSpriteRefField(
+    label: string,
+    input: HTMLInputElement,
+    onChange: () => void,
+  ): HTMLElement {
+    input.classList.add('full-card-sprite-ref-input');
+    input.type = 'hidden';
+    const thumbImg = el('img', { className: 'full-card-sprite-thumb-img' }) as HTMLImageElement;
+    const thumbEmpty = el('span', { className: 'full-card-sprite-thumb-empty', textContent: 'None' }) as HTMLElement;
+    const thumbBtn = el('button', {
+      className: 'full-card-sprite-thumb',
+      type: 'button',
+      title: 'Pick sprite',
+    }, [thumbImg, thumbEmpty]) as HTMLButtonElement;
+    thumbBtn.addEventListener('click', () => this.openSpriteValuePicker(thumbBtn, input));
+    const pickBtn = el('button', { className: 'btn-sm', textContent: 'Pick', type: 'button' }) as HTMLButtonElement;
+    pickBtn.addEventListener('click', () => this.openSpriteValuePicker(pickBtn, input));
+    const clearBtn = el('button', { className: 'btn-sm', textContent: 'Clear', type: 'button' }) as HTMLButtonElement;
+    clearBtn.addEventListener('click', () => {
+      input.value = '';
+      this.refreshSpriteRefThumbnail(input);
+      onChange();
+    });
+    thumbImg.addEventListener('error', () => {
+      thumbImg.style.display = 'none';
+      thumbEmpty.textContent = 'No preview';
+      thumbEmpty.style.display = 'flex';
+    });
+    thumbImg.addEventListener('load', () => {
+      thumbEmpty.style.display = 'none';
+      thumbImg.style.display = 'block';
+    });
+    input.addEventListener('input', () => this.refreshSpriteRefThumbnail(input));
+    this.spriteRefThumbImgs.set(input, thumbImg);
+    this.spriteRefThumbEmpty.set(input, thumbEmpty);
+    this.refreshSpriteRefThumbnail(input);
+    return el('div', { className: 'full-card-field' }, [
+      el('label', { textContent: label }),
+      el('div', { className: 'full-card-sprite-ref' }, [input, thumbBtn, pickBtn, clearBtn]),
+    ]);
   }
 
   /** Build the compact full-card control panel (called once in buildUI). */
@@ -1879,10 +2088,10 @@ export class App {
       el('label', { textContent: 'Rarity' }), this.fullCardRaritySelect,
     ]) as HTMLElement;
 
-    this.fullCardPetCurrentStrInput = el('input', { type: 'number', min: '0', max: '1000', step: '1', value: '50' }) as HTMLInputElement;
+    this.fullCardPetCurrentStrInput = el('input', { type: 'text', value: '50' }) as HTMLInputElement;
     this.fullCardPetCurrentStrInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
-    this.fullCardPetMaxStrInput = el('input', { type: 'number', min: '0', max: '1000', step: '1', value: '80' }) as HTMLInputElement;
+    this.fullCardPetMaxStrInput = el('input', { type: 'text', value: '80' }) as HTMLInputElement;
     this.fullCardPetMaxStrInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
     this.fullCardPetStrPctDisplay = el('span', { className: 'full-card-slider-val', textContent: '0%' });
@@ -1910,6 +2119,40 @@ export class App {
     this.fullCardPetStrLabelInput.addEventListener('input', () => this.scheduleFullCardRerender());
     this.fullCardPetHungerLabelInput = el('input', { type: 'text', placeholder: 'Hunger' }) as HTMLInputElement;
     this.fullCardPetHungerLabelInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    this.fullCardPetStrColorInput = el('input', { type: 'color', value: '#0067b4' }) as HTMLInputElement;
+    this.fullCardPetStrColorInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    this.fullCardPetHungerColorInput = el('input', { type: 'color', value: '#5eac46' }) as HTMLInputElement;
+    this.fullCardPetHungerColorInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    this.fullCardPetStrPadDisplay = el('span', { className: 'full-card-slider-val', textContent: '82' });
+    this.fullCardPetStrPadInput = el('input', {
+      type: 'range',
+      min: String(PET_BAR_LABEL_PAD_MIN),
+      max: String(PET_BAR_LABEL_PAD_MAX),
+      step: String(this.PET_BAR_LABEL_PAD_STEP),
+      value: '82',
+    }) as HTMLInputElement;
+    this.fullCardPetStrPadInput.addEventListener('input', () => {
+      this.fullCardPetStrPadDisplay.textContent = this.fullCardPetStrPadInput.value;
+      this.scheduleFullCardRerender();
+    });
+    this.fullCardPetHungerPadDisplay = el('span', { className: 'full-card-slider-val', textContent: '82' });
+    this.fullCardPetHungerPadInput = el('input', {
+      type: 'range',
+      min: String(PET_BAR_LABEL_PAD_MIN),
+      max: String(PET_BAR_LABEL_PAD_MAX),
+      step: String(this.PET_BAR_LABEL_PAD_STEP),
+      value: '82',
+    }) as HTMLInputElement;
+    this.fullCardPetHungerPadInput.addEventListener('input', () => {
+      this.fullCardPetHungerPadDisplay.textContent = this.fullCardPetHungerPadInput.value;
+      this.scheduleFullCardRerender();
+    });
+    this.fullCardPetCurrentIconInput = el('input', { type: 'text', placeholder: 'sprite/ui/ProgressStar' }) as HTMLInputElement;
+    this.fullCardPetCurrentIconInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    this.fullCardPetNextIconInput = el('input', { type: 'text', placeholder: 'sprite/ui/ProgressStar' }) as HTMLInputElement;
+    this.fullCardPetNextIconInput.addEventListener('input', () => this.scheduleFullCardRerender());
+    this.fullCardPetMaxIconInput = el('input', { type: 'text', placeholder: 'sprite/ui/StrengthStar' }) as HTMLInputElement;
+    this.fullCardPetMaxIconInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
     this.fullCardDietSlotList = el('div', { className: 'full-card-slot-list' });
 
@@ -1974,15 +2217,28 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Sell Price' }), this.fullCardPetSellInput]),
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Str label' }), this.fullCardPetStrLabelInput]),
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Hunger label' }), this.fullCardPetHungerLabelInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Strength Color' }), this.fullCardPetStrColorInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Hunger Color' }), this.fullCardPetHungerColorInput]),
+      el('div', { className: 'full-card-field' }, [
+        el('label', { textContent: 'STR Label Padding' }),
+        el('div', { className: 'full-card-slider-row' }, [this.fullCardPetStrPadInput, this.fullCardPetStrPadDisplay]),
+      ]),
+      el('div', { className: 'full-card-field' }, [
+        el('label', { textContent: 'Hunger Label Padding' }),
+        el('div', { className: 'full-card-slider-row' }, [this.fullCardPetHungerPadInput, this.fullCardPetHungerPadDisplay]),
+      ]),
+      this.makeSpriteRefField('Current STR Icon', this.fullCardPetCurrentIconInput, () => this.scheduleFullCardRerender()),
+      this.makeSpriteRefField('Next STR Icon', this.fullCardPetNextIconInput, () => this.scheduleFullCardRerender()),
+      this.makeSpriteRefField('Max STR Icon', this.fullCardPetMaxIconInput, () => this.scheduleFullCardRerender()),
       el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Diet' }), this.fullCardDietSlotList]),
       el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Abilities' }), abilityWrap]),
     ]);
 
     // ── Plant section ──
-    this.fullCardPlantSlotCountInput = el('input', { type: 'number', min: '1', step: '1', value: '1' }) as HTMLInputElement;
+    this.fullCardPlantSlotCountInput = el('input', { type: 'text', value: '1' }) as HTMLInputElement;
     this.fullCardPlantSlotCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
-    this.fullCardPlantMaturedSlotsInput = el('input', { type: 'number', min: '0', step: '1', value: '0' }) as HTMLInputElement;
+    this.fullCardPlantMaturedSlotsInput = el('input', { type: 'text', value: '0' }) as HTMLInputElement;
     this.fullCardPlantMaturedSlotsInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
     this.fullCardPlantMaturityInput = el('input', { type: 'range', min: '0', max: '100', step: '1', value: '0' }) as HTMLInputElement;
@@ -2290,6 +2546,20 @@ export class App {
       this.fullCardPetSellInput.value = data.petSellPrice ?? '';
       this.fullCardPetStrLabelInput.value = data.petStrLabel ?? '';
       this.fullCardPetHungerLabelInput.value = data.petHungerLabel ?? '';
+      this.fullCardPetStrColorInput.value = data.petStrColor ?? '#0067b4';
+      this.fullCardPetHungerColorInput.value = data.petHungerColor ?? '#5eac46';
+      const strPad = this.parseIntOr(String(data.petStrLabelPadding ?? 82), 82);
+      this.fullCardPetStrPadInput.value = String(strPad);
+      this.fullCardPetStrPadDisplay.textContent = String(strPad);
+      const hungerPad = this.parseIntOr(String(data.petHungerLabelPadding ?? 82), 82);
+      this.fullCardPetHungerPadInput.value = String(hungerPad);
+      this.fullCardPetHungerPadDisplay.textContent = String(hungerPad);
+      this.fullCardPetCurrentIconInput.value = data.petStrCurrentIcon ?? 'sprite/ui/ProgressStar';
+      this.fullCardPetNextIconInput.value = data.petStrNextIcon ?? 'sprite/ui/ProgressStar';
+      this.fullCardPetMaxIconInput.value = data.petStrMaxIcon ?? 'sprite/ui/StrengthStar';
+      this.refreshSpriteRefThumbnail(this.fullCardPetCurrentIconInput);
+      this.refreshSpriteRefThumbnail(this.fullCardPetNextIconInput);
+      this.refreshSpriteRefThumbnail(this.fullCardPetMaxIconInput);
       this.fcDietSlots = (data.petDietSlots ?? []).map(s => ({ ...s }));
       this.renderSlotListInContainer(this.fullCardDietSlotList, 'diet');
       const entries = data.petAbilityEntries ?? [];
@@ -2357,13 +2627,20 @@ export class App {
       result.rarity = (this.fullCardRaritySelect.value as FullCardRarity) || 'Common';
       result.petStr = this.fullCardPetCurrentStrInput.value;
       result.petMaxStr = this.fullCardPetMaxStrInput.value;
-      result.petStrPct = parseInt(this.fullCardPetStrPctInput.value) || 0;
-      result.petHungerPct = parseInt(this.fullCardPetHungerPctInput.value) || 100;
+      result.petStrPct = this.parseIntOr(this.fullCardPetStrPctInput.value, 0);
+      result.petHungerPct = this.parseIntOr(this.fullCardPetHungerPctInput.value, 100);
       result.petAge = this.fullCardPetAgeInput.value;
       result.petWeight = this.fullCardPetWeightInput.value;
       result.petSellPrice = this.fullCardPetSellInput.value;
       result.petStrLabel = this.fullCardPetStrLabelInput.value || undefined;
       result.petHungerLabel = this.fullCardPetHungerLabelInput.value || undefined;
+      result.petStrColor = this.fullCardPetStrColorInput.value || '#0067b4';
+      result.petHungerColor = this.fullCardPetHungerColorInput.value || '#5eac46';
+      result.petStrLabelPadding = Math.max(PET_BAR_LABEL_PAD_MIN, Math.min(PET_BAR_LABEL_PAD_MAX, this.parseIntOr(this.fullCardPetStrPadInput.value, 82)));
+      result.petHungerLabelPadding = Math.max(PET_BAR_LABEL_PAD_MIN, Math.min(PET_BAR_LABEL_PAD_MAX, this.parseIntOr(this.fullCardPetHungerPadInput.value, 82)));
+      result.petStrCurrentIcon = this.fullCardPetCurrentIconInput.value.trim() || undefined;
+      result.petStrNextIcon = this.fullCardPetNextIconInput.value.trim() || undefined;
+      result.petStrMaxIcon = this.fullCardPetMaxIconInput.value.trim() || undefined;
       result.petDietSlots = this.fcDietSlots.map(s => ({ ...s }));
       const selectedGameIds = Array.from(this.fullCardPetAbilityChips.querySelectorAll<HTMLElement>('[data-ability-id]'))
         .map(c => c.dataset.abilityId as string)
@@ -2374,9 +2651,9 @@ export class App {
         ...customEntries,
       ];
     } else if (cardType === 'Plant') {
-      const slotCount = Math.max(1, parseInt(this.fullCardPlantSlotCountInput.value) || 1);
-      const maturedSlots = Math.max(0, Math.min(slotCount, parseInt(this.fullCardPlantMaturedSlotsInput.value) || 0));
-      const maturityPct = Math.max(0, Math.min(100, parseInt(this.fullCardPlantMaturityInput.value) || 0));
+      const slotCount = Math.max(1, this.parseIntOr(this.fullCardPlantSlotCountInput.value, 1));
+      const maturedSlots = Math.max(0, Math.min(slotCount, this.parseIntOr(this.fullCardPlantMaturedSlotsInput.value, 0)));
+      const maturityPct = Math.max(0, Math.min(100, this.parseIntOr(this.fullCardPlantMaturityInput.value, 0)));
       result.plantSlotCount = slotCount;
       result.plantMaturedSlots = maturedSlots;
       result.plantMaturityPct = maturityPct;
@@ -2403,6 +2680,246 @@ export class App {
     }
 
     return result;
+  }
+
+  private clonePetBarData(data: PetBarData): PetBarData {
+    return {
+      ...data,
+      dietSlots: data.dietSlots?.map(slot => ({ ...slot })),
+    };
+  }
+
+  private buildPetBarControls(): HTMLElement {
+    this.petBarTypeLabel = el('div', { className: 'full-card-type-label', textContent: 'Pet Bar' }) as HTMLElement;
+    this.petBarLabelInput = el('input', { type: 'text', placeholder: 'Label' }) as HTMLInputElement;
+    this.petBarLabelInput.addEventListener('input', () => this.schedulePetBarRerender());
+
+    this.petBarLengthDisplay = el('span', { className: 'full-card-slider-val', textContent: String(PET_BAR_LENGTH_MIN) });
+    this.petBarLengthInput = el('input', {
+      type: 'range',
+      min: String(PET_BAR_LENGTH_MIN),
+      max: String(PET_BAR_LENGTH_MAX),
+      step: String(this.PET_BAR_LENGTH_STEP),
+      value: String(PET_BAR_LENGTH_MIN),
+    }) as HTMLInputElement;
+    this.petBarLengthInput.addEventListener('input', () => {
+      this.petBarLengthDisplay.textContent = this.petBarLengthInput.value;
+      this.rerenderPetBar(state.activeSlotIndex, true, true).catch(err => console.error('[MG] Pet bar render failed:', err));
+    });
+    this.petBarLengthInput.addEventListener('change', () => {
+      beginBatchUpdate();
+      this.rerenderPetBar(state.activeSlotIndex, true, true).catch(err => console.error('[MG] Pet bar render failed:', err));
+      bus.emit(Events.SLOT_CHANGED, null);
+    });
+
+    this.petBarProgressDisplay = el('span', { className: 'full-card-slider-val', textContent: '0%' });
+    this.petBarProgressInput = el('input', { type: 'range', min: '0', max: '100', step: '1', value: '0' }) as HTMLInputElement;
+    this.petBarProgressInput.addEventListener('input', () => {
+      this.petBarProgressDisplay.textContent = `${this.petBarProgressInput.value}%`;
+      this.schedulePetBarRerender();
+    });
+
+    this.petBarCurrentStrInput = el('input', { type: 'text', value: '0' }) as HTMLInputElement;
+    this.petBarCurrentStrInput.addEventListener('input', () => this.schedulePetBarRerender());
+    this.petBarNextStrInput = el('input', { type: 'text', value: '0' }) as HTMLInputElement;
+    this.petBarNextStrInput.addEventListener('input', () => this.schedulePetBarRerender());
+    this.petBarMaxStrInput = el('input', { type: 'text', value: '0' }) as HTMLInputElement;
+    this.petBarMaxStrInput.addEventListener('input', () => this.schedulePetBarRerender());
+    this.petBarColorInput = el('input', { type: 'color', value: '#0067b4' }) as HTMLInputElement;
+    this.petBarColorInput.addEventListener('input', () => this.schedulePetBarRerender());
+    this.petBarLabelPadDisplay = el('span', { className: 'full-card-slider-val', textContent: String(PET_BAR_LABEL_PAD_DEFAULT) });
+    this.petBarLabelPadInput = el('input', {
+      type: 'range',
+      min: String(PET_BAR_LABEL_PAD_MIN),
+      max: String(PET_BAR_LABEL_PAD_MAX),
+      step: String(this.PET_BAR_LABEL_PAD_STEP),
+      value: String(PET_BAR_LABEL_PAD_DEFAULT),
+    }) as HTMLInputElement;
+    this.petBarLabelPadInput.addEventListener('input', () => {
+      this.petBarLabelPadDisplay.textContent = this.petBarLabelPadInput.value;
+      this.schedulePetBarRerender();
+    });
+    this.petBarCurrentIconInput = el('input', { type: 'text', placeholder: 'sprite/ui/ProgressStar' }) as HTMLInputElement;
+    this.petBarCurrentIconInput.addEventListener('input', () => this.schedulePetBarRerender());
+    this.petBarNextIconInput = el('input', { type: 'text', placeholder: 'sprite/ui/ProgressStar' }) as HTMLInputElement;
+    this.petBarNextIconInput.addEventListener('input', () => this.schedulePetBarRerender());
+    this.petBarMaxIconInput = el('input', { type: 'text', placeholder: 'sprite/ui/StrengthStar' }) as HTMLInputElement;
+    this.petBarMaxIconInput.addEventListener('input', () => this.schedulePetBarRerender());
+
+    this.petBarDietSlotList = el('div', { className: 'full-card-slot-list' });
+
+    this.petBarStrengthSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
+      el('div', { className: 'full-card-section-title', textContent: 'Strength' }),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Current STR' }), this.petBarCurrentStrInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Next STR' }), this.petBarNextStrInput]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Max STR' }), this.petBarMaxStrInput]),
+      this.makeSpriteRefField('Current STR Icon', this.petBarCurrentIconInput, () => this.schedulePetBarRerender()),
+      this.makeSpriteRefField('Next STR Icon', this.petBarNextIconInput, () => this.schedulePetBarRerender()),
+      this.makeSpriteRefField('Max STR Icon', this.petBarMaxIconInput, () => this.schedulePetBarRerender()),
+    ]) as HTMLElement;
+
+    this.petBarDietSection = el('div', { className: 'full-card-section', style: 'display:none' }, [
+      el('div', { className: 'full-card-section-title', textContent: 'Diet' }),
+      el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Diet Sprites' }), this.petBarDietSlotList]),
+    ]) as HTMLElement;
+
+    return el('div', { className: 'full-card-controls-section' }, [
+      this.petBarTypeLabel,
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Label' }), this.petBarLabelInput]),
+      el('div', { className: 'full-card-field' }, [
+        el('label', { textContent: 'Length' }),
+        el('div', { className: 'full-card-slider-row' }, [this.petBarLengthInput, this.petBarLengthDisplay]),
+      ]),
+      el('div', { className: 'full-card-field' }, [
+        el('label', { textContent: 'Progress' }),
+        el('div', { className: 'full-card-slider-row' }, [this.petBarProgressInput, this.petBarProgressDisplay]),
+      ]),
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Bar Color' }), this.petBarColorInput]),
+      el('div', { className: 'full-card-field' }, [
+        el('label', { textContent: 'Label Padding' }),
+        el('div', { className: 'full-card-slider-row' }, [this.petBarLabelPadInput, this.petBarLabelPadDisplay]),
+      ]),
+      this.petBarStrengthSection,
+      this.petBarDietSection,
+    ]) as HTMLElement;
+  }
+
+  private syncPetBarUI(slot: Slot): void {
+    const data = slot.petBarData;
+    if (!data) return;
+
+    this.petBarTypeLabel.textContent = data.kind === 'strength' ? 'Strength Bar' : 'Hunger Bar';
+    this.petBarLabelInput.value = data.label ?? '';
+
+    const length = Math.max(PET_BAR_LENGTH_MIN, Math.min(PET_BAR_LENGTH_MAX, this.parseIntOr(String(data.length ?? PET_BAR_LENGTH_MIN), PET_BAR_LENGTH_MIN)));
+    this.petBarLengthInput.value = String(length);
+    this.petBarLengthDisplay.textContent = String(length);
+
+    const progressPct = Math.max(0, Math.min(100, this.parseIntOr(String(data.progressPct ?? 0), 0)));
+    this.petBarProgressInput.value = String(progressPct);
+    this.petBarProgressDisplay.textContent = `${progressPct}%`;
+    this.petBarColorInput.value = data.barColor ?? (data.kind === 'strength' ? '#0067b4' : '#5eac46');
+    const labelPad = this.parseIntOr(String(data.labelPadding ?? PET_BAR_LABEL_PAD_DEFAULT), PET_BAR_LABEL_PAD_DEFAULT);
+    this.petBarLabelPadInput.value = String(labelPad);
+    this.petBarLabelPadDisplay.textContent = String(labelPad);
+
+    if (data.kind === 'strength') {
+      this.petBarStrengthSection.style.display = '';
+      this.petBarDietSection.style.display = 'none';
+      this.petBarCurrentStrInput.value = data.currentStr ?? '';
+      this.petBarNextStrInput.value = data.nextStr ?? '';
+      this.petBarMaxStrInput.value = data.maxStr ?? '';
+      this.petBarCurrentIconInput.value = data.currentIcon ?? 'sprite/ui/ProgressStar';
+      this.petBarNextIconInput.value = data.nextIcon ?? 'sprite/ui/ProgressStar';
+      this.petBarMaxIconInput.value = data.maxIcon ?? 'sprite/ui/StrengthStar';
+      this.refreshSpriteRefThumbnail(this.petBarCurrentIconInput);
+      this.refreshSpriteRefThumbnail(this.petBarNextIconInput);
+      this.refreshSpriteRefThumbnail(this.petBarMaxIconInput);
+    } else {
+      this.petBarStrengthSection.style.display = 'none';
+      this.petBarDietSection.style.display = '';
+      this.petBarDietSlots = (data.dietSlots ?? []).map(item => ({ ...item }));
+      this.renderSlotListInContainer(this.petBarDietSlotList, 'petbar-diet');
+    }
+  }
+
+  private readPetBarDataFromUI(base: PetBarData): PetBarData {
+    const kind: PetBarKind = base.kind === 'strength' ? 'strength' : 'hunger';
+    const fallback = defaultPetBarData(kind);
+    const length = Math.max(PET_BAR_LENGTH_MIN, Math.min(PET_BAR_LENGTH_MAX, this.parseIntOr(this.petBarLengthInput.value, fallback.length)));
+    const progressPct = Math.max(0, Math.min(100, this.parseIntOr(this.petBarProgressInput.value, 0)));
+    const label = this.petBarLabelInput.value.trim() || fallback.label;
+    const labelPadding = Math.max(PET_BAR_LABEL_PAD_MIN, Math.min(PET_BAR_LABEL_PAD_MAX, this.parseIntOr(this.petBarLabelPadInput.value, PET_BAR_LABEL_PAD_DEFAULT)));
+    const barColor = this.petBarColorInput.value || fallback.barColor || (kind === 'strength' ? '#0067b4' : '#5eac46');
+
+    if (kind === 'strength') {
+      return {
+        kind,
+        label,
+        length,
+        labelPadding,
+        progressPct,
+        barColor,
+        currentStr: this.petBarCurrentStrInput.value.trim(),
+        nextStr: this.petBarNextStrInput.value.trim(),
+        maxStr: this.petBarMaxStrInput.value.trim(),
+        currentIcon: this.petBarCurrentIconInput.value.trim() || undefined,
+        nextIcon: this.petBarNextIconInput.value.trim() || undefined,
+        maxIcon: this.petBarMaxIconInput.value.trim() || undefined,
+      };
+    }
+
+    return {
+      kind,
+      label,
+      length,
+      labelPadding,
+      progressPct,
+      barColor,
+      dietSlots: this.petBarDietSlots.map(slot => ({ ...slot })),
+    };
+  }
+
+  private schedulePetBarRerender(): void {
+    if (this.petBarRenderDebounce !== null) clearTimeout(this.petBarRenderDebounce);
+    const slotIndex = state.activeSlotIndex;
+    this.petBarRenderDebounce = setTimeout(() => {
+      this.petBarRenderDebounce = null;
+      this.rerenderPetBar(slotIndex, true, true).catch(err => console.error('[MG] Pet bar render failed:', err));
+    }, 80);
+  }
+
+  private async rerenderPetBar(slotIndex: number, readFromUI: boolean, emit: boolean): Promise<void> {
+    const slot = state.slots[slotIndex];
+    if (!slot || !slot.petBarData) return;
+
+    const slotId = slot.id;
+    const base = this.clonePetBarData(slot.petBarData);
+    const data = (readFromUI && slotIndex === state.activeSlotIndex)
+      ? this.readPetBarDataFromUI(base)
+      : base;
+    state.slots[slotIndex].petBarData = this.clonePetBarData(data);
+
+    const canvas = await renderPetBarCanvas(data);
+    const currentSlot = state.slots[slotIndex];
+    if (!currentSlot || currentSlot.id !== slotId || !currentSlot.petBarData) return;
+
+    currentSlot.spriteKey = data.kind === 'strength' ? 'pet-bar/strength' : 'pet-bar/hunger';
+    currentSlot.spriteUrl = 'pet-bar:';
+    currentSlot.gifFrames = [{ canvas, delay: 0 }];
+    currentSlot.isAnimated = true;
+
+    if (emit) {
+      bus.emit(Events.RENDER_REQUEST, null);
+    }
+  }
+
+  private async addPetBarLayer(kind: PetBarKind): Promise<void> {
+    const targetIdx = this.resolveTargetSlotIndex(0);
+    if (targetIdx < 0) return;
+    this.stopGifPreview();
+
+    const petBarData = defaultPetBarData(kind);
+    updateSlot(targetIdx, {
+      type: 'custom',
+      spriteKey: kind === 'strength' ? 'pet-bar/strength' : 'pet-bar/hunger',
+      spriteUrl: 'pet-bar:',
+      petBarData,
+      textData: undefined,
+      fullCardData: undefined,
+      cosmeticLayers: undefined,
+      bloblingAnimId: undefined,
+      mutations: [],
+      scale: 1,
+      rotation: 0,
+      position: { x: 0, y: 0 },
+      customTint: { color: '#ffffff', opacity: 0 },
+    });
+
+    setActiveSlot(targetIdx);
+    this.syncPetBarUI(state.slots[targetIdx]);
+    this.drawer.open('Pet Bar', this.petBarControls);
+    this.schedulePetBarRerender();
   }
 
   /** Build the card-type selection overlay with canvas previews (appended to body once). */
@@ -2538,6 +3055,8 @@ export class App {
       spriteKey:   `full-card/${type}`,
       spriteUrl:   'full-card:',
       fullCardData: data,
+      textData:    undefined,
+      petBarData:  undefined,
       mutations:   [],
       scale:       1,
       rotation:    0,
@@ -2716,6 +3235,9 @@ export class App {
         type: 'custom',
         spriteKey: `${groupLabel} / ${spec.name}`,
         spriteUrl: spec.url,
+        petBarData: undefined,
+        textData: undefined,
+        fullCardData: undefined,
         gifFrames,
         isAnimated,
         scale:    spec.scale,
@@ -2760,6 +3282,9 @@ export class App {
         type: 'custom',
         spriteKey: `${baseLabel} / ${layerName}`,
         spriteUrl: url,
+        petBarData: undefined,
+        textData: undefined,
+        fullCardData: undefined,
         gifFrames,
         isAnimated,
         scale: 1,
@@ -3086,7 +3611,7 @@ export class App {
             (64 - gifCanvas.width * scale) / 2, (64 - gifCanvas.height * scale) / 2,
             gifCanvas.width * scale, gifCanvas.height * scale,
           );
-        } else if (slot.type !== 'full-card' && slot.type !== 'text' && slot.type !== 'cosmetic') {
+        } else if (slot.type !== 'full-card' && slot.type !== 'text' && slot.type !== 'cosmetic' && slot.spriteUrl !== 'pet-bar:') {
           renderThumb(slot.spriteUrl, thumb);
         }
       }
@@ -3227,6 +3752,9 @@ export class App {
     } else if (slot.type === 'full-card') {
       const fcd = slot.fullCardData;
       this.metaEl.innerHTML = `<strong>Full Card</strong> &middot; ${fcd?.cardType ?? '?'} Card &middot; Slot ${state.activeSlotIndex + 1}`;
+    } else if (slot.spriteUrl === 'pet-bar:' && slot.petBarData) {
+      const kindLabel = slot.petBarData.kind === 'strength' ? 'Strength Bar' : 'Hunger Bar';
+      this.metaEl.innerHTML = `<strong>${kindLabel}</strong> &middot; Slot ${state.activeSlotIndex + 1}`;
     } else if (slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:') {
       const layerCount = Object.keys(slot.cosmeticLayers ?? {}).length;
       const animName = slot.bloblingAnimId != null ? BLOBLING_ANIMATIONS[parseInt(slot.bloblingAnimId)]?.name : null;
@@ -3587,6 +4115,11 @@ export class App {
     return ((value % 360) + 360) % 360;
   }
 
+  private parseIntOr(value: string, fallback: number): number {
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
   private snapAxis(value: number): number {
     if (!this.snapEnabled) return value;
     return Math.round(value / this.SNAP_GRID_SIZE) * this.SNAP_GRID_SIZE;
@@ -3693,6 +4226,7 @@ export class App {
       gifFrames:     slot.gifFrames,
       isAnimated:    slot.isAnimated,
       fullCardData:  slot.fullCardData  ? { ...slot.fullCardData }  : undefined,
+      petBarData:    slot.petBarData    ? this.clonePetBarData(slot.petBarData) : undefined,
       textData:      slot.textData      ? { ...slot.textData }      : undefined,
       cosmeticLayers:slot.cosmeticLayers? { ...slot.cosmeticLayers }: undefined,
     };
@@ -3705,6 +4239,7 @@ export class App {
     if (targetIdx < 0) return;
     updateSlot(targetIdx, {
       ...this.copiedSlot,
+      petBarData: this.copiedSlot.petBarData ? this.clonePetBarData(this.copiedSlot.petBarData) : undefined,
       position: {
         x: (this.copiedSlot.position?.x ?? 0) + 20,
         y: (this.copiedSlot.position?.y ?? 0) + 20,
@@ -4063,7 +4598,7 @@ export class App {
       const sizeMap = new Map<Slot, { w: number; h: number }>();
       for (const slot of state.slots) {
         if (!slot.visible) continue;
-        if (slot.type === 'text' || slot.type === 'full-card') {
+        if (slot.type === 'text' || slot.type === 'full-card' || slot.spriteUrl === 'pet-bar:') {
           if (!slot.gifFrames || slot.gifFrames.length === 0) continue;
         } else if (!slot.spriteUrl) {
           continue;
@@ -4627,6 +5162,10 @@ export class App {
           s.gifFrames  = [{ canvas, delay: 0 }];
           s.isAnimated = true;
         })();
+      }
+
+      if (slot.spriteUrl === 'pet-bar:' && slot.petBarData) {
+        return this.rerenderPetBar(idx, false, false);
       }
 
       const weatherSheetAnim = this.getWeatherSheetAnimationMeta(slot);
