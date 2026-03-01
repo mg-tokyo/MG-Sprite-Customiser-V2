@@ -2668,9 +2668,8 @@ export class App {
       }
     }
 
-    // Blobling Rig: composite outfit builder + Blobling individual cosmetic categories
+    // Blobling individual cosmetic categories
     if (state.cosmeticsData && state.cosmeticsData.categories.length > 0) {
-      items.push({ id: 'blobling-rig', label: 'Blobling Rig' });
       for (const cat of state.cosmeticsData.categories) {
         items.push({ id: `cosmetic:${cat.cat}`, label: `Blobling: ${cat.cat}` });
       }
