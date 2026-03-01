@@ -1913,6 +1913,7 @@ export class App {
     const section = el('div', { className: 'full-card-controls-section' });
     section.append(
       this.fullCardTypeLabel,
+      el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Name' }), this.fullCardNameInput]),
       el('label', { className: 'full-card-locked-wrap' }, [this.fullCardLockedCheck, document.createTextNode(' Locked')]),
       this.fullCardPetSection,
       this.fullCardPlantSection,
@@ -2049,6 +2050,7 @@ export class App {
     if (!data) return;
 
     this.fullCardTypeLabel.textContent = `${data.cardType} Card`;
+    this.fullCardNameInput.value = data.itemName ?? data.cardType;
     this.fullCardLockedCheck.checked = data.isLocked ?? false;
 
     const isPet   = data.cardType === 'Pet';
