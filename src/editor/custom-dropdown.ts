@@ -6,6 +6,13 @@ export interface DropdownItem {
   thumbUrl?: string;
   /** Pre-resolved frame URLs for sprite atlas animations. When set, selecting this item loads all frames and starts animated preview. */
   animFrameUrls?: string[];
+  /** Metadata for animations packed in a single sprite-sheet URL (e.g. weather strips). */
+  sheetAnim?: {
+    frameWidth: number;
+    frameCount: number;
+    direction?: 'x' | 'y';
+    frameDelay?: number;
+  };
   /** For card presets: sprite URLs to load into consecutive slots [bottom, middle, top]. */
   cardPresetUrls?: string[];
   /** For full-card presets: the card type to pass to addFullCardPreset(). */

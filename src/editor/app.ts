@@ -146,6 +146,8 @@ export class App {
   private readonly TOOLBAR_MIN_H = 44;
   private readonly TOOLBAR_MAX_H = 140;
   private readonly RENDER_SIZE_PRESETS = [1024, 1536, 2048, 3072, 4096] as const;
+  private readonly WEATHER_STRIP_FRAME_WIDTH = 256;
+  private readonly DEFAULT_ANIM_FRAME_DELAY = 100;
   private toolbarHeight = 52;
   private layersWidth = 280;
   private assetsWidth = 260;
@@ -1102,6 +1104,10 @@ export class App {
       updateSlot(state.activeSlotIndex, { type: 'sprite', spriteKey: item.id, spriteUrl: firstUrl, gifFrames: undefined, isAnimated: false });
       this.stopGifPreview();
       this.loadAtlasAnimation(state.activeSlotIndex, item.id, item.animFrameUrls);
+    } else if (item.sheetAnim && item.thumbUrl) {
+      updateSlot(state.activeSlotIndex, { type: 'sprite', spriteKey: item.id, spriteUrl: item.thumbUrl, gifFrames: undefined, isAnimated: false });
+      this.stopGifPreview();
+      this.loadSheetAnimation(state.activeSlotIndex, item.id, item.thumbUrl, item.sheetAnim);
     } else {
       const url = item.thumbUrl ?? '';
       updateSlot(state.activeSlotIndex, { type: 'sprite', spriteKey: item.id, spriteUrl: url, gifFrames: undefined, isAnimated: false });
@@ -2795,10 +2801,6 @@ export class App {
       for (const cat of sd.categories) {
         items.push({ id: cat.cat, label: cat.cat });
       }
-      // Card preset categories — only shown when the ui atlas is available
-      if (sd.categories.some(c => c.cat === 'ui')) {
-        items.push({ id: 'cards', label: 'Cards (preset)' });
-      }
     }
 
     if (state.gameData) {
@@ -2906,7 +2908,23 @@ export class App {
           if (item.type === 'frame') {
             const name = item.id.split('/').pop() ?? item.name;
             const url = `https://mg-api.ariedam.fr/assets/sprites/${cat}/${name}.png${version ? `?v=${version}` : ''}`;
-            items.push({ id: item.id, label: item.name, thumbUrl: url });
+            const isWeatherStripAnim = cat === 'weather' && /Animation$/i.test(name);
+            if (isWeatherStripAnim) {
+              const frameCount = Math.max(1, Math.floor(item.frame.w / this.WEATHER_STRIP_FRAME_WIDTH));
+              items.push({
+                id: item.id,
+                label: `${item.name} (animated)`,
+                thumbUrl: url,
+                sheetAnim: {
+                  direction: 'x',
+                  frameWidth: this.WEATHER_STRIP_FRAME_WIDTH,
+                  frameCount,
+                  frameDelay: this.DEFAULT_ANIM_FRAME_DELAY,
+                },
+              });
+            } else {
+              items.push({ id: item.id, label: item.name, thumbUrl: url });
+            }
           } else if (item.type === 'animation' && item.frames.length > 0) {
             const frameUrls = this.resolveAnimFrameUrls(item.frames, version);
             if (frameUrls.length > 0) {
@@ -4175,7 +4193,7 @@ export class App {
    * Shows the first frame immediately (already set by onSelect) while loading in the background.
    */
   private async loadAtlasAnimation(slotIndex: number, spriteKey: string, frameUrls: string[]): Promise<void> {
-    const FRAME_DELAY = 100; // ms — ~10fps; sprite-data carries no timing metadata
+    const FRAME_DELAY = this.DEFAULT_ANIM_FRAME_DELAY; // ms ~10fps; sprite-data carries no timing metadata
     try {
       const images = await Promise.all(frameUrls.map(url => spriteLoader.load(url)));
       const gifFrames = images.map(img => {
@@ -4195,6 +4213,84 @@ export class App {
   }
 
   // ── Helpers ──
+
+  private frameHasVisibleAlpha(canvas: HTMLCanvasElement): boolean {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return false;
+    try {
+      const alpha = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      for (let i = 3; i < alpha.length; i += 4) {
+        if (alpha[i] > 10) return true;
+      }
+      return false;
+    } catch {
+      // If inspection fails (e.g. tainted canvas), keep the frame.
+      return true;
+    }
+  }
+
+  private async loadSheetAnimation(
+    slotIndex: number,
+    spriteKey: string,
+    sheetUrl: string,
+    sheetAnim: NonNullable<DropdownItem['sheetAnim']>,
+  ): Promise<void> {
+    const direction = sheetAnim.direction ?? 'x';
+    const frameStep = Math.max(1, Math.floor(sheetAnim.frameWidth));
+    const requestedFrames = Math.max(1, Math.floor(sheetAnim.frameCount));
+    const frameDelay = Math.max(20, Math.floor(sheetAnim.frameDelay ?? this.DEFAULT_ANIM_FRAME_DELAY));
+
+    try {
+      const sheet = await spriteLoader.load(sheetUrl);
+      const maxFrames = direction === 'x'
+        ? Math.max(1, Math.floor(sheet.naturalWidth / frameStep))
+        : Math.max(1, Math.floor(sheet.naturalHeight / frameStep));
+      const totalFrames = Math.min(requestedFrames, maxFrames);
+      const gifFrames: Array<{ canvas: HTMLCanvasElement; delay: number }> = [];
+
+      for (let i = 0; i < totalFrames; i++) {
+        const sx = direction === 'x' ? i * frameStep : 0;
+        const sy = direction === 'y' ? i * frameStep : 0;
+        const sw = direction === 'x' ? Math.min(frameStep, sheet.naturalWidth - sx) : sheet.naturalWidth;
+        const sh = direction === 'y' ? Math.min(frameStep, sheet.naturalHeight - sy) : sheet.naturalHeight;
+        if (sw <= 0 || sh <= 0) break;
+
+        const frameCanvas = document.createElement('canvas');
+        frameCanvas.width = sw;
+        frameCanvas.height = sh;
+        const ctx = frameCanvas.getContext('2d');
+        if (!ctx) continue;
+        ctx.drawImage(sheet, sx, sy, sw, sh, 0, 0, sw, sh);
+
+        // Skip fully transparent frames so weather strips don't include blank tail columns.
+        if (this.frameHasVisibleAlpha(frameCanvas)) {
+          gifFrames.push({ canvas: frameCanvas, delay: frameDelay });
+        }
+      }
+
+      if (gifFrames.length === 0) {
+        const fallbackCanvas = document.createElement('canvas');
+        fallbackCanvas.width = direction === 'x' ? Math.min(frameStep, sheet.naturalWidth) : sheet.naturalWidth;
+        fallbackCanvas.height = direction === 'y' ? Math.min(frameStep, sheet.naturalHeight) : sheet.naturalHeight;
+        const fallbackCtx = fallbackCanvas.getContext('2d');
+        if (fallbackCtx) {
+          fallbackCtx.drawImage(sheet, 0, 0, fallbackCanvas.width, fallbackCanvas.height, 0, 0, fallbackCanvas.width, fallbackCanvas.height);
+          gifFrames.push({ canvas: fallbackCanvas, delay: frameDelay });
+        }
+      }
+
+      // Guard: abort if the user already switched to a different sprite
+      if (state.slots[slotIndex].spriteKey !== spriteKey) return;
+
+      updateSlot(slotIndex, { spriteUrl: sheetUrl, gifFrames, isAnimated: gifFrames.length > 1 });
+      if (slotIndex === state.activeSlotIndex) {
+        if (gifFrames.length > 1) this.startGifPreview();
+        else this.stopGifPreview();
+      }
+    } catch (err) {
+      console.error('[MG] Failed to splice sprite-sheet animation:', err);
+    }
+  }
 
   /** Set download button label based on whether any visible slot has an animated GIF. */
   private syncDownloadBtn(): void {

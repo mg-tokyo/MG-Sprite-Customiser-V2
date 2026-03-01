@@ -160,7 +160,7 @@ export function populateBrowserGrid(
 
     const div = el('div', { className: 'browser-item', title: item.label }, [img]);
 
-    if (item.animFrameUrls && item.animFrameUrls.length > 0) {
+    if ((item.animFrameUrls && item.animFrameUrls.length > 0) || item.sheetAnim) {
       const badge = el('span', { className: 'browser-item-anim', textContent: '▶' });
       div.appendChild(badge);
     }
