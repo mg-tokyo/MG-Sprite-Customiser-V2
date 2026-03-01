@@ -4313,6 +4313,36 @@ export class App {
     }
   }
 
+  private getWeatherSheetAnimationMeta(slot: Slot): NonNullable<DropdownItem['sheetAnim']> | null {
+    if (slot.type === 'text' || slot.type === 'full-card' || slot.type === 'cosmetic') return null;
+    if (!slot.spriteUrl || !/\/assets\/sprites\/weather\//i.test(slot.spriteUrl)) return null;
+
+    const keyName = slot.spriteKey.split('/').pop() ?? '';
+    const urlName = slot.spriteUrl.match(/\/weather\/([^/?]+)\.png/i)?.[1] ?? '';
+    const animName = /Animation$/i.test(keyName) ? keyName : urlName;
+    if (!/Animation$/i.test(animName)) return null;
+
+    let frameCount = 0;
+    const weatherCat = state.spriteData?.categories.find(c => c.cat === 'weather');
+    const entry = weatherCat?.items.find(i =>
+      i.type === 'frame' && (
+        i.id === slot.spriteKey
+        || (i.id.split('/').pop() ?? '') === animName
+      ),
+    );
+    if (entry?.type === 'frame') {
+      frameCount = Math.max(1, Math.floor(entry.frame.w / this.WEATHER_STRIP_FRAME_WIDTH));
+    }
+    if (frameCount <= 1) frameCount = 9;
+
+    return {
+      direction: 'x',
+      frameWidth: this.WEATHER_STRIP_FRAME_WIDTH,
+      frameCount,
+      frameDelay: this.DEFAULT_ANIM_FRAME_DELAY,
+    };
+  }
+
   /** Set download button label based on whether any visible slot has an animated GIF. */
   private syncDownloadBtn(): void {
     const hasGif = state.slots.some(s => s.visible && s.isAnimated && s.gifFrames && s.gifFrames.length > 1);
@@ -4376,6 +4406,11 @@ export class App {
           s.gifFrames  = [{ canvas, delay: 0 }];
           s.isAnimated = true;
         })();
+      }
+
+      const weatherSheetAnim = this.getWeatherSheetAnimationMeta(slot);
+      if (weatherSheetAnim) {
+        return this.loadSheetAnimation(idx, slot.spriteKey, slot.spriteUrl, weatherSheetAnim);
       }
 
       return Promise.resolve();
