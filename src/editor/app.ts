@@ -1522,9 +1522,11 @@ export class App {
       const s = state.slots[idx];
       if (s.type !== 'cosmetic' || s.bloblingAnimId !== animId) return;
 
+      const previousWorldSize = this.computeSlotFrameWorldSize(s);
       s.gifFrames  = riveFrames;
       s.isAnimated = true;
       s.spriteUrl  = 'blobling:';
+      this.preserveSlotFrameWorldSize(s, previousWorldSize);
       bus.emit(Events.RENDER_REQUEST, null);
       this.refreshSlots();
       if (idx === state.activeSlotIndex) this.startGifPreview();
@@ -1548,8 +1550,10 @@ export class App {
         canvas.height = 128;
         const s = state.slots[idx];
         if (s.type !== 'cosmetic') return;
+        const previousWorldSize = this.computeSlotFrameWorldSize(s);
         s.gifFrames  = [{ canvas, delay: 0 }];
         s.isAnimated = false;
+        this.preserveSlotFrameWorldSize(s, previousWorldSize);
         bus.emit(Events.RENDER_REQUEST, null);
         this.refreshSlots();
         return;
@@ -1558,6 +1562,7 @@ export class App {
       const cosmeticImages = await Promise.all(allUrls.map(url => spriteLoader.load(url)));
       const s = state.slots[idx];
       if (s.type !== 'cosmetic' || s.spriteUrl !== 'blobling:') return;
+      const previousWorldSize = this.computeSlotFrameWorldSize(s);
 
       const firstImg = cosmeticImages[0];
       const canvas = document.createElement('canvas');
@@ -1571,10 +1576,36 @@ export class App {
       s.gifFrames  = [{ canvas, delay: 0 }];
       s.isAnimated = false;
       s.spriteUrl  = 'blobling:';
+      this.preserveSlotFrameWorldSize(s, previousWorldSize);
       bus.emit(Events.RENDER_REQUEST, null);
       this.refreshSlots();
       if (idx === state.activeSlotIndex) this.stopGifPreview();
     }
+  }
+
+  private getMaxFrameDimension(frames?: { canvas: HTMLCanvasElement; delay: number }[]): number {
+    if (!frames || frames.length === 0) return 0;
+    let maxDim = 0;
+    for (const frame of frames) {
+      const c = frame?.canvas;
+      if (!(c instanceof HTMLCanvasElement)) continue;
+      if (c.width <= 0 || c.height <= 0) continue;
+      maxDim = Math.max(maxDim, c.width, c.height);
+    }
+    return maxDim;
+  }
+
+  private computeSlotFrameWorldSize(slot: Slot): number | null {
+    const maxDim = this.getMaxFrameDimension(slot.gifFrames);
+    if (maxDim <= 0) return null;
+    return maxDim * this.clampScale(slot.scale);
+  }
+
+  private preserveSlotFrameWorldSize(slot: Slot, previousWorldSize: number | null): void {
+    if (previousWorldSize === null || previousWorldSize <= 0) return;
+    const nextMaxDim = this.getMaxFrameDimension(slot.gifFrames);
+    if (nextMaxDim <= 0) return;
+    slot.scale = this.clampScale(previousWorldSize / nextMaxDim);
   }
 
   /** Debounce text re-renders so rapid typing doesn't flood the canvas pipeline. */

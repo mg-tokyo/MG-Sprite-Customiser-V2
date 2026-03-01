@@ -157,6 +157,7 @@ export function populateBrowserGrid(
     img.dataset.src = item.thumbUrl;
     img.alt = item.label;
     img.title = item.label;
+    img.className = 'browser-thumb-placeholder';
 
     const div = el('div', { className: 'browser-item', title: item.label }, [img]);
 
