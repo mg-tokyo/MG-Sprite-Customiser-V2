@@ -920,15 +920,25 @@ export class App {
     ]);
 
     if (isText) {
+      this.tintLabel.textContent = 'Text Tint';
       const editBtn = el('button', { className: 'inspector-edit-btn', textContent: 'Edit Text' }) as HTMLButtonElement;
       editBtn.addEventListener('click', () => this.drawer.open('Text Editor', this.textControls));
-      this.inspectorEl.append(editBtn, transformSection);
+      const mutSection = el('div', { className: 'inspector-section' }, [
+        el('span', { className: 'inspector-section-title', textContent: 'Mutations' }),
+        this.mutationList,
+      ]);
+      const tintSection = el('div', { className: 'inspector-section' }, [this.tintLabel, this.customTintControls]);
+      this.inspectorEl.append(editBtn, mutSection, tintSection, transformSection);
     } else if (isFullCard) {
       this.tintLabel.textContent = 'Card Tint';
       const editBtn = el('button', { className: 'inspector-edit-btn', textContent: 'Edit Card' }) as HTMLButtonElement;
       editBtn.addEventListener('click', () => this.drawer.open('Card Editor', this.fullCardControls));
+      const mutSection = el('div', { className: 'inspector-section' }, [
+        el('span', { className: 'inspector-section-title', textContent: 'Mutations' }),
+        this.mutationList,
+      ]);
       const tintSection = el('div', { className: 'inspector-section' }, [this.tintLabel, this.customTintControls]);
-      this.inspectorEl.append(editBtn, transformSection, tintSection);
+      this.inspectorEl.append(editBtn, mutSection, tintSection, transformSection);
     } else if (isCosmetic) {
       this.tintLabel.textContent = 'Custom Tint';
       const editBtn = el('button', { className: 'inspector-edit-btn', textContent: 'Edit Blobling' }) as HTMLButtonElement;
@@ -1901,6 +1911,15 @@ export class App {
       chip.style.background = MUTATION_CHIP_COLORS[id] ?? '#555';
       chip.addEventListener('click', () => {
         chip.classList.toggle('active');
+        const activeMutations = Array.from(
+          this.fullCardItemMutationsContainer.querySelectorAll<HTMLElement>('.full-card-mutation-chip.active'),
+        )
+          .map(c => c.dataset.mutationId ?? '')
+          .filter(Boolean);
+        if (getActiveSlot().type === 'full-card') {
+          updateSlotSilent(state.activeSlotIndex, { mutations: activeMutations });
+          this.refreshMutations();
+        }
         this.scheduleFullCardRerender();
       });
       this.fullCardItemMutationsContainer.append(chip);

@@ -31,9 +31,7 @@ export async function renderSlot(slot: Slot, gifFrameIndex?: number): Promise<HT
     canvas.width = src.width;
     canvas.height = src.height;
     canvas.getContext('2d')!.drawImage(src, 0, 0);
-    // Text color is baked in; full-card supports an overlay tint.
-    const tint = slot.type === 'full-card' ? slot.customTint : { color: '#ffffff', opacity: 0 };
-    applyMutations(canvas, slot.mutations, false, tint);
+    applyMutations(canvas, slot.mutations, false, slot.customTint);
     return canvas;
   }
 
