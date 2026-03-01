@@ -930,9 +930,15 @@ export class App {
       const tintSection = el('div', { className: 'inspector-section' }, [this.tintLabel, this.customTintControls]);
       this.inspectorEl.append(editBtn, transformSection, tintSection);
     } else if (isCosmetic) {
+      this.tintLabel.textContent = 'Custom Tint';
       const editBtn = el('button', { className: 'inspector-edit-btn', textContent: 'Edit Blobling' }) as HTMLButtonElement;
       editBtn.addEventListener('click', () => this.drawer.open('Blobling Rig', this.bloblingControls));
-      this.inspectorEl.append(editBtn, transformSection);
+      const mutSection  = el('div', { className: 'inspector-section' }, [
+        el('span', { className: 'inspector-section-title', textContent: 'Mutations' }),
+        this.mutationList,
+      ]);
+      const tintSection = el('div', { className: 'inspector-section' }, [this.tintLabel, this.customTintControls]);
+      this.inspectorEl.append(editBtn, mutSection, tintSection, transformSection);
     } else if (isSprite) {
       this.tintLabel.textContent = 'Custom Tint';
       const mutSection  = el('div', { className: 'inspector-section' }, [
