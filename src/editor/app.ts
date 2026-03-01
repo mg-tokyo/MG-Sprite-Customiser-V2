@@ -677,7 +677,7 @@ export class App {
     this.fontGroupDropdown = new CustomDropdown({
       showThumbs: false,
       placeholder: 'Font group…',
-      onSelect: (item) => this.onFontGroupSelect(item.id),
+      onSelect: (item) => this.onFontGroupSelect(item.id, false),
     });
     this.fontGroupDropdown.setItems(
       FONT_GROUPS.map(g => ({ id: g.id, label: g.label })),
@@ -872,12 +872,12 @@ export class App {
       this.strokeControls,
     );
 
-    // Initialise font list for MG group (default)
-    this.onFontGroupSelect('mg');
+    // Initialise font list for MG group (default) without mutating restored text slots.
+    this.onFontGroupSelect('mg', true);
   }
 
   /** Called when the font group dropdown changes. Repopulates the font item dropdown. */
-  private onFontGroupSelect(groupId: string): void {
+  private onFontGroupSelect(groupId: string, suppressApply = false): void {
     let items: DropdownItem[];
 
     if (groupId === 'mg') {
@@ -909,7 +909,11 @@ export class App {
       this.unicodeRow.style.display = '';
     }
 
-    this.fontItemDropdown.setItems(items);
+    this.fontItemDropdown.setItems(
+      items,
+      undefined,
+      { suppressAutoSelectOnMissingRestore: suppressApply },
+    );
   }
 
   /** Resolve a font definition by id and apply it to the active text slot. */
