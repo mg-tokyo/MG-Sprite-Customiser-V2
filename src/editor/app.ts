@@ -3113,6 +3113,105 @@ export class App {
 
   // ── Copy / paste / duplicate ──────────────────────────────────────────────
 
+  private clampScale(value: number): number {
+    return Math.max(this.VISUAL_SCALE_MIN, Math.min(this.VISUAL_SCALE_MAX, value));
+  }
+
+  private clampTextSize(value: number): number {
+    return Math.max(this.TEXT_SIZE_MIN, Math.min(this.TEXT_SIZE_MAX, value));
+  }
+
+  private normalizeRotation(value: number): number {
+    return ((value % 360) + 360) % 360;
+  }
+
+  private snapAxis(value: number): number {
+    if (!this.snapEnabled) return value;
+    return Math.round(value / this.SNAP_GRID_SIZE) * this.SNAP_GRID_SIZE;
+  }
+
+  private drawSnapGridOverlay(): void {
+    if (!this.snapEnabled) return;
+    const ctx = this.previewCanvas.getContext('2d');
+    if (!ctx) return;
+
+    const size = this.SNAP_GRID_SIZE;
+    const borderColor = getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#666666';
+    const width = this.previewCanvas.width;
+    const height = this.previewCanvas.height;
+
+    ctx.save();
+    ctx.strokeStyle = borderColor;
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    for (let x = 0.5; x <= width; x += size) {
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+    }
+    for (let y = 0.5; y <= height; y += size) {
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+    }
+
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private async normalizeSimilarSlots(): Promise<void> {
+    const activeIndex = state.activeSlotIndex;
+    const activeSlot = state.slots[activeIndex];
+    if (!activeSlot || activeSlot.type === 'text' || !activeSlot.spriteUrl) return;
+
+    interface Normalizable {
+      index: number;
+      ratio: number;
+      visibleMaxDim: number;
+      worldSize: number;
+    }
+
+    const candidates: Normalizable[] = [];
+
+    for (let i = 0; i < state.slots.length; i++) {
+      const slot = state.slots[i];
+      if (slot.type === 'text' || !slot.spriteUrl) continue;
+
+      const gifIdx = slot.isAnimated && slot.gifFrames ? (slot._gifFrameIdx ?? 0) : undefined;
+      const rendered = await renderSlot(slot, gifIdx);
+      if (!rendered || rendered.width <= 0 || rendered.height <= 0) continue;
+
+      const hb = scanContentBounds(rendered);
+      const width = hb ? Math.max(1, hb.hw * 2) : rendered.width;
+      const height = hb ? Math.max(1, hb.hv * 2) : rendered.height;
+      if (width <= 0 || height <= 0) continue;
+
+      const ratio = width / height;
+      const visibleMaxDim = Math.max(width, height);
+      const worldSize = visibleMaxDim * slot.scale;
+      candidates.push({ index: i, ratio, visibleMaxDim, worldSize });
+    }
+
+    const active = candidates.find(c => c.index === activeIndex);
+    if (!active) return;
+
+    const matched = candidates.filter(c => Math.abs(Math.log(c.ratio / active.ratio)) <= this.NORMALIZE_RATIO_TOLERANCE_LOG);
+    if (matched.length < 2) return;
+
+    const sortedWorldSizes = matched.map(c => c.worldSize).sort((a, b) => a - b);
+    const mid = Math.floor(sortedWorldSizes.length / 2);
+    const targetWorldSize = sortedWorldSizes.length % 2 === 0
+      ? (sortedWorldSizes[mid - 1] + sortedWorldSizes[mid]) / 2
+      : sortedWorldSizes[mid];
+
+    beginBatchUpdate();
+    for (const item of matched) {
+      state.slots[item.index].scale = this.clampScale(targetWorldSize / item.visibleMaxDim);
+    }
+    bus.emit(Events.SLOT_CHANGED, null);
+    bus.emit(Events.RENDER_REQUEST, null);
+  }
+
   /** Snapshot the active slot's data into the clipboard. */
   private copyActiveSlot(): void {
     const slot = getActiveSlot();
@@ -3289,8 +3388,8 @@ export class App {
       const rect = this.previewCanvas.getBoundingClientRect();
       const cssScale = rect.width / this.previewCanvas.width;
       const slot = getActiveSlot();
-      slot.position.x = slotStartX + (e.clientX - startX) / cssScale;
-      slot.position.y = slotStartY + (e.clientY - startY) / cssScale;
+      slot.position.x = this.snapAxis(slotStartX + (e.clientX - startX) / cssScale);
+      slot.position.y = this.snapAxis(slotStartY + (e.clientY - startY) / cssScale);
       this.render();
     });
 
@@ -3349,8 +3448,8 @@ export class App {
         const rect = this.previewCanvas.getBoundingClientRect();
         const cssScale = rect.width / this.previewCanvas.width;
         const slot = getActiveSlot();
-        slot.position.x = slotStartX + (touch.clientX - startX) / cssScale;
-        slot.position.y = slotStartY + (touch.clientY - startY) / cssScale;
+        slot.position.x = this.snapAxis(slotStartX + (touch.clientX - startX) / cssScale);
+        slot.position.y = this.snapAxis(slotStartY + (touch.clientY - startY) / cssScale);
         this.render();
       } else if (e.touches.length === 2) {
         const t0 = e.touches[0];
@@ -3361,13 +3460,13 @@ export class App {
 
         // Pinch → scale (clamped to slider range)
         const dist = Math.hypot(dx, dy);
-        slot.scale = Math.max(0.1, Math.min(4, pinchStartScale * (dist / pinchStartDist)));
-        this.scaleInput.value = slot.scale.toFixed(1);
+        slot.scale = this.clampScale(pinchStartScale * (dist / pinchStartDist));
+        this.scaleInput.value = slot.scale.toFixed(3);
 
         // Twist → rotation
         const angle = Math.atan2(dy, dx);
-        slot.rotation = ((pinchStartRotation + (angle - pinchStartAngle) * (180 / Math.PI)) % 360 + 360) % 360;
-        this.rotationInput.value = String(Math.round(slot.rotation));
+        slot.rotation = this.normalizeRotation(pinchStartRotation + (angle - pinchStartAngle) * (180 / Math.PI));
+        this.rotationInput.value = slot.rotation.toFixed(1);
 
         this.render();
       }
