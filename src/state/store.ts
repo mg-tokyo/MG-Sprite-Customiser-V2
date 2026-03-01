@@ -119,17 +119,6 @@ export interface Slot {
   isAnimated?: boolean;
   /** Transient: current frame index for animated preview (not persisted) */
   _gifFrameIdx?: number;
-  /** Stop-motion: freeze at this internal GIF frame index during export. */
-  frozenSubFrame?: number;
-}
-
-/** A single frame in stop-motion animation mode. */
-export interface StopMotionFrame {
-  id: string;
-  /** Slot snapshot. gifFrames are kept as live refs in memory; stripped for persistence. */
-  slots: Slot[];
-  /** Display duration in milliseconds. */
-  delay: number;
 }
 
 export interface AppState {
@@ -149,12 +138,7 @@ export interface AppState {
   searchQuery: string;
   previewZoom: number;
 
-  /** Whether the stop-motion animation editor is active. */
-  animMode: boolean;
-  /** Stop-motion frame list (only meaningful when animMode or after entering it). */
-  smFrames: StopMotionFrame[];
-  /** Index into smFrames of the frame currently loaded into state.slots. */
-  activeSmFrameIdx: number;
+  
 }
 
 function createEmptySlot(index: number): Slot {

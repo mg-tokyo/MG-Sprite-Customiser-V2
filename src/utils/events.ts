@@ -32,5 +32,4 @@ export const Events = {
   THEME_CHANGED: 'theme:changed',
   DATA_LOADED: 'data:loaded',
   EXPORT_REQUEST: 'export:request',
-  SM_FRAME_CHANGED: 'sm:frame:changed',
 } as const;

@@ -128,6 +128,16 @@ export class App {
   private optionsDiv!: HTMLElement;
   private tintLabel!: HTMLElement;
   private browserItems: DropdownItem[] = [];
+  private readonly VISUAL_SCALE_MIN = 0.05;
+  private readonly VISUAL_SCALE_MAX = 8;
+  private readonly VISUAL_SCALE_STEP = 0.01;
+  private readonly TEXT_SIZE_MIN = 6;
+  private readonly TEXT_SIZE_MAX = 300;
+  private readonly TEXT_SIZE_STEP = 1;
+  private readonly ROTATION_STEP = 1;
+  private readonly SNAP_GRID_SIZE = 16;
+  private readonly NORMALIZE_RATIO_TOLERANCE_LOG = 0.12;
+  private snapEnabled = false;
 
   // ── Text layer UI ──
   private textControls!: HTMLElement;     // text-layer-specific section (shown in drawer)
@@ -362,8 +372,22 @@ export class App {
     optOverlays.addEventListener('change', () => updateSlot(state.activeSlotIndex, { options: { icons: optIcons.checked, overlays: optOverlays.checked } }));
 
     this.scaleLabel = el('label', { textContent: 'Scale' });
-    this.scaleInput = el('input', { id: 'scale', type: 'range', min: '0.1', max: '4', step: '0.1', value: '1' }) as HTMLInputElement;
-    this.rotationInput = el('input', { id: 'rotation', type: 'range', min: '0', max: '360', step: '5', value: '0' }) as HTMLInputElement;
+    this.scaleInput = el('input', {
+      id: 'scale',
+      type: 'range',
+      min: String(this.VISUAL_SCALE_MIN),
+      max: String(this.VISUAL_SCALE_MAX),
+      step: String(this.VISUAL_SCALE_STEP),
+      value: '1',
+    }) as HTMLInputElement;
+    this.rotationInput = el('input', {
+      id: 'rotation',
+      type: 'range',
+      min: '0',
+      max: '360',
+      step: String(this.ROTATION_STEP),
+      value: '0',
+    }) as HTMLInputElement;
 
     this.timelinePlayBtn = el('button', { className: 'btn-sm', textContent: 'Play' });
     this.timelineScrubber = el('input', { type: 'range', min: '0', max: '0', value: '0', className: 'timeline-scrubber' }) as HTMLInputElement;
@@ -377,19 +401,48 @@ export class App {
 
     this.scaleInput.addEventListener('input', () => {
       const slot = getActiveSlot();
-      beginBatchUpdate();
       if (slot.type === 'text') {
-        const fontSize = Math.max(6, Math.min(200, parseFloat(this.scaleInput.value) || 36));
-        const td = { ...slot.textData!, fontSize };
-        updateSlotSilent(state.activeSlotIndex, { textData: td });
+        const current = slot.textData?.fontSize ?? 36;
+        const parsed = parseFloat(this.scaleInput.value);
+        const fontSize = this.clampTextSize(Number.isFinite(parsed) ? parsed : current);
+        if (slot.textData) slot.textData = { ...slot.textData, fontSize };
         this.scheduleTextRerender();
       } else {
-        updateSlotSilent(state.activeSlotIndex, { scale: parseFloat(this.scaleInput.value) || 1 });
+        const parsed = parseFloat(this.scaleInput.value);
+        slot.scale = this.clampScale(Number.isFinite(parsed) ? parsed : slot.scale);
+        bus.emit(Events.RENDER_REQUEST, null);
+      }
+    });
+    this.scaleInput.addEventListener('change', () => {
+      const slot = getActiveSlot();
+      beginBatchUpdate();
+      if (slot.type === 'text') {
+        const current = slot.textData?.fontSize ?? 36;
+        const parsed = parseFloat(this.scaleInput.value);
+        const fontSize = this.clampTextSize(Number.isFinite(parsed) ? parsed : current);
+        if (slot.textData) {
+          updateSlotSilent(state.activeSlotIndex, { textData: { ...slot.textData, fontSize } });
+          this.scheduleTextRerender();
+        }
+      } else {
+        const parsed = parseFloat(this.scaleInput.value);
+        const scale = this.clampScale(Number.isFinite(parsed) ? parsed : slot.scale);
+        updateSlotSilent(state.activeSlotIndex, { scale });
       }
     });
     this.rotationInput.addEventListener('input', () => {
+      const parsed = parseFloat(this.rotationInput.value);
+      const slot = getActiveSlot();
+      slot.rotation = this.normalizeRotation(Number.isFinite(parsed) ? parsed : slot.rotation);
+      bus.emit(Events.RENDER_REQUEST, null);
+    });
+    this.rotationInput.addEventListener('change', () => {
+      const parsed = parseFloat(this.rotationInput.value);
+      const slot = getActiveSlot();
       beginBatchUpdate();
-      updateSlotSilent(state.activeSlotIndex, { rotation: parseFloat(this.rotationInput.value) || 0 });
+      updateSlotSilent(state.activeSlotIndex, {
+        rotation: this.normalizeRotation(Number.isFinite(parsed) ? parsed : slot.rotation),
+      });
     });
 
     const updateTint = () => {
@@ -901,23 +954,44 @@ export class App {
     // Scale + rotation section (always present)
     if (isText) {
       this.scaleLabel.textContent = 'Font Size';
-      this.scaleInput.min  = '6';
-      this.scaleInput.max  = '200';
-      this.scaleInput.step = '1';
-      this.scaleInput.value = String(slot.textData?.fontSize ?? 36);
+      this.scaleInput.min = String(this.TEXT_SIZE_MIN);
+      this.scaleInput.max = String(this.TEXT_SIZE_MAX);
+      this.scaleInput.step = String(this.TEXT_SIZE_STEP);
+      this.scaleInput.value = String(this.clampTextSize(slot.textData?.fontSize ?? 36));
     } else {
       this.scaleLabel.textContent = 'Scale';
-      this.scaleInput.min  = '0.1';
-      this.scaleInput.max  = '4';
-      this.scaleInput.step = '0.1';
-      this.scaleInput.value = String(slot.scale);
+      this.scaleInput.min = String(this.VISUAL_SCALE_MIN);
+      this.scaleInput.max = String(this.VISUAL_SCALE_MAX);
+      this.scaleInput.step = String(this.VISUAL_SCALE_STEP);
+      this.scaleInput.value = this.clampScale(slot.scale).toFixed(3);
     }
-    this.rotationInput.value = String(slot.rotation);
-    const transformSection = el('div', { className: 'inspector-section' }, [
+    this.rotationInput.step = String(this.ROTATION_STEP);
+    this.rotationInput.value = String(this.normalizeRotation(slot.rotation));
+
+    const transformChildren: Node[] = [
       this.scaleLabel, this.scaleInput,
       el('span', { className: 'inspector-section-title', textContent: 'Rotation' }),
       this.rotationInput,
-    ]);
+    ];
+    const snapToggle = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    snapToggle.checked = this.snapEnabled;
+    snapToggle.addEventListener('change', () => {
+      this.snapEnabled = snapToggle.checked;
+      bus.emit(Events.RENDER_REQUEST, null);
+    });
+    transformChildren.push(this.makeCheckLabel('Snap to grid', snapToggle));
+    if (!isText) {
+      const normalizeBtn = el('button', {
+        className: 'btn-sm',
+        textContent: 'Normalize Similar',
+        title: 'Normalize similarly-shaped assets to a shared visual size',
+      }) as HTMLButtonElement;
+      normalizeBtn.addEventListener('click', () => {
+        this.normalizeSimilarSlots().catch(err => console.error('[Transform] Normalize failed:', err));
+      });
+      transformChildren.push(normalizeBtn);
+    }
+    const transformSection = el('div', { className: 'inspector-section' }, transformChildren);
 
     if (isText) {
       this.tintLabel.textContent = 'Text Tint';
@@ -3032,6 +3106,7 @@ export class App {
 
   private async render(): Promise<void> {
     await renderAll(this.previewCanvas);
+    this.drawSnapGridOverlay();
   }
 
   // ── Canvas Drag ──
