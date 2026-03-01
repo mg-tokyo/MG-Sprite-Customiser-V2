@@ -82,6 +82,27 @@ body {
   scrollbar-width: none;
 }
 .sc2-toolbar::-webkit-scrollbar { display: none; }
+.sc2-toolbar-resize {
+  height: 8px;
+  min-height: 8px;
+  flex-shrink: 0;
+  cursor: ns-resize;
+  position: relative;
+  background: transparent;
+}
+.sc2-toolbar-resize::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 3px;
+  height: 1px;
+  background: var(--border);
+}
+.sc2-toolbar-resize:hover::before,
+.sc2-toolbar-resize.dragging::before {
+  background: var(--accent);
+}
 
 .sc2-tb-logo {
   font-size: 15px;
@@ -171,6 +192,28 @@ body {
   flex-shrink: 0;
 }
 @media (max-width: 1399px) { .sc2-col-browser { display: none; } }
+
+.sc2-col-splitter {
+  width: 8px;
+  flex-shrink: 0;
+  cursor: ew-resize;
+  position: relative;
+  background: transparent;
+}
+.sc2-col-splitter::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: var(--border);
+}
+.sc2-col-splitter:hover::before,
+.sc2-col-splitter.dragging::before {
+  background: var(--accent);
+}
+@media (max-width: 1399px) { .sc2-col-splitter--browser { display: none; } }
 
 /* ── Canvas column ── */
 .sc2-col-canvas {
@@ -585,6 +628,33 @@ body {
 }
 
 /* ── Canvas area ── */
+.preview-stage {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  max-height: calc(100vh - var(--toolbar-h) - 64px);
+}
+.preview-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: flex;
+}
+.preview-controls .preview-size-select {
+  width: auto;
+  min-width: 86px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+
 #previewCanvas {
   display: block;
   background: var(--canvas-bg);

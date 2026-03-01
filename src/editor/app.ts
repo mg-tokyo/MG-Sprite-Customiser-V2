@@ -138,6 +138,18 @@ export class App {
   private readonly SNAP_GRID_SIZE = 16;
   private readonly NORMALIZE_RATIO_TOLERANCE_LOG = 0.12;
   private snapEnabled = false;
+  private readonly LAYOUT_STORAGE_KEY = 'sc2:layout:v1';
+  private readonly LAYERS_MIN_W = 220;
+  private readonly LAYERS_MAX_W = 520;
+  private readonly ASSETS_MIN_W = 220;
+  private readonly ASSETS_MAX_W = 560;
+  private readonly TOOLBAR_MIN_H = 44;
+  private readonly TOOLBAR_MAX_H = 140;
+  private readonly RENDER_SIZE_PRESETS = [1024, 1536, 2048, 3072, 4096] as const;
+  private toolbarHeight = 52;
+  private layersWidth = 280;
+  private assetsWidth = 260;
+  private renderSize = 1024;
 
   // ── Text layer UI ──
   private textControls!: HTMLElement;     // text-layer-specific section (shown in drawer)
@@ -245,6 +257,7 @@ export class App {
 
   constructor(container: HTMLElement) {
     initTheme();
+    this.loadLayoutSettings();
     container.innerHTML = '';
     this.buildUI(container);
     this.bindEvents();
@@ -466,6 +479,7 @@ export class App {
     });
 
     // ── Layout ──
+    this.applyLayoutCssVars();
     this.slotContainer = el('div', { className: 'slot-grid' });
     this.inspectorEl   = el('div', { className: 'inspector' });
     this.scenesListEl  = el('div', { className: 'scenes-list' });
@@ -494,10 +508,27 @@ export class App {
     // Canvas column
     this.previewCanvas = document.createElement('canvas');
     this.previewCanvas.id     = 'previewCanvas';
-    this.previewCanvas.width  = 1024;
-    this.previewCanvas.height = 1024;
+    this.previewCanvas.width  = this.renderSize;
+    this.previewCanvas.height = this.renderSize;
+    const renderSizeSelect = el('select', {
+      className: 'preview-size-select',
+      title: 'Internal render size',
+    }) as HTMLSelectElement;
+    for (const size of this.RENDER_SIZE_PRESETS) {
+      renderSizeSelect.append(el('option', { value: String(size), textContent: `${size}px` }));
+    }
+    renderSizeSelect.value = String(this.renderSize);
+    renderSizeSelect.addEventListener('change', () => {
+      const next = parseInt(renderSizeSelect.value, 10);
+      this.applyRenderSize(next);
+      renderSizeSelect.value = String(this.renderSize);
+    });
+    const previewStage = el('div', { className: 'preview-stage' }, [
+      el('div', { className: 'preview-controls' }, [renderSizeSelect]),
+      this.previewCanvas,
+    ]);
     this.metaEl = el('div', { className: 'meta', id: 'meta' });
-    const canvasCol = el('div', { className: 'sc2-col-canvas' }, [this.previewCanvas, this.metaEl]);
+    const canvasCol = el('div', { className: 'sc2-col-canvas' }, [previewStage, this.metaEl]);
 
     // Card type picker overlay (hidden until Add Card is clicked)
     this.buildCardTypePicker();
@@ -506,9 +537,16 @@ export class App {
     this.drawer  = new Drawer();
     this.mainEl  = el('div', { className: 'sc2-main' });
     this.drawer.attachMain(this.mainEl);
-    this.mainEl.append(layersCol, browserEl, canvasCol, this.drawer.el);
+    const layersSplitter = el('div', { className: 'sc2-col-splitter sc2-col-splitter--layers', title: 'Resize layers panel' }) as HTMLDivElement;
+    const browserSplitter = el('div', { className: 'sc2-col-splitter sc2-col-splitter--browser', title: 'Resize assets panel' }) as HTMLDivElement;
+    this.setupColumnResize(layersSplitter, 'layers', this.LAYERS_MIN_W, this.LAYERS_MAX_W);
+    this.setupColumnResize(browserSplitter, 'assets', this.ASSETS_MIN_W, this.ASSETS_MAX_W, browserEl);
+    this.mainEl.append(layersCol, layersSplitter, browserEl, browserSplitter, canvasCol, this.drawer.el);
 
-    const appEl = el('div', { className: 'sc2-app' }, [tb.el, this.mainEl]);
+    const toolbarResize = el('div', { className: 'sc2-toolbar-resize', title: 'Resize toolbar' }) as HTMLDivElement;
+    this.setupToolbarResize(toolbarResize);
+
+    const appEl = el('div', { className: 'sc2-app' }, [tb.el, toolbarResize, this.mainEl]);
     container.append(appEl);
   }
 
@@ -977,10 +1015,11 @@ export class App {
     snapToggle.checked = this.snapEnabled;
     snapToggle.addEventListener('change', () => {
       this.snapEnabled = snapToggle.checked;
+      this.syncInspector(getActiveSlot());
       bus.emit(Events.RENDER_REQUEST, null);
     });
     transformChildren.push(this.makeCheckLabel('Snap to grid', snapToggle));
-    if (!isText) {
+    if (!isText && this.snapEnabled) {
       const normalizeBtn = el('button', {
         className: 'btn-sm',
         textContent: 'Normalize Similar',
@@ -3113,6 +3152,183 @@ export class App {
 
   // ── Copy / paste / duplicate ──────────────────────────────────────────────
 
+  private clampToolbarHeight(value: number): number {
+    return Math.max(this.TOOLBAR_MIN_H, Math.min(this.TOOLBAR_MAX_H, Math.round(value)));
+  }
+
+  private clampLayersWidth(value: number): number {
+    return Math.max(this.LAYERS_MIN_W, Math.min(this.LAYERS_MAX_W, Math.round(value)));
+  }
+
+  private clampAssetsWidth(value: number): number {
+    return Math.max(this.ASSETS_MIN_W, Math.min(this.ASSETS_MAX_W, Math.round(value)));
+  }
+
+  private normalizeRenderSize(value: number): number {
+    if (!Number.isFinite(value)) return this.RENDER_SIZE_PRESETS[0];
+    let closest: number = this.RENDER_SIZE_PRESETS[0];
+    let bestDelta = Math.abs(value - closest);
+    for (const preset of this.RENDER_SIZE_PRESETS) {
+      const delta = Math.abs(value - preset);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        closest = preset;
+      }
+    }
+    return closest;
+  }
+
+  private applyLayoutCssVars(): void {
+    const root = document.documentElement.style;
+    root.setProperty('--toolbar-h', `${this.toolbarHeight}px`);
+    root.setProperty('--col-layers-w', `${this.layersWidth}px`);
+    root.setProperty('--col-browser-w', `${this.assetsWidth}px`);
+  }
+
+  private applyRenderSize(size: number): void {
+    const next = this.normalizeRenderSize(size);
+    this.renderSize = next;
+    if (this.previewCanvas) {
+      this.previewCanvas.width = next;
+      this.previewCanvas.height = next;
+      bus.emit(Events.RENDER_REQUEST, null);
+    }
+    this.saveLayoutSettings();
+  }
+
+  private loadLayoutSettings(): void {
+    try {
+      const raw = localStorage.getItem(this.LAYOUT_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        toolbarHeight?: number;
+        layersWidth?: number;
+        assetsWidth?: number;
+        renderSize?: number;
+      };
+      if (typeof parsed.toolbarHeight === 'number') this.toolbarHeight = this.clampToolbarHeight(parsed.toolbarHeight);
+      if (typeof parsed.layersWidth === 'number') this.layersWidth = this.clampLayersWidth(parsed.layersWidth);
+      if (typeof parsed.assetsWidth === 'number') this.assetsWidth = this.clampAssetsWidth(parsed.assetsWidth);
+      if (typeof parsed.renderSize === 'number') this.renderSize = this.normalizeRenderSize(parsed.renderSize);
+    } catch {
+      // Ignore invalid persisted layout payloads
+    }
+  }
+
+  private saveLayoutSettings(): void {
+    try {
+      localStorage.setItem(this.LAYOUT_STORAGE_KEY, JSON.stringify({
+        toolbarHeight: this.toolbarHeight,
+        layersWidth: this.layersWidth,
+        assetsWidth: this.assetsWidth,
+        renderSize: this.renderSize,
+      }));
+    } catch {
+      // Ignore storage failures
+    }
+  }
+
+  private setupColumnResize(
+    handle: HTMLDivElement,
+    panel: 'layers' | 'assets',
+    min: number,
+    max: number,
+    visibilityEl?: HTMLElement,
+  ): void {
+    let dragging = false;
+    let pointerId = -1;
+    let startX = 0;
+    let startW = 0;
+    let prevUserSelect = '';
+    let prevCursor = '';
+
+    const endDrag = (): void => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.userSelect = prevUserSelect;
+      document.body.style.cursor = prevCursor;
+      this.saveLayoutSettings();
+    };
+
+    handle.addEventListener('pointerdown', (e) => {
+      if (visibilityEl && getComputedStyle(visibilityEl).display === 'none') return;
+      dragging = true;
+      pointerId = e.pointerId;
+      startX = e.clientX;
+      startW = panel === 'layers' ? this.layersWidth : this.assetsWidth;
+      prevUserSelect = document.body.style.userSelect;
+      prevCursor = document.body.style.cursor;
+      document.body.style.userSelect = 'none';
+      document.body.style.cursor = 'ew-resize';
+      handle.classList.add('dragging');
+      handle.setPointerCapture(pointerId);
+      e.preventDefault();
+    });
+
+    handle.addEventListener('pointermove', (e) => {
+      if (!dragging || e.pointerId !== pointerId) return;
+      const nextW = Math.max(min, Math.min(max, startW + (e.clientX - startX)));
+      if (panel === 'layers') this.layersWidth = this.clampLayersWidth(nextW);
+      else this.assetsWidth = this.clampAssetsWidth(nextW);
+      this.applyLayoutCssVars();
+      e.preventDefault();
+    });
+
+    handle.addEventListener('pointerup', (e) => {
+      if (e.pointerId !== pointerId) return;
+      handle.releasePointerCapture(pointerId);
+      endDrag();
+    });
+    handle.addEventListener('pointercancel', endDrag);
+  }
+
+  private setupToolbarResize(handle: HTMLDivElement): void {
+    let dragging = false;
+    let pointerId = -1;
+    let startY = 0;
+    let startH = 0;
+    let prevUserSelect = '';
+    let prevCursor = '';
+
+    const endDrag = (): void => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.userSelect = prevUserSelect;
+      document.body.style.cursor = prevCursor;
+      this.saveLayoutSettings();
+    };
+
+    handle.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      pointerId = e.pointerId;
+      startY = e.clientY;
+      startH = this.toolbarHeight;
+      prevUserSelect = document.body.style.userSelect;
+      prevCursor = document.body.style.cursor;
+      document.body.style.userSelect = 'none';
+      document.body.style.cursor = 'ns-resize';
+      handle.classList.add('dragging');
+      handle.setPointerCapture(pointerId);
+      e.preventDefault();
+    });
+
+    handle.addEventListener('pointermove', (e) => {
+      if (!dragging || e.pointerId !== pointerId) return;
+      this.toolbarHeight = this.clampToolbarHeight(startH + (e.clientY - startY));
+      this.applyLayoutCssVars();
+      e.preventDefault();
+    });
+
+    handle.addEventListener('pointerup', (e) => {
+      if (e.pointerId !== pointerId) return;
+      handle.releasePointerCapture(pointerId);
+      endDrag();
+    });
+    handle.addEventListener('pointercancel', endDrag);
+  }
+
   private clampScale(value: number): number {
     return Math.max(this.VISUAL_SCALE_MIN, Math.min(this.VISUAL_SCALE_MAX, value));
   }
@@ -3557,7 +3773,7 @@ export class App {
 
     private async downloadPNG(): Promise<void> {
       this.downloadProgress.textContent = 'Rendering...';
-      const FULL = 1024;
+      const FULL = this.renderSize;
       const SAFE_PAD = 24;
       const canvas = document.createElement('canvas');
       canvas.width = FULL;
@@ -3618,9 +3834,9 @@ export class App {
       return;
     }
 
-      // Composite is built at full 1024×1024, then cropped to bounds with padding.
+      // Composite is built at the selected square render size, then cropped to bounds with padding.
       // If the result is larger than EXPORT_MAX, it is scaled down preserving aspect.
-      const FULL = 1024;
+      const FULL = this.renderSize;
       const EXPORT_MAX = 512;
       const SAFE_PAD = 24;
 
