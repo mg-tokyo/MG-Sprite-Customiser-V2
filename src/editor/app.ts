@@ -19,6 +19,7 @@ import type { SpriteFrame } from '../api/types';
 import { renderTextToCanvas, defaultTextData } from './text-renderer';
 import { drawFullCardStats, defaultFullCardData, abilityColor } from './full-card-renderer';
 import { MG_FONTS, SYSTEM_FONTS, GOOGLE_FONTS_CURATED, UNICODE_STYLES, ensureFontLoaded } from './font-data';
+import { getRiveFileUrl, getBloblingAnimations, renderBloblingFrames, BLOBLING_ANIMATIONS, getExpressionIndex } from './blobling-rive';
 
 // ── Hit-test content bounds ──────────────────────────────────────────────────
 // Cache tight bounding boxes (content only, transparent padding stripped) so
@@ -1004,7 +1005,7 @@ export class App {
 
   // ── Blobling Rig ─────────────────────────────────────────────────────────────
 
-  private static readonly BLOBLING_LAYER_ORDER = ['Default', 'Bottom', 'Mid', 'Top', 'Expression', 'FaceProp', 'Status', 'Banner'] as const;
+  private static readonly BLOBLING_LAYER_ORDER = ['Bottom', 'Mid', 'Top', 'Expression'] as const;
 
   /** Build the blobling rig controls panel (called once in buildUI). */
   private buildBloblingControls(): HTMLElement {
@@ -1106,20 +1107,21 @@ export class App {
       dropdown.setItems(items, selectedId);
     }
 
-    // Populate animation dropdown
+    // Populate animation dropdown from the static known list (no async needed).
     const animItems: DropdownItem[] = [{ id: 'none', label: 'None (static)' }];
-    const sd = state.spriteData;
-    if (sd) {
-      const animCat = sd.categories.find(c => c.cat === 'animations');
-      if (animCat) {
-        for (const item of animCat.items) {
-          if (item.type === 'animation') {
-            animItems.push({ id: item.id, label: item.name });
-          }
-        }
-      }
+    for (const anim of BLOBLING_ANIMATIONS) {
+      animItems.push({ id: String(anim.id), label: anim.name });
     }
-    this.bloblingAnimDropdown.setItems(animItems, slot.bloblingAnimId ?? 'none');
+    const selectedAnimId = slot.bloblingAnimId ?? 'none';
+    this.bloblingAnimDropdown.setItems(animItems, selectedAnimId);
+
+    // Pre-load the Rive file in the background so it's ready when the user picks an animation.
+    const rivUrl = getRiveFileUrl();
+    if (rivUrl) {
+      getBloblingAnimations(rivUrl).catch((err: unknown) => {
+        console.error('[Blobling] Failed to pre-load Rive:', err);
+      });
+    }
   }
 
   /** Debounce blobling re-renders during rapid cosmetic changes. */
@@ -1137,67 +1139,53 @@ export class App {
     if (slot.type !== 'cosmetic' || slot.spriteUrl !== 'blobling:') return;
 
     const cosData = state.cosmeticsData;
-    const FRAME_DELAY = 100; // ms — ~10fps
 
-    // Resolve all selected cosmetic layer URLs in render order
-    const cosmeticUrls: string[] = [];
+    // Resolve cosmetic URLs for Bottom/Mid/Top (Rive image assets) and Expression (SM input).
+    const riveCosmeticUrls: Record<string, string> = {};
+    let expressionUrl: string | undefined;
     for (const cat of App.BLOBLING_LAYER_ORDER) {
       const cosmeticId = slot.cosmeticLayers?.[cat];
-      if (!cosmeticId) continue;
-      if (!cosData) continue;
+      if (!cosmeticId || !cosData) continue;
       const catData = cosData.categories.find(c => c.cat === cat);
       const item = catData?.items.find(i => i.id === cosmeticId);
-      if (item?.url) cosmeticUrls.push(item.url);
+      if (!item?.url) continue;
+      if (cat === 'Expression') {
+        expressionUrl = item.url;
+      } else {
+        riveCosmeticUrls[cat] = item.url;
+      }
     }
 
+    const expressionIndex = expressionUrl ? getExpressionIndex(expressionUrl) : 0;
     const animId = slot.bloblingAnimId;
 
-    if (animId) {
-      // Animated: load animation frames, composite cosmetics on top of each frame
-      const sd = state.spriteData;
-      if (!sd) return;
+    if (animId && animId !== 'none') {
+      // Animated: render Rive animation with cosmetics + expression state machine input.
+      const rivUrl = getRiveFileUrl();
+      if (!rivUrl) { console.warn('[Blobling] No Rive URL'); return; }
 
-      const animEntry = sd.categories
-        .find(c => c.cat === 'animations')
-        ?.items.find(i => i.id === animId && i.type === 'animation');
+      const animIndex = parseInt(animId, 10);
+      if (isNaN(animIndex)) { console.warn('[Blobling] Invalid animIndex:', animId); return; }
 
-      if (!animEntry || animEntry.type !== 'animation' || animEntry.frames.length === 0) return;
+      const riveFrames = await renderBloblingFrames(rivUrl, animIndex, riveCosmeticUrls, expressionIndex);
+      if (riveFrames.length === 0) return;
 
-      const version = animEntry.url.match(/\/version\/([a-f0-9]+)\//i)?.[1] ?? state.gameVersion ?? '';
-      const frameUrls = this.resolveAnimFrameUrls(animEntry.frames, version);
-      if (frameUrls.length === 0) return;
-
-      const [animImages, cosmeticImages] = await Promise.all([
-        Promise.all(frameUrls.map(url => spriteLoader.load(url))),
-        Promise.all(cosmeticUrls.map(url => spriteLoader.load(url))),
-      ]);
-
-      // Guard: bail if slot changed while loading
+      // Guard: bail if slot changed while rendering.
       const s = state.slots[idx];
       if (s.type !== 'cosmetic' || s.bloblingAnimId !== animId) return;
 
-      const gifFrames = animImages.map(animImg => {
-        const canvas = document.createElement('canvas');
-        canvas.width = animImg.naturalWidth;
-        canvas.height = animImg.naturalHeight;
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(animImg, 0, 0);
-        for (const cosImg of cosmeticImages) {
-          ctx.drawImage(cosImg, 0, 0, canvas.width, canvas.height);
-        }
-        return { canvas, delay: FRAME_DELAY };
-      });
-
-      s.gifFrames  = gifFrames;
+      s.gifFrames  = riveFrames;
       s.isAnimated = true;
       s.spriteUrl  = 'blobling:';
       bus.emit(Events.RENDER_REQUEST, null);
       this.refreshSlots();
       if (idx === state.activeSlotIndex) this.startGifPreview();
     } else {
-      // Static: composite all cosmetics layers
-      if (cosmeticUrls.length === 0) {
-        // No cosmetics — blank placeholder canvas
+      // Static: composite Bottom/Mid/Top/Expression as PNG layers (no Rive runtime needed).
+      const allUrls = [...Object.values(riveCosmeticUrls)];
+      if (expressionUrl) allUrls.push(expressionUrl);
+
+      if (allUrls.length === 0) {
         const canvas = document.createElement('canvas');
         canvas.width = 128;
         canvas.height = 128;
@@ -1210,7 +1198,7 @@ export class App {
         return;
       }
 
-      const cosmeticImages = await Promise.all(cosmeticUrls.map(url => spriteLoader.load(url)));
+      const cosmeticImages = await Promise.all(allUrls.map(url => spriteLoader.load(url)));
       const s = state.slots[idx];
       if (s.type !== 'cosmetic' || s.spriteUrl !== 'blobling:') return;
 
@@ -2545,7 +2533,8 @@ export class App {
       this.metaEl.innerHTML = `<strong>Full Card</strong> &middot; ${fcd?.cardType ?? '?'} Card &middot; Slot ${state.activeSlotIndex + 1}`;
     } else if (slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:') {
       const layerCount = Object.keys(slot.cosmeticLayers ?? {}).length;
-      const animLabel = slot.bloblingAnimId ? ` &middot; Animated` : '';
+      const animName = slot.bloblingAnimId != null ? BLOBLING_ANIMATIONS[parseInt(slot.bloblingAnimId)]?.name : null;
+      const animLabel = animName ? ` &middot; ${animName}` : '';
       this.metaEl.innerHTML = `<strong>Blobling Rig</strong> &middot; Slot ${state.activeSlotIndex + 1} &middot; ${layerCount} cosmetic${layerCount !== 1 ? 's' : ''}${animLabel}`;
     } else {
       const displayName = slot.spriteKey.split('/').pop() ?? slot.spriteKey;

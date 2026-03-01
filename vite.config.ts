@@ -6,6 +6,11 @@ export default defineConfig({
     outDir: 'dist',
     assetsInlineLimit: 0,
   },
+  // Prevent Vite from pre-bundling canvas-advanced (it contains a .wasm binary
+  // that must be served as a static asset, not inlined by the pre-bundler).
+  optimizeDeps: {
+    exclude: ['@rive-app/canvas-advanced'],
+  },
   server: {
     proxy: {
       '/api': {
