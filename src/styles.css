@@ -63,6 +63,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   background: var(--bg);
 }
@@ -635,6 +636,7 @@ body {
   justify-content: center;
   max-width: 100%;
   max-height: calc(100vh - var(--toolbar-h) - 64px);
+  max-height: calc(100dvh - var(--toolbar-h) - 64px);
 }
 .preview-controls {
   position: absolute;
@@ -666,6 +668,7 @@ body {
   height: auto;
   max-width: 100%;
   max-height: calc(100vh - var(--toolbar-h) - 64px);
+  max-height: calc(100dvh - var(--toolbar-h) - 64px);
   flex-shrink: 1;
   touch-action: none;
   cursor: grab;
@@ -1221,4 +1224,74 @@ button.danger:hover { background: #ff3333; }
 @media (max-width: 600px) {
   .sc2-toolbar { padding: 0 8px; gap: 2px; }
   .sc2-tb-scene-input { width: 80px; }
+}
+
+/* Mobile mode (touch-first): phones + tablets */
+.sc2-app.mobile {
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.sc2-app.mobile .sc2-main {
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.sc2-app.mobile .sc2-col-layers {
+  width: 100%;
+  min-width: 0;
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+  max-height: 40vh;
+}
+
+.sc2-app.mobile .sc2-col-browser {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+  max-height: 34vh;
+}
+
+.sc2-app.mobile .sc2-col-canvas {
+  flex: 1;
+  justify-content: flex-start;
+  padding: 12px;
+}
+
+.sc2-app.mobile .sc2-main.drawer-open .sc2-col-canvas {
+  padding-right: 12px;
+}
+
+.sc2-app.mobile .sc2-drawer {
+  position: fixed;
+  top: calc(var(--toolbar-h) + env(safe-area-inset-top, 0px));
+  bottom: 0;
+  width: 100vw;
+  max-width: 100vw;
+}
+
+.sc2-app.mobile .sc2-col-splitter,
+.sc2-app.mobile .sc2-toolbar-resize {
+  display: none;
+}
+
+.sc2-app.mobile .sc2-tb-btn,
+.sc2-app.mobile .btn-sm,
+.sc2-app.mobile .browser-tab,
+.sc2-app.mobile .preview-controls .preview-size-select,
+.sc2-app.mobile .sc2-drawer-close {
+  min-height: 44px;
+}
+
+.sc2-app.mobile .slot-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  font-size: 15px;
+  border-radius: 6px;
 }

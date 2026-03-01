@@ -150,6 +150,9 @@ export class App {
   private layersWidth = 280;
   private assetsWidth = 260;
   private renderSize = 1024;
+  private appRootEl: HTMLElement | null = null;
+  private mobileModeQuery: MediaQueryList | null = null;
+  private mobileModeChangeHandler: ((e: MediaQueryListEvent) => void) | null = null;
 
   // ── Text layer UI ──
   private textControls!: HTMLElement;     // text-layer-specific section (shown in drawer)
@@ -547,7 +550,9 @@ export class App {
     this.setupToolbarResize(toolbarResize);
 
     const appEl = el('div', { className: 'sc2-app' }, [tb.el, toolbarResize, this.mainEl]);
+    this.appRootEl = appEl;
     container.append(appEl);
+    this.setupMobileModeGate();
   }
 
   private bindEvents(): void {
@@ -3196,6 +3201,30 @@ export class App {
     this.saveLayoutSettings();
   }
 
+  private isMobileMode(): boolean {
+    return !!this.mobileModeQuery?.matches;
+  }
+
+  private syncMobileMode(): void {
+    if (!this.appRootEl) return;
+    this.appRootEl.classList.toggle('mobile', this.isMobileMode());
+  }
+
+  private setupMobileModeGate(): void {
+    if (typeof window.matchMedia !== 'function') return;
+
+    if (this.mobileModeQuery && this.mobileModeChangeHandler) {
+      this.mobileModeQuery.removeEventListener('change', this.mobileModeChangeHandler);
+    }
+
+    this.mobileModeQuery = window.matchMedia('(hover: none) and (pointer: coarse)');
+    if (!this.mobileModeChangeHandler) {
+      this.mobileModeChangeHandler = () => this.syncMobileMode();
+    }
+    this.mobileModeQuery.addEventListener('change', this.mobileModeChangeHandler);
+    this.syncMobileMode();
+  }
+
   private loadLayoutSettings(): void {
     try {
       const raw = localStorage.getItem(this.LAYOUT_STORAGE_KEY);
@@ -3252,6 +3281,7 @@ export class App {
     };
 
     handle.addEventListener('pointerdown', (e) => {
+      if (this.isMobileMode()) return;
       if (visibilityEl && getComputedStyle(visibilityEl).display === 'none') return;
       dragging = true;
       pointerId = e.pointerId;
@@ -3301,6 +3331,7 @@ export class App {
     };
 
     handle.addEventListener('pointerdown', (e) => {
+      if (this.isMobileMode()) return;
       dragging = true;
       pointerId = e.pointerId;
       startY = e.clientY;
