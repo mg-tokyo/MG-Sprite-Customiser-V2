@@ -65,7 +65,7 @@ function buildProxyUrl(prefix: string, target: string): string {
  *             so both are routed through VITE_CORS_PROXY when set.
  *             The proxy is called as: `${CORS_PROXY}${encodeURIComponent(originalUrl)}`
  */
-function proxyUrl(url: string): string {
+export function proxyUrl(url: string): string {
   if (IS_DEV) {
     if (url.startsWith('https://mg-api.ariedam.fr/')) {
       return url.replace('https://mg-api.ariedam.fr/', '/api/');

@@ -10,6 +10,7 @@
  * the user picks an animation.
  */
 import { state } from '../state/store';
+import { proxyUrl } from '../api/sprite-loader';
 
 const RIVE_FILE_NAME = 'avatarelements-svucgdqc.riv';
 /** Target size for rendered blobling frames (px). */
@@ -115,20 +116,6 @@ async function getRuntime(): Promise<any> {
   return runtimePromise;
 }
 
-// ── URL helpers ───────────────────────────────────────────────────────────────
-
-const IS_DEV = import.meta.env.DEV;
-
-function toFetchUrl(url: string): string {
-  const isLocal =
-    IS_DEV ||
-    window.location.hostname === 'localhost' ||
-    window.location.hostname === '127.0.0.1';
-  if (isLocal && url.startsWith('https://magicgarden.gg/')) {
-    return url.replace('https://magicgarden.gg/', '/mggg-proxy/');
-  }
-  return url;
-}
 
 /**
  * Returns the CDN URL for the Rive avatar-elements file, derived from the
@@ -157,7 +144,7 @@ function getRivFile(rivUrl: string): Promise<any> {
   const promise = (async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rive: any = await getRuntime();
-    const resp = await fetch(toFetchUrl(rivUrl));
+    const resp = await fetch(proxyUrl(rivUrl));
     if (!resp.ok) throw new Error(`[Blobling] Rive fetch failed: ${resp.status}`);
     const bytes = new Uint8Array(await resp.arrayBuffer());
 
@@ -214,7 +201,7 @@ async function loadImageAsset(rivUrl: string, assetName: string, imageUrl: strin
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rive: any = await getRuntime();
-  const resp = await fetch(toFetchUrl(imageUrl));
+  const resp = await fetch(proxyUrl(imageUrl));
   if (!resp.ok) {
     console.warn(`[Blobling] Failed to fetch cosmetic image: ${resp.status} ${imageUrl}`);
     return;
