@@ -167,6 +167,7 @@ body {
   flex: 1;
   overflow: hidden;
   position: relative;
+  min-height: 0;
 }
 
 /* ── Layers + Inspector column ── */
@@ -1250,8 +1251,10 @@ button.danger:hover { background: #ff3333; }
     max-height: 50vh;
   }
   .sc2-col-canvas {
+    flex: 0 0 auto;
     padding: 12px;
     justify-content: flex-start;
+    overflow: visible;
   }
   .sc2-main.drawer-open .sc2-col-canvas {
     padding-right: 12px;
@@ -1301,9 +1304,10 @@ button.danger:hover { background: #ff3333; }
 }
 
 .sc2-app.mobile .sc2-col-canvas {
-  flex: 1;
+  flex: 0 0 auto;
   justify-content: flex-start;
   padding: 12px;
+  overflow: visible;
 }
 
 .sc2-app.mobile .sc2-main.drawer-open .sc2-col-canvas {
@@ -1340,4 +1344,8 @@ button.danger:hover { background: #ff3333; }
   padding: 0;
   font-size: 15px;
   border-radius: 6px;
+}
+
+.sc2-app.mobile #previewCanvas {
+  touch-action: pan-y pinch-zoom;
 }

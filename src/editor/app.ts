@@ -4438,7 +4438,6 @@ export class App {
     let pinchStartRotation = 0;
 
     this.previewCanvas.addEventListener('touchstart', (e) => {
-      e.preventDefault();
       if (e.touches.length === 1) {
         const touch = e.touches[0];
         const rect = this.previewCanvas.getBoundingClientRect();
@@ -4453,6 +4452,7 @@ export class App {
         const slot = getActiveSlot();
         if (slot.locked) return;
         isDragging = true;
+        e.preventDefault();
         dragDidMove = false;
         dragUndoPushed = false;
         startX = touch.clientX;
@@ -4463,6 +4463,7 @@ export class App {
       } else if (e.touches.length === 2) {
         // Second finger down: cancel any active drag, begin pinch/twist
         finishDrag();
+        e.preventDefault();
         const t0 = e.touches[0];
         const t1 = e.touches[1];
         pinchStartDist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
@@ -4473,8 +4474,8 @@ export class App {
     }, { passive: false });
 
     this.previewCanvas.addEventListener('touchmove', (e) => {
-      e.preventDefault();
       if (e.touches.length === 1 && isDragging) {
+        e.preventDefault();
         const touch = e.touches[0];
         const rect = this.previewCanvas.getBoundingClientRect();
         const cssScale = rect.width / this.previewCanvas.width;
@@ -4492,6 +4493,7 @@ export class App {
         slot.position.y = this.snapAxis(slotStartY + dy);
         this.render();
       } else if (e.touches.length === 2) {
+        e.preventDefault();
         const t0 = e.touches[0];
         const t1 = e.touches[1];
         const dx = t1.clientX - t0.clientX;
