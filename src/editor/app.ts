@@ -18,6 +18,7 @@ import { spriteLoader } from '../api/sprite-loader';
 import type { SpriteFrame } from '../api/types';
 import { renderTextToCanvas, defaultTextData } from './text-renderer';
 import { drawFullCardStats, abilityColor, defaultFullCardData, defaultPetBarData, renderPetBarCanvas, PET_BAR_LENGTH_MIN, PET_BAR_LENGTH_MAX, PET_BAR_LABEL_PAD_MIN, PET_BAR_LABEL_PAD_MAX, PET_BAR_LABEL_PAD_DEFAULT } from './full-card-renderer';
+import { drawExportHoloOverlay } from '../renderer/export-holo-effect';
 import { MG_FONTS, SYSTEM_FONTS, GOOGLE_FONTS_CURATED, UNICODE_STYLES, ensureFontLoaded } from './font-data';
 import { getRiveFileUrl, getBloblingAnimations, renderBloblingFrames, BLOBLING_ANIMATIONS, getExpressionIndex } from './blobling-rive';
 import { buildToolbar } from './toolbar';
@@ -109,6 +110,26 @@ export class App {
   private metaEl!: HTMLElement;
   private downloadProgress!: HTMLElement;
   private downloadBtn!: HTMLButtonElement;
+  private fxPreviewOverlay!: HTMLElement;
+  private fxPreviewCanvas!: HTMLCanvasElement;
+  private fxPreviewStage!: HTMLElement;
+  private fxPreviewStatus!: HTMLElement;
+  private fxPreviewEnable!: HTMLInputElement;
+  private fxPreviewLightIntensity!: HTMLInputElement;
+  private fxPreviewLightIntensityValue!: HTMLElement;
+  private fxPreviewHoloIntensity!: HTMLInputElement;
+  private fxPreviewHoloIntensityValue!: HTMLElement;
+  private fxPreviewTilt!: HTMLInputElement;
+  private fxPreviewOpen = false;
+  private fxPreviewFrameId: number | null = null;
+  private fxPreviewTickLast = 0;
+  private fxPreviewStartTime = 0;
+  private fxPreviewBaseCanvas: HTMLCanvasElement | null = null;
+  private fxPreviewTiltCurrentX = 0;
+  private fxPreviewTiltCurrentY = 0;
+  private fxPreviewTiltTargetX = 0;
+  private fxPreviewTiltTargetY = 0;
+  private fxPreviewTiltDragging = false;
   private timelineBar!: HTMLElement;
   private timelinePlayBtn!: HTMLElement;
   private timelineScrubber!: HTMLInputElement;
@@ -155,6 +176,8 @@ export class App {
   private readonly RENDER_SIZE_PRESETS = [1024, 1536, 2048, 3072, 4096] as const;
   private readonly WEATHER_STRIP_FRAME_WIDTH = 256;
   private readonly DEFAULT_ANIM_FRAME_DELAY = 100;
+  private readonly FX_PREVIEW_MAX_DIM = 960;
+  private readonly FX_PREVIEW_TILT_MAX_DEG = 14;
   private toolbarHeight = 52;
   private layersWidth = 280;
   private assetsWidth = 260;
@@ -329,6 +352,9 @@ export class App {
     tb.undoBtn.addEventListener('click', () => undo());
     tb.redoBtn.addEventListener('click', () => redo());
     tb.downloadBtn.addEventListener('click', () => this.download());
+    tb.fxPreviewBtn.addEventListener('click', () => {
+      this.openFxPreview().catch(err => console.error('[MG] FX preview failed:', err));
+    });
     tb.clearSlotBtn.addEventListener('click', () => clearSlot(state.activeSlotIndex));
     tb.resetAllBtn.addEventListener('click', () => {
       if (confirm('Reset all slots?')) {
@@ -616,6 +642,7 @@ export class App {
 
     // Card type picker overlay (hidden until Add Card is clicked)
     this.buildCardTypePicker();
+    this.buildFxPreviewOverlay();
 
     // Drawer
     this.drawer  = new Drawer();
@@ -4551,7 +4578,277 @@ export class App {
 
   // ── Download ──
 
-    private async download(): Promise<void> {
+  private buildFxPreviewOverlay(): void {
+    this.fxPreviewCanvas = document.createElement('canvas');
+    this.fxPreviewCanvas.className = 'fx-preview-canvas';
+    this.fxPreviewCanvas.width = 512;
+    this.fxPreviewCanvas.height = 512;
+
+    this.fxPreviewStage = el('div', { className: 'fx-preview-stage' }, [this.fxPreviewCanvas]) as HTMLElement;
+
+    this.fxPreviewEnable = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    this.fxPreviewEnable.checked = true;
+
+    this.fxPreviewLightIntensity = el('input', {
+      type: 'range',
+      min: '0',
+      max: '8',
+      step: '0.05',
+      value: '4.00',
+    }) as HTMLInputElement;
+    this.fxPreviewLightIntensityValue = el('span', { className: 'fx-preview-value', textContent: '50%' }) as HTMLElement;
+
+    this.fxPreviewHoloIntensity = el('input', {
+      type: 'range',
+      min: '0',
+      max: '1.3',
+      step: '0.05',
+      value: '0.65',
+    }) as HTMLInputElement;
+    this.fxPreviewHoloIntensityValue = el('span', { className: 'fx-preview-value', textContent: '50%' }) as HTMLElement;
+
+    this.fxPreviewTilt = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    this.fxPreviewTilt.checked = true;
+
+    const resetViewBtn = el('button', { className: 'btn-sm', textContent: 'Reset View' }) as HTMLButtonElement;
+    resetViewBtn.addEventListener('click', () => this.resetFxPreviewTilt(true));
+
+    const exportPngBtn = el('button', { className: 'btn-sm', textContent: 'Export PNG' }) as HTMLButtonElement;
+    exportPngBtn.addEventListener('click', async () => {
+      this.stopFxPreviewLoop();
+      try {
+        await this.downloadPNG(this.fxPreviewStatus);
+      } finally {
+        if (this.fxPreviewOpen) this.startFxPreviewLoop();
+      }
+    });
+
+    const exportGifBtn = el('button', { className: 'btn-sm', textContent: 'Export GIF' }) as HTMLButtonElement;
+    exportGifBtn.addEventListener('click', async () => {
+      this.stopFxPreviewLoop();
+      try {
+        await this.downloadGIF(this.fxPreviewStatus, false);
+      } finally {
+        if (this.fxPreviewOpen) this.startFxPreviewLoop();
+      }
+    });
+
+    const closeBtn = el('button', { className: 'btn-sm', textContent: 'Close' }) as HTMLButtonElement;
+    closeBtn.addEventListener('click', () => this.closeFxPreview());
+
+    this.fxPreviewStatus = el('div', { className: 'fx-preview-status' });
+
+    const controls = el('div', { className: 'fx-preview-controls' }, [
+      el('div', { className: 'fx-preview-ranges' }, [
+        el('label', { className: 'fx-preview-range' }, [
+          el('span', { className: 'fx-preview-range-label', textContent: 'Light' }),
+          this.fxPreviewLightIntensity,
+          this.fxPreviewLightIntensityValue,
+        ]),
+        el('label', { className: 'fx-preview-range' }, [
+          el('span', { className: 'fx-preview-range-label', textContent: 'Holo' }),
+          this.fxPreviewHoloIntensity,
+          this.fxPreviewHoloIntensityValue,
+        ]),
+      ]),
+      el('div', { className: 'fx-preview-toggles' }, [
+        this.makeCheckLabel('Enable FX', this.fxPreviewEnable),
+        this.makeCheckLabel('Tilt', this.fxPreviewTilt),
+        resetViewBtn,
+      ]),
+    ]);
+
+    const actions = el('div', { className: 'fx-preview-actions' }, [exportPngBtn, exportGifBtn, closeBtn]);
+    const panel = el('div', { className: 'fx-preview-inner' }, [
+      el('div', { className: 'fx-preview-header', textContent: 'FX Preview' }),
+      this.fxPreviewStage,
+      controls,
+      actions,
+      this.fxPreviewStatus,
+    ]);
+
+    this.fxPreviewOverlay = el('div', { className: 'fx-preview', style: 'display:none' }, [panel]);
+    this.fxPreviewOverlay.addEventListener('click', (event) => {
+      if (event.target === this.fxPreviewOverlay) this.closeFxPreview();
+    });
+
+    this.fxPreviewLightIntensity.addEventListener('input', () => this.syncFxPreviewIntensityLabels());
+    this.fxPreviewHoloIntensity.addEventListener('input', () => this.syncFxPreviewIntensityLabels());
+    this.fxPreviewTilt.addEventListener('change', () => {
+      if (!this.fxPreviewTilt.checked) this.resetFxPreviewTilt(false);
+    });
+
+    const updateTiltTarget = (clientX: number, clientY: number): void => {
+      const rect = this.fxPreviewStage.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const nx = ((clientX - rect.left) / rect.width - 0.5) * 2;
+      const ny = ((clientY - rect.top) / rect.height - 0.5) * 2;
+      const clampedX = Math.max(-1, Math.min(1, nx));
+      const clampedY = Math.max(-1, Math.min(1, ny));
+      this.fxPreviewTiltTargetY = clampedX * this.FX_PREVIEW_TILT_MAX_DEG;
+      this.fxPreviewTiltTargetX = -clampedY * this.FX_PREVIEW_TILT_MAX_DEG;
+    };
+
+    this.fxPreviewStage.addEventListener('pointerdown', (event) => {
+      if (!this.fxPreviewOpen || !this.fxPreviewTilt.checked) return;
+      this.fxPreviewTiltDragging = true;
+      this.fxPreviewStage.setPointerCapture(event.pointerId);
+      updateTiltTarget(event.clientX, event.clientY);
+    });
+
+    this.fxPreviewStage.addEventListener('pointermove', (event) => {
+      if (!this.fxPreviewTiltDragging || !this.fxPreviewTilt.checked) return;
+      updateTiltTarget(event.clientX, event.clientY);
+    });
+
+    const releaseTilt = (): void => {
+      this.fxPreviewTiltDragging = false;
+      this.fxPreviewTiltTargetX = 0;
+      this.fxPreviewTiltTargetY = 0;
+    };
+    this.fxPreviewStage.addEventListener('pointerup', releaseTilt);
+    this.fxPreviewStage.addEventListener('pointercancel', releaseTilt);
+    this.fxPreviewStage.addEventListener('lostpointercapture', releaseTilt);
+    window.addEventListener('pointerup', releaseTilt);
+
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && this.fxPreviewOpen) this.closeFxPreview();
+    });
+
+    document.body.append(this.fxPreviewOverlay);
+  }
+
+  private syncFxPreviewIntensityLabels(): void {
+    this.fxPreviewLightIntensityValue.textContent = `${this.toSliderPercent(this.fxPreviewLightIntensity)}%`;
+    this.fxPreviewHoloIntensityValue.textContent = `${this.toSliderPercent(this.fxPreviewHoloIntensity)}%`;
+  }
+
+  private toSliderPercent(input: HTMLInputElement): number {
+    const min = parseFloat(input.min);
+    const max = parseFloat(input.max);
+    const value = parseFloat(input.value);
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min || !Number.isFinite(value)) return 0;
+    const clamped = Math.max(min, Math.min(max, value));
+    return Math.round(((clamped - min) / (max - min)) * 100);
+  }
+
+  private setSliderToMidpoint(input: HTMLInputElement): void {
+    const min = parseFloat(input.min);
+    const max = parseFloat(input.max);
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return;
+    input.value = ((min + max) * 0.5).toFixed(2);
+  }
+
+  private resetFxPreviewTilt(forceImmediate: boolean): void {
+    this.fxPreviewTiltTargetX = 0;
+    this.fxPreviewTiltTargetY = 0;
+    if (forceImmediate) {
+      this.fxPreviewTiltCurrentX = 0;
+      this.fxPreviewTiltCurrentY = 0;
+      this.fxPreviewStage.style.transform = 'perspective(900px) rotateX(0deg) rotateY(0deg)';
+    }
+  }
+
+  private async openFxPreview(): Promise<void> {
+    if (this.fxPreviewOpen) return;
+    this.fxPreviewOpen = true;
+    this.fxPreviewOverlay.style.display = 'flex';
+    this.fxPreviewEnable.checked = true;
+    this.setSliderToMidpoint(this.fxPreviewLightIntensity);
+    this.setSliderToMidpoint(this.fxPreviewHoloIntensity);
+    this.fxPreviewTilt.checked = true;
+    this.syncFxPreviewIntensityLabels();
+    this.resetFxPreviewTilt(true);
+
+    this.fxPreviewStatus.textContent = 'Rendering preview...';
+    const baseCanvas = await this.buildCroppedCompositeCanvas();
+    if (!this.fxPreviewOpen) return;
+    this.fxPreviewBaseCanvas = baseCanvas;
+
+    const maxDim = Math.max(baseCanvas.width, baseCanvas.height);
+    const scale = maxDim > this.FX_PREVIEW_MAX_DIM ? this.FX_PREVIEW_MAX_DIM / maxDim : 1;
+    const width = Math.max(1, Math.round(baseCanvas.width * scale));
+    const height = Math.max(1, Math.round(baseCanvas.height * scale));
+    this.fxPreviewCanvas.width = width;
+    this.fxPreviewCanvas.height = height;
+
+    this.fxPreviewStatus.textContent = `${baseCanvas.width} x ${baseCanvas.height}`;
+    this.fxPreviewStartTime = performance.now();
+    this.fxPreviewTickLast = 0;
+    this.startFxPreviewLoop();
+  }
+
+  private closeFxPreview(): void {
+    if (!this.fxPreviewOpen) return;
+    this.fxPreviewOpen = false;
+    this.stopFxPreviewLoop();
+    this.fxPreviewOverlay.style.display = 'none';
+    this.fxPreviewBaseCanvas = null;
+    this.fxPreviewTiltDragging = false;
+    this.resetFxPreviewTilt(true);
+    this.fxPreviewStatus.textContent = '';
+  }
+
+  private startFxPreviewLoop(): void {
+    this.stopFxPreviewLoop();
+    this.fxPreviewFrameId = requestAnimationFrame(this.onFxPreviewTick);
+  }
+
+  private stopFxPreviewLoop(): void {
+    if (this.fxPreviewFrameId !== null) {
+      cancelAnimationFrame(this.fxPreviewFrameId);
+      this.fxPreviewFrameId = null;
+    }
+  }
+
+  private onFxPreviewTick = (now: number): void => {
+    if (!this.fxPreviewOpen) return;
+    if (now - this.fxPreviewTickLast < 33) {
+      this.fxPreviewFrameId = requestAnimationFrame(this.onFxPreviewTick);
+      return;
+    }
+    this.fxPreviewTickLast = now;
+    this.renderFxPreviewFrame(now);
+    this.fxPreviewFrameId = requestAnimationFrame(this.onFxPreviewTick);
+  };
+
+  private renderFxPreviewFrame(now: number): void {
+    const ctx = this.fxPreviewCanvas.getContext('2d');
+    const base = this.fxPreviewBaseCanvas;
+    if (!ctx || !base) return;
+
+    if (!this.fxPreviewTilt.checked) {
+      this.fxPreviewTiltTargetX = 0;
+      this.fxPreviewTiltTargetY = 0;
+    }
+
+    const smooth = 0.16;
+    this.fxPreviewTiltCurrentX += (this.fxPreviewTiltTargetX - this.fxPreviewTiltCurrentX) * smooth;
+    this.fxPreviewTiltCurrentY += (this.fxPreviewTiltTargetY - this.fxPreviewTiltCurrentY) * smooth;
+    if (Math.abs(this.fxPreviewTiltCurrentX) < 0.01) this.fxPreviewTiltCurrentX = 0;
+    if (Math.abs(this.fxPreviewTiltCurrentY) < 0.01) this.fxPreviewTiltCurrentY = 0;
+
+    this.fxPreviewStage.style.transform = `perspective(900px) rotateX(${this.fxPreviewTiltCurrentX.toFixed(2)}deg) rotateY(${this.fxPreviewTiltCurrentY.toFixed(2)}deg)`;
+
+    ctx.clearRect(0, 0, this.fxPreviewCanvas.width, this.fxPreviewCanvas.height);
+    ctx.drawImage(base, 0, 0, this.fxPreviewCanvas.width, this.fxPreviewCanvas.height);
+
+    if (this.fxPreviewEnable.checked) {
+      const lightIntensity = parseFloat(this.fxPreviewLightIntensity.value);
+      const holoIntensity = parseFloat(this.fxPreviewHoloIntensity.value);
+      drawExportHoloOverlay(
+        ctx,
+        this.fxPreviewCanvas,
+        now - this.fxPreviewStartTime,
+        lightIntensity,
+        holoIntensity,
+        this.fxPreviewTiltCurrentX,
+        this.fxPreviewTiltCurrentY,
+      );
+    }
+  }
+
+  private async download(): Promise<void> {
       const hasGif = state.slots.some(s => s.visible && s.isAnimated && s.gifFrames && s.gifFrames.length > 1);
       if (hasGif) {
         await this.downloadGIF();
@@ -4619,15 +4916,7 @@ export class App {
       return { x: x0, y: y0, w, h };
     }
 
-    private async downloadPNG(): Promise<void> {
-      this.downloadProgress.textContent = 'Rendering...';
-      const FULL = this.renderSize;
-      const SAFE_PAD = 24;
-      const canvas = document.createElement('canvas');
-      canvas.width = FULL;
-      canvas.height = FULL;
-      await renderAll(canvas);
-
+    private async buildCompositeSizeMap(): Promise<Map<Slot, { w: number; h: number }>> {
       const sizeMap = new Map<Slot, { w: number; h: number }>();
       for (const slot of state.slots) {
         if (!slot.visible) continue;
@@ -4636,11 +4925,23 @@ export class App {
         } else if (!slot.spriteUrl) {
           continue;
         }
+
         const gifIdx = slot.isAnimated && slot.gifFrames ? (slot._gifFrameIdx ?? 0) : undefined;
         const rendered = await renderSlot(slot, gifIdx);
         if (rendered) sizeMap.set(slot, { w: rendered.width, h: rendered.height });
       }
+      return sizeMap;
+    }
 
+    private async buildCroppedCompositeCanvas(): Promise<HTMLCanvasElement> {
+      const FULL = this.renderSize;
+      const SAFE_PAD = 24;
+      const canvas = document.createElement('canvas');
+      canvas.width = FULL;
+      canvas.height = FULL;
+      await renderAll(canvas);
+
+      const sizeMap = await this.buildCompositeSizeMap();
       const bounds = this.computeCompositeBounds(sizeMap, FULL, SAFE_PAD);
       const out = document.createElement('canvas');
       out.width = bounds.w;
@@ -4656,16 +4957,22 @@ export class App {
         bounds.w,
         bounds.h,
       );
+      return out;
+    }
+
+    private async downloadPNG(statusEl: HTMLElement = this.downloadProgress): Promise<void> {
+      statusEl.textContent = 'Rendering...';
+      const out = await this.buildCroppedCompositeCanvas();
       const link = document.createElement('a');
       link.download = `${getActiveSlot().spriteKey.split('/').pop() || 'sprite'}.png`;
       link.href = out.toDataURL('image/png');
       link.click();
-      this.downloadProgress.textContent = '';
+      statusEl.textContent = '';
     }
 
-  private async downloadGIF(): Promise<void> {
-      this.downloadProgress.textContent = 'Rendering...';
-      this.downloadBtn.disabled = true;
+  private async downloadGIF(statusEl: HTMLElement = this.downloadProgress, disableToolbarBtn = true): Promise<void> {
+      statusEl.textContent = 'Rendering...';
+      if (disableToolbarBtn) this.downloadBtn.disabled = true;
 
     const animatedFramesBySlot = new Map<Slot, { canvas: HTMLCanvasElement; delay: number }[]>();
     let primaryFrames: { canvas: HTMLCanvasElement; delay: number }[] = [];
@@ -4685,8 +4992,8 @@ export class App {
     }
 
     if (primaryFrames.length === 0) {
-      this.downloadProgress.textContent = '';
-      this.downloadBtn.disabled = false;
+      statusEl.textContent = '';
+      if (disableToolbarBtn) this.downloadBtn.disabled = false;
       return;
     }
 
@@ -4699,7 +5006,7 @@ export class App {
     // Pre-render all static (non-animated) slots once before the frame loop.
     // Even though renderSlot caches its output, calling it N times per static slot
     // inside the loop adds N async yields and N cache-key computations per slot.
-    this.downloadProgress.textContent = 'Preparing static layers...';
+    statusEl.textContent = 'Preparing static layers...';
       const staticCanvases = new Map<Slot, HTMLCanvasElement>();
       for (const slot of state.slots) {
       if (!slot.visible || !slot.spriteUrl) continue;
@@ -4735,7 +5042,7 @@ export class App {
     const renderedFrames: { canvas: HTMLCanvasElement; delay: number }[] = [];
 
     for (let i = 0; i < primaryFrames.length; i++) {
-      this.downloadProgress.textContent = `Rendering frame ${i + 1}/${primaryFrames.length}...`;
+      statusEl.textContent = `Rendering frame ${i + 1}/${primaryFrames.length}...`;
 
       const outCanvas = document.createElement('canvas');
       outCanvas.width = FULL;
@@ -4798,13 +5105,13 @@ export class App {
       }
 
     try {
-      this.downloadProgress.textContent = 'Encoding GIF...';
+      statusEl.textContent = 'Encoding GIF...';
       const blob = await encodeGif({
         frames: renderedFrames,
           width: outW,
           height: outH,
         onProgress: (p) => {
-          this.downloadProgress.textContent = `Encoding GIF... ${Math.round(p * 100)}%`;
+          statusEl.textContent = `Encoding GIF... ${Math.round(p * 100)}%`;
         },
       });
       const link = document.createElement('a');
@@ -4814,11 +5121,11 @@ export class App {
       URL.revokeObjectURL(link.href);
     } catch (err) {
       console.error('GIF export failed:', err);
-      this.downloadProgress.textContent = 'GIF export failed!';
+      statusEl.textContent = 'GIF export failed!';
     }
 
-    this.downloadBtn.disabled = false;
-    this.downloadProgress.textContent = '';
+    if (disableToolbarBtn) this.downloadBtn.disabled = false;
+    statusEl.textContent = '';
   }
 
   // ── GIF Preview ──

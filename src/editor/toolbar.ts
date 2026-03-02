@@ -9,6 +9,7 @@ export interface ToolbarRefs {
   redoBtn: HTMLButtonElement;
   themeBtn: HTMLButtonElement;
   downloadBtn: HTMLButtonElement;
+  fxPreviewBtn: HTMLButtonElement;
   addTextBtn: HTMLButtonElement;
   addCardBtn: HTMLButtonElement;
   addFullCardBtn: HTMLButtonElement;
@@ -23,21 +24,27 @@ export interface ToolbarRefs {
 
 export function buildToolbar(): ToolbarRefs {
   const themeBtn = el('button', { className: 'sc2-tb-btn', title: 'Toggle light/dark theme' }) as HTMLButtonElement;
-  themeBtn.textContent = '◑';
+  themeBtn.textContent = '\u25D1';
 
   const undoBtn = el('button', { className: 'sc2-tb-btn', title: 'Undo (Ctrl+Z)' }) as HTMLButtonElement;
-  undoBtn.textContent = '↩';
+  undoBtn.textContent = '\u21A9';
 
   const redoBtn = el('button', { className: 'sc2-tb-btn', title: 'Redo (Ctrl+Y)' }) as HTMLButtonElement;
-  redoBtn.textContent = '↪';
+  redoBtn.textContent = '\u21AA';
 
   const downloadBtn = el('button', { className: 'sc2-tb-btn sc2-tb-btn--accent', title: 'Download PNG' }) as HTMLButtonElement;
-  downloadBtn.textContent = '↓ PNG';
+  downloadBtn.textContent = '\u2193 PNG';
+
+  const fxPreviewBtn = el('button', {
+    className: 'sc2-tb-btn sc2-tb-btn--secondary',
+    title: 'Open FX Preview',
+    textContent: 'FX Preview',
+  }) as HTMLButtonElement;
 
   const sceneNameInput = el('input', {
     type: 'text',
     className: 'sc2-tb-scene-input',
-    placeholder: 'Scene name…',
+    placeholder: 'Scene name...',
   }) as HTMLInputElement;
 
   const sceneSaveBtn = el('button', {
@@ -101,7 +108,7 @@ export function buildToolbar(): ToolbarRefs {
   const uploadBtn = el('button', {
     className: 'sc2-tb-btn sc2-tb-btn--secondary',
     title: 'Upload PNG/GIF image',
-    textContent: '↑ Upload',
+    textContent: '\u2191 Upload',
   }) as HTMLButtonElement;
   uploadBtn.addEventListener('click', () => uploadInput.click());
 
@@ -128,7 +135,7 @@ export function buildToolbar(): ToolbarRefs {
     el('div', { className: 'sc2-tb-sep' }),
     el('div', { className: 'sc2-tb-group' }, [undoBtn, redoBtn]),
     el('div', { className: 'sc2-tb-sep' }),
-    el('div', { className: 'sc2-tb-group' }, [themeBtn, downloadBtn]),
+    el('div', { className: 'sc2-tb-group' }, [themeBtn, fxPreviewBtn, downloadBtn]),
   ]);
 
   return {
@@ -140,6 +147,7 @@ export function buildToolbar(): ToolbarRefs {
     redoBtn,
     themeBtn,
     downloadBtn,
+    fxPreviewBtn,
     addTextBtn,
     addCardBtn,
     addFullCardBtn,
