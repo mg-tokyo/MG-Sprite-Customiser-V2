@@ -127,6 +127,26 @@ interface SceneGifTrack {
   durationMs: number;
 }
 
+interface FxPreviewAnimatedTrack {
+  frames: HTMLCanvasElement[];
+  cumulativeEndsMs: number[];
+  durationMs: number;
+}
+
+interface FxPreviewPreparedLayer {
+  slot: Slot;
+  staticCanvas?: HTMLCanvasElement;
+  animatedTrack?: FxPreviewAnimatedTrack;
+}
+
+interface FxPreviewAnimatedScene {
+  layers: FxPreviewPreparedLayer[];
+  bounds: { x: number; y: number; w: number; h: number };
+  previewScale: number;
+  previewWidth: number;
+  previewHeight: number;
+}
+
 // MUTATION_CHIP_COLORS imported from './drawers/card-drawer'
 
 
@@ -165,6 +185,7 @@ export class App {
   private fxPreviewTickLast = 0;
   private fxPreviewStartTime = 0;
   private fxPreviewBaseCanvas: HTMLCanvasElement | null = null;
+  private fxPreviewAnimatedScene: FxPreviewAnimatedScene | null = null;
   private fxPreviewTiltCurrentX = 0;
   private fxPreviewTiltCurrentY = 0;
   private fxPreviewTiltTargetX = 0;
@@ -396,6 +417,7 @@ export class App {
   private sceneGifTimeline: SceneGifTimelineV1 | null = null;
   private sceneGifPlayTimer: ReturnType<typeof setTimeout> | null = null;
   private suppressSceneGifFrameAutosave = false;
+  private sceneGifThumbCapturePending = new Set<string>();
 
   constructor(container: HTMLElement) {
     initTheme();
@@ -1045,6 +1067,23 @@ export class App {
     frame.thumbnail = this.captureSceneThumbnail(72);
   }
 
+  private scheduleSceneGifActiveThumbnailCapture(frameId: string): void {
+    if (this.sceneGifThumbCapturePending.has(frameId)) return;
+    this.sceneGifThumbCapturePending.add(frameId);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        this.sceneGifThumbCapturePending.delete(frameId);
+        if (!this.sceneGifSession) return;
+        const active = this.sceneGifSession.frames[this.sceneGifSession.activeFrameIndex];
+        if (!active || active.id !== frameId) return;
+        const thumb = this.captureSceneThumbnail(72);
+        if (!thumb) return;
+        active.thumbnail = thumb;
+        this.refreshSceneGifFrameUi();
+      });
+    });
+  }
+
   private loadSceneGifFrame(index: number, capturePrevious = true): void {
     if (!this.sceneGifSession) return;
     if (capturePrevious) this.captureActiveSceneGifFrameSnapshot();
@@ -1062,6 +1101,7 @@ export class App {
     bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
     bus.emit(Events.RENDER_REQUEST, null);
     this.refreshSceneGifFrameUi();
+    if (!frame.thumbnail) this.scheduleSceneGifActiveThumbnailCapture(frame.id);
   }
 
   private addSceneGifFrame(): void {
@@ -6027,6 +6067,7 @@ export class App {
     if (this.fxPreviewOpen) return;
     this.fxPreviewOpen = true;
     this.fxPreviewOverlay.style.display = 'flex';
+    this.fxPreviewAnimatedScene = null;
     this.fxPreviewEnable.checked = true;
     this.setSliderToMidpoint(this.fxPreviewLightIntensity);
     this.setSliderToMidpoint(this.fxPreviewHoloIntensity);
@@ -6037,18 +6078,33 @@ export class App {
     this.resetFxPreviewTilt(true);
 
     this.fxPreviewStatus.textContent = 'Rendering preview...';
-    const baseCanvas = await this.buildCroppedCompositeCanvas();
+    const sceneSnapshot = this.cloneSlotsForSceneFrame(state.slots);
+    const animatedScene = this.hasVisibleAnimatedSceneSlots(sceneSnapshot)
+      ? await this.buildFxPreviewAnimatedScene(sceneSnapshot)
+      : null;
     if (!this.fxPreviewOpen) return;
-    this.fxPreviewBaseCanvas = baseCanvas;
 
-    const maxDim = Math.max(baseCanvas.width, baseCanvas.height);
-    const scale = maxDim > this.FX_PREVIEW_MAX_DIM ? this.FX_PREVIEW_MAX_DIM / maxDim : 1;
-    const width = Math.max(1, Math.round(baseCanvas.width * scale));
-    const height = Math.max(1, Math.round(baseCanvas.height * scale));
-    this.fxPreviewCanvas.width = width;
-    this.fxPreviewCanvas.height = height;
+    if (animatedScene) {
+      this.fxPreviewBaseCanvas = null;
+      this.fxPreviewAnimatedScene = animatedScene;
+      this.fxPreviewCanvas.width = animatedScene.previewWidth;
+      this.fxPreviewCanvas.height = animatedScene.previewHeight;
+      this.fxPreviewStatus.textContent = `${animatedScene.bounds.w} x ${animatedScene.bounds.h} (animated scene)`;
+    } else {
+      const baseCanvas = await this.buildCroppedCompositeCanvas();
+      if (!this.fxPreviewOpen) return;
+      this.fxPreviewBaseCanvas = baseCanvas;
+      this.fxPreviewAnimatedScene = null;
 
-    this.fxPreviewStatus.textContent = `${baseCanvas.width} x ${baseCanvas.height}`;
+      const maxDim = Math.max(baseCanvas.width, baseCanvas.height);
+      const scale = maxDim > this.FX_PREVIEW_MAX_DIM ? this.FX_PREVIEW_MAX_DIM / maxDim : 1;
+      const width = Math.max(1, Math.round(baseCanvas.width * scale));
+      const height = Math.max(1, Math.round(baseCanvas.height * scale));
+      this.fxPreviewCanvas.width = width;
+      this.fxPreviewCanvas.height = height;
+
+      this.fxPreviewStatus.textContent = `${baseCanvas.width} x ${baseCanvas.height}`;
+    }
     this.fxPreviewStartTime = performance.now();
     this.fxPreviewTickLast = 0;
     this.startFxPreviewLoop();
@@ -6060,6 +6116,7 @@ export class App {
     this.stopFxPreviewLoop();
     this.fxPreviewOverlay.style.display = 'none';
     this.fxPreviewBaseCanvas = null;
+    this.fxPreviewAnimatedScene = null;
     this.fxPreviewTiltDragging = false;
     this.resetFxPreviewTilt(true);
     this.fxPreviewStatus.textContent = '';
@@ -6090,8 +6147,7 @@ export class App {
 
   private renderFxPreviewFrame(now: number): void {
     const ctx = this.fxPreviewCanvas.getContext('2d');
-    const base = this.fxPreviewBaseCanvas;
-    if (!ctx || !base) return;
+    if (!ctx) return;
 
     if (!this.fxPreviewTilt.checked) {
       this.fxPreviewTiltTargetX = 0;
@@ -6106,8 +6162,15 @@ export class App {
 
     this.fxPreviewStage.style.transform = `perspective(900px) rotateX(${this.fxPreviewTiltCurrentX.toFixed(2)}deg) rotateY(${this.fxPreviewTiltCurrentY.toFixed(2)}deg)`;
 
-    ctx.clearRect(0, 0, this.fxPreviewCanvas.width, this.fxPreviewCanvas.height);
-    ctx.drawImage(base, 0, 0, this.fxPreviewCanvas.width, this.fxPreviewCanvas.height);
+    const elapsed = now - this.fxPreviewStartTime;
+    if (this.fxPreviewAnimatedScene) {
+      this.drawFxPreviewAnimatedSceneBase(ctx, elapsed);
+    } else {
+      const base = this.fxPreviewBaseCanvas;
+      if (!base) return;
+      ctx.clearRect(0, 0, this.fxPreviewCanvas.width, this.fxPreviewCanvas.height);
+      ctx.drawImage(base, 0, 0, this.fxPreviewCanvas.width, this.fxPreviewCanvas.height);
+    }
 
     if (this.fxPreviewEnable.checked) {
       const lightIntensity = this.getFxPreviewLightIntensity();
@@ -6115,7 +6178,7 @@ export class App {
       drawExportHoloOverlay(
         ctx,
         this.fxPreviewCanvas,
-        now - this.fxPreviewStartTime,
+        elapsed,
         lightIntensity,
         holoIntensity,
         this.fxPreviewTiltCurrentX,
@@ -6222,6 +6285,142 @@ export class App {
         if (rendered) sizeMap.set(slot, { w: rendered.width, h: rendered.height });
       }
       return sizeMap;
+    }
+
+    private isFxPreviewRenderableSlot(slot: Slot): boolean {
+      if (!slot.visible) return false;
+      if (
+        slot.type === 'text'
+        || slot.type === 'full-card'
+        || slot.spriteUrl === 'pet-bar:'
+        || (slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:')
+      ) {
+        return !!slot.gifFrames && slot.gifFrames.length > 0;
+      }
+      return !!slot.spriteUrl;
+    }
+
+    private hasVisibleAnimatedSceneSlots(slots: Slot[]): boolean {
+      return slots.some(slot => (
+        this.isFxPreviewRenderableSlot(slot)
+        && !!slot.isAnimated
+        && !!slot.gifFrames
+        && slot.gifFrames.length > 1
+      ));
+    }
+
+    private getFxPreviewTrackFrameIndex(track: FxPreviewAnimatedTrack, timeMs: number): number {
+      if (track.durationMs <= 0 || track.cumulativeEndsMs.length === 0) return 0;
+      const local = ((timeMs % track.durationMs) + track.durationMs) % track.durationMs;
+      for (let i = 0; i < track.cumulativeEndsMs.length; i++) {
+        if (local < track.cumulativeEndsMs[i]) return i;
+      }
+      return track.cumulativeEndsMs.length - 1;
+    }
+
+    private async buildFxPreviewAnimatedScene(slots: Slot[]): Promise<FxPreviewAnimatedScene | null> {
+      const FULL = this.renderSize;
+      const SAFE_PAD = 24;
+      const sizeMap = new Map<Slot, { w: number; h: number }>();
+      const layers: FxPreviewPreparedLayer[] = [];
+
+      for (const slot of slots) {
+        if (!this.isFxPreviewRenderableSlot(slot)) continue;
+
+        if (slot.isAnimated && slot.gifFrames && slot.gifFrames.length > 1) {
+          const renderedFrames: HTMLCanvasElement[] = [];
+          const cumulativeEndsMs: number[] = [];
+          let elapsed = 0;
+
+          for (let i = 0; i < slot.gifFrames.length; i++) {
+            const frame = slot.gifFrames[i];
+            if (
+              !frame
+              || !(frame.canvas instanceof HTMLCanvasElement)
+              || frame.canvas.width <= 0
+              || frame.canvas.height <= 0
+            ) {
+              continue;
+            }
+            const rendered = await renderSlot(slot, i);
+            if (!rendered || rendered.width <= 0 || rendered.height <= 0) continue;
+            renderedFrames.push(rendered);
+            const delay = Number.isFinite(frame.delay) ? Math.round(frame.delay) : this.DEFAULT_ANIM_FRAME_DELAY;
+            elapsed += Math.max(20, delay);
+            cumulativeEndsMs.push(elapsed);
+          }
+
+          if (renderedFrames.length >= 2 && elapsed > 0) {
+            const maxW = Math.max(...renderedFrames.map(frame => frame.width));
+            const maxH = Math.max(...renderedFrames.map(frame => frame.height));
+            sizeMap.set(slot, { w: maxW, h: maxH });
+            layers.push({
+              slot,
+              animatedTrack: {
+                frames: renderedFrames,
+                cumulativeEndsMs,
+                durationMs: elapsed,
+              },
+            });
+            continue;
+          }
+
+          if (renderedFrames.length === 1) {
+            sizeMap.set(slot, { w: renderedFrames[0].width, h: renderedFrames[0].height });
+            layers.push({ slot, staticCanvas: renderedFrames[0] });
+            continue;
+          }
+        }
+
+        const gifIdx = slot.isAnimated && slot.gifFrames
+          ? Math.max(0, Math.min(slot._gifFrameIdx ?? 0, slot.gifFrames.length - 1))
+          : undefined;
+        const rendered = await renderSlot(slot, gifIdx);
+        if (!rendered || rendered.width <= 0 || rendered.height <= 0) continue;
+        sizeMap.set(slot, { w: rendered.width, h: rendered.height });
+        layers.push({ slot, staticCanvas: rendered });
+      }
+
+      if (layers.length === 0 || sizeMap.size === 0) return null;
+      const bounds = this.computeCompositeBounds(sizeMap, FULL, SAFE_PAD);
+      const maxDim = Math.max(bounds.w, bounds.h);
+      const previewScale = maxDim > this.FX_PREVIEW_MAX_DIM ? this.FX_PREVIEW_MAX_DIM / maxDim : 1;
+      const previewWidth = Math.max(1, Math.round(bounds.w * previewScale));
+      const previewHeight = Math.max(1, Math.round(bounds.h * previewScale));
+
+      return {
+        layers,
+        bounds,
+        previewScale,
+        previewWidth,
+        previewHeight,
+      };
+    }
+
+    private drawFxPreviewAnimatedSceneBase(ctx: CanvasRenderingContext2D, elapsedMs: number): void {
+      const scene = this.fxPreviewAnimatedScene;
+      if (!scene) return;
+      const { layers, bounds, previewScale } = scene;
+      const fullCenter = this.renderSize * 0.5;
+
+      ctx.clearRect(0, 0, this.fxPreviewCanvas.width, this.fxPreviewCanvas.height);
+      for (const layer of layers) {
+        const source = layer.animatedTrack
+          ? layer.animatedTrack.frames[this.getFxPreviewTrackFrameIndex(layer.animatedTrack, elapsedMs)]
+          : layer.staticCanvas;
+        if (!source) continue;
+
+        const slot = layer.slot;
+        const scale = this.getEffectiveScale(slot) * previewScale;
+        const centerX = (fullCenter + slot.position.x - bounds.x) * previewScale;
+        const centerY = (fullCenter + slot.position.y - bounds.y) * previewScale;
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.rotate((slot.rotation * Math.PI) / 180);
+        ctx.scale(scale, scale);
+        ctx.drawImage(source, -source.width / 2, -source.height / 2);
+        ctx.restore();
+      }
     }
 
     private async buildCroppedCompositeCanvas(): Promise<HTMLCanvasElement> {
