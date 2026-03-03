@@ -1,0 +1,540 @@
+{
+  "_v": 1,
+  "name": "GENERICNORM",
+  "savedAt": 1772526443631,
+  "slots": [
+    {
+      "id": "slot-0",
+      "type": "full-card",
+      "spriteKey": "full-card/Pet",
+      "spriteUrl": "full-card:",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "fullCardData": {
+        "cardType": "Pet",
+        "itemName": "type name here",
+        "isLocked": false,
+        "rarity": "Common",
+        "petStr": "50",
+        "petMaxStr": "80",
+        "petStrPct": 9,
+        "petHungerPct": 100,
+        "petAge": "first",
+        "petWeight": "click",
+        "petSellPrice": "layer",
+        "petStrColor": "#0067b4",
+        "petHungerColor": "#5eac46",
+        "petStrLabelPadding": 82,
+        "petHungerLabelPadding": 82,
+        "petStrCurrentIcon": "sprite/ui/ProgressStar",
+        "petStrNextIcon": "sprite/ui/ProgressStar",
+        "petStrMaxIcon": "sprite/ui/StrengthStar",
+        "petDietSlots": [
+          {
+            "spriteKey": "sprite/plant/Apple",
+            "mutations": []
+          },
+          {
+            "spriteKey": "sprite/plant/Cacao",
+            "mutations": []
+          },
+          {
+            "spriteKey": "sprite/plant/Peach",
+            "mutations": []
+          }
+        ],
+        "petAbilityEntries": [
+          {
+            "kind": "game",
+            "id": "SeedFinderI"
+          },
+          {
+            "kind": "custom",
+            "name": "Ability",
+            "color": "#969696"
+          }
+        ]
+      },
+      "isAnimated": false
+    },
+    {
+      "id": "slot-1",
+      "type": "cosmetic",
+      "spriteKey": "blobling",
+      "spriteUrl": "blobling:",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": -0.9985815170577448,
+        "y": -98.8595701887168
+      },
+      "scale": 0.77,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "cosmeticLayers": {
+        "Bottom": "Bottom_DefaultGray",
+        "Mid": "Mid_DefaultGray",
+        "Top": "Top_DefaultGray",
+        "Expression": "Expression_Bashful"
+      },
+      "isAnimated": false
+    },
+    {
+      "id": "slot-2",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-3",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-4",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-5",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-6",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-7",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-8",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-9",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-10",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-11",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-12",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-13",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-14",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-15",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-16",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-17",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-18",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-19",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    }
+  ],
+  "activeSlotIndex": 1,
+  "thumbnail": "data:image/jpeg;base64,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"
+}

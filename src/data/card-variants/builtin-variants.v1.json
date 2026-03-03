@@ -1,0 +1,113 @@
+[
+  {
+    "id": "builtin:generic",
+    "name": "Rainbow Player Card",
+    "cardType": "Pet",
+    "scenePresetId": "generic",
+    "fullCardData": {
+      "cardType": "Pet",
+      "itemName": " ",
+      "isLocked": false,
+      "rarity": "Celestial",
+      "petStr": "350",
+      "petMaxStr": "500",
+      "petStrPct": 78,
+      "petHungerPct": 25,
+      "petAge": "FIRST",
+      "petWeight": "CLICK",
+      "petSellPrice": "LAYER",
+      "petStrColor": "#0067b4",
+      "petHungerColor": "#5eac46",
+      "petStrLabelPadding": 82,
+      "petHungerLabelPadding": 82,
+      "petStrCurrentIcon": "sprite/ui/ProgressStar",
+      "petStrNextIcon": "sprite/ui/ProgressStar",
+      "petStrMaxIcon": "sprite/ui/StrengthStar",
+      "petDietSlots": [
+        {
+          "spriteKey": "sprite/plant/Tulip",
+          "mutations": []
+        },
+        {
+          "spriteKey": "sprite/plant/Strawberry",
+          "mutations": []
+        },
+        {
+          "spriteKey": "sprite/plant/Pumpkin",
+          "mutations": []
+        }
+      ],
+      "petAbilityEntries": [
+        {
+          "kind": "game",
+          "id": "RainbowGranter"
+        }
+      ]
+    },
+    "layerRefs": [
+      "GENERIC.mgscene.json"
+    ],
+    "thumbnailRef": "GENERIC",
+    "version": 1,
+    "source": "builtin",
+    "readonly": true
+  },
+  {
+    "id": "builtin:genericnorm",
+    "name": "Player Card Variant",
+    "cardType": "Pet",
+    "scenePresetId": "genericnorm",
+    "fullCardData": {
+      "cardType": "Pet",
+      "itemName": "type name here",
+      "isLocked": false,
+      "rarity": "Common",
+      "petStr": "50",
+      "petMaxStr": "80",
+      "petStrPct": 9,
+      "petHungerPct": 100,
+      "petAge": "first",
+      "petWeight": "click",
+      "petSellPrice": "layer",
+      "petStrColor": "#0067b4",
+      "petHungerColor": "#5eac46",
+      "petStrLabelPadding": 82,
+      "petHungerLabelPadding": 82,
+      "petStrCurrentIcon": "sprite/ui/ProgressStar",
+      "petStrNextIcon": "sprite/ui/ProgressStar",
+      "petStrMaxIcon": "sprite/ui/StrengthStar",
+      "petDietSlots": [
+        {
+          "spriteKey": "sprite/plant/Apple",
+          "mutations": []
+        },
+        {
+          "spriteKey": "sprite/plant/Cacao",
+          "mutations": []
+        },
+        {
+          "spriteKey": "sprite/plant/Peach",
+          "mutations": []
+        }
+      ],
+      "petAbilityEntries": [
+        {
+          "kind": "game",
+          "id": "SeedFinderI"
+        },
+        {
+          "kind": "custom",
+          "name": "Ability",
+          "color": "#969696"
+        }
+      ]
+    },
+    "layerRefs": [
+      "GENERICNORM.mgscene.json"
+    ],
+    "thumbnailRef": "GENERICNORM",
+    "version": 1,
+    "source": "builtin",
+    "readonly": true
+  }
+]

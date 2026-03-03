@@ -1,4 +1,4 @@
-import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlot, reorderSlots, pushUndo, addSlot, MAX_SLOTS } from '../state/store';
+﻿import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlot, reorderSlots, pushUndo, addSlot, MAX_SLOTS } from '../state/store';
 import { listSavedScenes, saveNamedScene, deleteNamedScene, exportSceneJson, importSceneJson } from '../state/persistence';
 import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity, FullCardAbilityEntry, FullCardSpriteSlot, PetBarData, PetBarKind } from '../state/store';
 import { initTheme, toggleTheme } from './theme';
@@ -27,8 +27,17 @@ import { Drawer } from './drawers/drawer';
 import { BLOBLING_LAYER_ORDER } from './drawers/blobling-drawer';
 import type { BloblingLayerKey } from './drawers/blobling-drawer';
 import { MUTATION_CHIP_COLORS } from './drawers/card-drawer';
+import {
+  deleteUserVariant,
+  duplicateBuiltinToUser,
+  getBuiltinScenePreset,
+  getBuiltinScenePresetThumbnail,
+  loadAllVariants,
+  saveUserVariant,
+} from './card-variants/store';
+import type { CardVariantV1 } from './card-variants/types';
 
-// ── Hit-test content bounds ──────────────────────────────────────────────────
+// â”€â”€ Hit-test content bounds â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Cache tight bounding boxes (content only, transparent padding stripped) so
 // the canvas hit-test uses a small region rather than the full canvas size.
 // Key = renderCache key (rendered path) or spriteUrl (pre-render fallback).
@@ -38,7 +47,7 @@ const hitBoundsCache = new Map<string, { cx: number; cy: number; hw: number; hv:
 /**
  * Scan `source` for non-transparent pixels and return the tight content
  * bounding box as { cx, cy, hw, hv } (centre + half-extents in source pixels).
- * Uses a ≤128×128 downsample for speed. Returns null if the canvas is tainted
+ * Uses a â‰¤128Ã—128 downsample for speed. Returns null if the canvas is tainted
  * or the source is entirely transparent.
  */
 function scanContentBounds(
@@ -89,11 +98,39 @@ function scanContentBounds(
 }
 
 type SlotListType = 'diet' | 'crop' | 'egg' | 'petbar-diet';
+type VariantSource = 'builtin' | 'user';
+
+interface SceneGifFrameV1 {
+  id: string;
+  delayMs: number;
+  sceneSlotsSnapshot: Slot[];
+  activeSlotIndex: number;
+  thumbnail?: string;
+}
+
+interface SceneGifTimelineV1 {
+  version: 1;
+  frames: SceneGifFrameV1[];
+  activeFrameId?: string;
+  loop: boolean;
+}
+
+interface SceneGifEditorSession {
+  frames: SceneGifFrameV1[];
+  activeFrameIndex: number;
+}
+
+interface SceneGifTrack {
+  slotIndex: number;
+  delaysMs: number[];
+  cumulativeEndsMs: number[];
+  durationMs: number;
+}
 
 // MUTATION_CHIP_COLORS imported from './drawers/card-drawer'
 
 
-// (card-tinting functions removed — card PNG sprites are pre-colored per type)
+// (card-tinting functions removed â€” card PNG sprites are pre-colored per type)
 
 export class App {
   private categoryDropdown!: CustomDropdown;
@@ -119,6 +156,9 @@ export class App {
   private fxPreviewLightIntensityValue!: HTMLElement;
   private fxPreviewHoloIntensity!: HTMLInputElement;
   private fxPreviewHoloIntensityValue!: HTMLElement;
+  private fxPreviewLensFlare!: HTMLInputElement;
+  private fxPreviewFlareIntensity!: HTMLInputElement;
+  private fxPreviewFlareIntensityValue!: HTMLElement;
   private fxPreviewTilt!: HTMLInputElement;
   private fxPreviewOpen = false;
   private fxPreviewFrameId: number | null = null;
@@ -140,16 +180,24 @@ export class App {
   private groupDragIndexes: number[] = [];
   private groupDragStartPos = new Map<number, { x: number; y: number }>();
   private frameScheduler = new FrameScheduler();
-  // ── New layout refs ──
+  // â”€â”€ New layout refs â”€â”€
   private drawer!: Drawer;
   private mainEl!: HTMLElement;
   private cardTypePickerEl!: HTMLElement;
   private cardPickerCanvases = new Map<string, HTMLCanvasElement>();
+  private cardPickerVariantLists = new Map<FullCardType, HTMLElement>();
+  private cardPickerVariantToggles = new Map<FullCardType, HTMLButtonElement>();
+  private cardPickerVariantThumbToken = 0;
   private cardPickerMode: 'layers' | 'full' = 'layers';
+  private variantApplyOverlay!: HTMLElement;
+  private variantApplyTitle!: HTMLElement;
+  private variantApplyResolve: ((mode: 'append' | 'replace' | null) => void) | null = null;
   private inspectorEl!: HTMLElement;
   private browserTabsEl!: HTMLElement;
   private browserGridEl!: HTMLElement;
   private browserSearchInput!: HTMLInputElement;
+  private browserZoomInput!: HTMLInputElement;
+  private browserZoomValueEl!: HTMLElement;
   private browserCleanup: (() => void) | null = null;
   private optionsDiv!: HTMLElement;
   private tintLabel!: HTMLElement;
@@ -171,9 +219,13 @@ export class App {
   private readonly LAYERS_MAX_W = 520;
   private readonly ASSETS_MIN_W = 220;
   private readonly ASSETS_MAX_W = 560;
+  private readonly ASSETS_ZOOM_MIN = 0.75;
+  private readonly ASSETS_ZOOM_MAX = 2;
   private readonly TOOLBAR_MIN_H = 44;
   private readonly TOOLBAR_MAX_H = 140;
   private readonly RENDER_SIZE_PRESETS = [1024, 1536, 2048, 3072, 4096] as const;
+  private readonly SCENE_GIF_AUTO_MAX_DURATION_MS = 12000;
+  private readonly SCENE_GIF_AUTO_MAX_FRAMES = 180;
   private readonly WEATHER_STRIP_FRAME_WIDTH = 256;
   private readonly DEFAULT_ANIM_FRAME_DELAY = 100;
   private readonly FX_PREVIEW_MAX_DIM = 960;
@@ -181,12 +233,13 @@ export class App {
   private toolbarHeight = 52;
   private layersWidth = 280;
   private assetsWidth = 260;
+  private assetsThumbZoom = 1;
   private renderSize = 1024;
   private appRootEl: HTMLElement | null = null;
   private mobileModeQuery: MediaQueryList | null = null;
   private mobileModeChangeHandler: ((e: MediaQueryListEvent) => void) | null = null;
 
-  // ── Text layer UI ──
+  // â”€â”€ Text layer UI â”€â”€
   private textControls!: HTMLElement;     // text-layer-specific section (shown in drawer)
   private textArea!: HTMLTextAreaElement;
   private fontGroupDropdown!: CustomDropdown; // font category (MG / System / Google / Unicode)
@@ -212,18 +265,20 @@ export class App {
   private scaleGestureBaselines = new Map<number, { kind: 'text' | 'visual'; value: number }>();
   private scaleGestureActiveBaseline = 1;
 
-  // ── Scenes UI ──
+  // â”€â”€ Scenes UI â”€â”€
   private scenesListEl!: HTMLElement;
 
-  // ── Blobling Rig UI ──
+  // â”€â”€ Blobling Rig UI â”€â”€
   private bloblingControls!: HTMLElement;
   private bloblingCatDropdowns = new Map<string, CustomDropdown>();
   private bloblingAnimDropdown!: CustomDropdown;
   private bloblingRenderDebounce: ReturnType<typeof setTimeout> | null = null;
 
-  // ── Full Card layer UI ──
+  // â”€â”€ Full Card layer UI â”€â”€
   private fullCardControls!: HTMLElement;
   private fullCardTypeLabel!: HTMLElement;
+  private fullCardVariantMeta!: HTMLElement;
+  private fullCardSaveVariantBtn!: HTMLButtonElement;
   private fullCardNameInput!: HTMLInputElement;
   private fullCardRaritySelect!: HTMLSelectElement;
   private fullCardRarityRow!: HTMLElement;
@@ -302,6 +357,9 @@ export class App {
   private fcEggHatchSlots: FullCardSpriteSlot[] = [];
 
   private fullCardRenderDebounce: ReturnType<typeof setTimeout> | null = null;
+  private currentCardVariantId: string | null = null;
+  private currentCardVariantSource: VariantSource | null = null;
+  private suppressVariantForkOnce = false;
 
   // -- Standalone pet bar UI --
   private petBarControls!: HTMLElement;
@@ -326,8 +384,18 @@ export class App {
   private petBarDietSlots: FullCardSpriteSlot[] = [];
   private petBarRenderDebounce: ReturnType<typeof setTimeout> | null = null;
 
-  // ── Copy / paste clipboard ──
+  // â”€â”€ Copy / paste clipboard â”€â”€
   private copiedSlot: Partial<Slot> | null = null;
+  // â”€â”€ Scene GIF timeline editor â”€â”€
+  private sceneGifBar!: HTMLElement;
+  private sceneGifFrames!: HTMLElement;
+  private sceneGifPlayBtn!: HTMLButtonElement;
+  private sceneGifCloseBtn!: HTMLButtonElement;
+  private sceneGifStatus!: HTMLElement;
+  private sceneGifSession: SceneGifEditorSession | null = null;
+  private sceneGifTimeline: SceneGifTimelineV1 | null = null;
+  private sceneGifPlayTimer: ReturnType<typeof setTimeout> | null = null;
+  private suppressSceneGifFrameAutosave = false;
 
   constructor(container: HTMLElement) {
     initTheme();
@@ -340,14 +408,14 @@ export class App {
   }
 
   private buildUI(container: HTMLElement): void {
-    // ── Toolbar ──
+    // â”€â”€ Toolbar â”€â”€
     const tb = buildToolbar();
     this.downloadBtn = tb.downloadBtn;
 
-    tb.themeBtn.textContent = state.theme === 'dark' ? '☀' : '🌙';
+    tb.themeBtn.textContent = state.theme === 'dark' ? '\u2600' : '\uD83C\uDF19';
     tb.themeBtn.addEventListener('click', () => {
       toggleTheme();
-      tb.themeBtn.textContent = state.theme === 'dark' ? '☀' : '🌙';
+      tb.themeBtn.textContent = state.theme === 'dark' ? '\u2600' : '\uD83C\uDF19';
     });
     tb.undoBtn.addEventListener('click', () => undo());
     tb.redoBtn.addEventListener('click', () => redo());
@@ -358,6 +426,8 @@ export class App {
     tb.clearSlotBtn.addEventListener('click', () => clearSlot(state.activeSlotIndex));
     tb.resetAllBtn.addEventListener('click', () => {
       if (confirm('Reset all slots?')) {
+        this.sceneGifTimeline = null;
+        if (this.sceneGifSession) this.closeSceneGifEditor(false);
         for (let i = 0; i < state.slots.length; i++) clearSlot(i);
       }
     });
@@ -367,6 +437,7 @@ export class App {
     tb.addHungerBarBtn.addEventListener('click', () => this.addPetBarLayer('hunger'));
     tb.addStrengthBarBtn.addEventListener('click', () => this.addPetBarLayer('strength'));
     tb.addBloblingBtn.addEventListener('click', () => this.addBloblingLayer());
+    tb.editGifBtn.addEventListener('click', () => this.toggleSceneGifEditor());
 
     tb.uploadInput.addEventListener('change', async () => {
       const file = tb.uploadInput.files?.[0];
@@ -424,6 +495,8 @@ export class App {
         this.clearMultiSelection();
         state.slots = scene.slots;
         state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
+        this.sceneGifTimeline = null;
+        if (this.sceneGifSession) this.closeSceneGifEditor(false);
         bus.emit(Events.SLOT_CHANGED, null);
         bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
         bus.emit(Events.RENDER_REQUEST, null);
@@ -433,7 +506,7 @@ export class App {
       tb.sceneLoadInput.value = '';
     });
 
-    // ── Category + Sprite dropdowns (hidden singletons — browser grid renders from their data) ──
+    // â”€â”€ Category + Sprite dropdowns (hidden singletons â€” browser grid renders from their data) â”€â”€
     this.categoryDropdown = new CustomDropdown({
       showThumbs: false,
       placeholder: 'Select category\u2026',
@@ -451,14 +524,14 @@ export class App {
       onSelect: (item: DropdownItem) => this.applySpriteItem(item),
     });
 
-    // ── Drawer content: text / full-card / blobling ──
+    // â”€â”€ Drawer content: text / full-card / blobling â”€â”€
     this.textControls = el('div', { className: 'text-controls-section' });
     this.buildTextControls();
     this.fullCardControls = this.buildFullCardControls();
     this.petBarControls = this.buildPetBarControls();
     this.bloblingControls = this.buildBloblingControls();
 
-    // ── Inspector control elements (created once, reparented by syncInspector) ──
+    // â”€â”€ Inspector control elements (created once, reparented by syncInspector) â”€â”€
     this.mutationList = el('div', { className: 'mutation-chips' });
     this.tintLabel = el('label', { textContent: 'Custom Tint' }) as HTMLElement;
     this.customColor = el('input', { type: 'color', id: 'customColor', value: '#ffffff' }) as HTMLInputElement;
@@ -588,7 +661,7 @@ export class App {
       if (slot.isAnimated && slot.gifFrames) { this.startGifPreview(); } else { this.stopGifPreview(); }
     });
 
-    // ── Layout ──
+    // â”€â”€ Layout â”€â”€
     this.applyLayoutCssVars();
     this.slotContainer = el('div', { className: 'slot-grid' });
     this.inspectorEl   = el('div', { className: 'inspector' });
@@ -609,11 +682,27 @@ export class App {
     ]);
 
     // Browser column
-    const { el: browserEl, tabsEl, searchInput: bsInput, gridEl } = buildAssetBrowser();
+    const {
+      el: browserEl,
+      tabsEl,
+      searchInput: bsInput,
+      zoomInput: bzInput,
+      zoomValueEl: bzValueEl,
+      gridEl,
+    } = buildAssetBrowser();
     this.browserTabsEl     = tabsEl;
     this.browserGridEl     = gridEl;
     this.browserSearchInput = bsInput;
+    this.browserZoomInput = bzInput;
+    this.browserZoomValueEl = bzValueEl;
     bsInput.addEventListener('input', () => this.updateBrowserGrid(bsInput.value));
+    bzInput.addEventListener('input', () => {
+      const parsed = parseFloat(bzInput.value);
+      this.assetsThumbZoom = this.clampAssetsThumbZoom(parsed);
+      this.applyAssetBrowserZoom();
+      this.saveLayoutSettings();
+    });
+    this.applyAssetBrowserZoom();
 
     // Canvas column
     this.previewCanvas = document.createElement('canvas');
@@ -642,7 +731,9 @@ export class App {
 
     // Card type picker overlay (hidden until Add Card is clicked)
     this.buildCardTypePicker();
+    this.buildVariantApplyOverlay();
     this.buildFxPreviewOverlay();
+    this.buildSceneGifBar();
 
     // Drawer
     this.drawer  = new Drawer();
@@ -657,10 +748,598 @@ export class App {
     const toolbarResize = el('div', { className: 'sc2-toolbar-resize', title: 'Resize toolbar' }) as HTMLDivElement;
     this.setupToolbarResize(toolbarResize);
 
-    const appEl = el('div', { className: 'sc2-app' }, [tb.el, toolbarResize, this.mainEl]);
+    const appEl = el('div', { className: 'sc2-app' }, [tb.el, toolbarResize, this.mainEl, this.sceneGifBar]);
     this.appRootEl = appEl;
     container.append(appEl);
     this.setupMobileModeGate();
+  }
+
+  private newSceneGifFrameId(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return `frame:${crypto.randomUUID()}`;
+    }
+    return `frame:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  private cloneSlotForSceneFrame(slot: Slot): Slot {
+    return {
+      ...slot,
+      mutations: [...slot.mutations],
+      options: { ...slot.options },
+      customTint: { ...slot.customTint },
+      position: { ...slot.position },
+      cosmeticLayers: slot.cosmeticLayers ? { ...slot.cosmeticLayers } : undefined,
+      fullCardData: slot.fullCardData ? this.cloneFullCardData(slot.fullCardData) : undefined,
+      petBarData: slot.petBarData ? this.clonePetBarData(slot.petBarData) : undefined,
+      textData: slot.textData ? { ...slot.textData } : undefined,
+      gifFrames: slot.gifFrames,
+      fullCardVariantId: slot.fullCardVariantId,
+      fullCardVariantSource: slot.fullCardVariantSource,
+    };
+  }
+
+  private cloneSlotsForSceneFrame(slots: Slot[]): Slot[] {
+    return slots.map(slot => this.cloneSlotForSceneFrame(slot));
+  }
+
+  private cloneSceneGifFrame(frame: SceneGifFrameV1): SceneGifFrameV1 {
+    return {
+      id: frame.id,
+      delayMs: frame.delayMs,
+      sceneSlotsSnapshot: this.cloneSlotsForSceneFrame(frame.sceneSlotsSnapshot),
+      activeSlotIndex: frame.activeSlotIndex,
+      thumbnail: frame.thumbnail,
+    };
+  }
+
+  private createSceneGifFrameFromCurrentState(delayMs = this.DEFAULT_ANIM_FRAME_DELAY): SceneGifFrameV1 {
+    return {
+      id: this.newSceneGifFrameId(),
+      delayMs,
+      sceneSlotsSnapshot: this.cloneSlotsForSceneFrame(state.slots),
+      activeSlotIndex: state.activeSlotIndex,
+      thumbnail: this.captureSceneThumbnail(72),
+    };
+  }
+
+  private getSceneGifTracks(slots: Slot[]): SceneGifTrack[] {
+    const tracks: SceneGifTrack[] = [];
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
+      if (!slot.visible || !slot.isAnimated || !slot.gifFrames || slot.gifFrames.length < 2) continue;
+
+      const delaysMs: number[] = [];
+      for (const frame of slot.gifFrames) {
+        if (
+          !frame
+          || !(frame.canvas instanceof HTMLCanvasElement)
+          || frame.canvas.width <= 0
+          || frame.canvas.height <= 0
+        ) {
+          continue;
+        }
+        const delay = Number.isFinite(frame.delay) ? Math.round(frame.delay) : this.DEFAULT_ANIM_FRAME_DELAY;
+        delaysMs.push(Math.max(20, delay));
+      }
+
+      if (delaysMs.length < 2) continue;
+      let elapsed = 0;
+      const cumulativeEndsMs = delaysMs.map((delay) => {
+        elapsed += delay;
+        return elapsed;
+      });
+      if (elapsed <= 0) continue;
+      tracks.push({
+        slotIndex: i,
+        delaysMs,
+        cumulativeEndsMs,
+        durationMs: elapsed,
+      });
+    }
+    return tracks;
+  }
+
+  private gcdInt(a: number, b: number): number {
+    let x = Math.abs(Math.round(a));
+    let y = Math.abs(Math.round(b));
+    while (y !== 0) {
+      const next = x % y;
+      x = y;
+      y = next;
+    }
+    return x || 1;
+  }
+
+  private lcmIntCapped(a: number, b: number, cap: number): number {
+    const left = Math.max(1, Math.round(a));
+    const right = Math.max(1, Math.round(b));
+    const gcd = this.gcdInt(left, right);
+    const scaled = left / gcd;
+    const product = scaled * right;
+    if (!Number.isFinite(product) || product > cap) return cap + 1;
+    return Math.round(product);
+  }
+
+  private computeSceneGifAutoDurationMs(tracks: SceneGifTrack[]): number {
+    if (tracks.length === 0) return 0;
+    const maxCycle = Math.max(...tracks.map(track => track.durationMs));
+    let lcm = maxCycle;
+    for (const track of tracks) {
+      lcm = this.lcmIntCapped(lcm, track.durationMs, this.SCENE_GIF_AUTO_MAX_DURATION_MS);
+      if (lcm > this.SCENE_GIF_AUTO_MAX_DURATION_MS) {
+        return maxCycle;
+      }
+    }
+    return Math.max(maxCycle, lcm);
+  }
+
+  private getSceneGifTrackFrameIndex(track: SceneGifTrack, timeMs: number): number {
+    if (track.durationMs <= 0 || track.cumulativeEndsMs.length === 0) return 0;
+    const local = ((timeMs % track.durationMs) + track.durationMs) % track.durationMs;
+    for (let i = 0; i < track.cumulativeEndsMs.length; i++) {
+      if (local < track.cumulativeEndsMs[i]) return i;
+    }
+    return track.cumulativeEndsMs.length - 1;
+  }
+
+  private buildAutoSceneGifFramesFromCurrentScene():
+    { frames: SceneGifFrameV1[]; trackCount: number; clipped: boolean } | null {
+    const tracks = this.getSceneGifTracks(state.slots);
+    if (tracks.length === 0) return null;
+
+    const durationMs = this.computeSceneGifAutoDurationMs(tracks);
+    if (durationMs <= 0) return null;
+
+    const changeTimes = new Set<number>([0, durationMs]);
+    for (const track of tracks) {
+      let elapsed = 0;
+      while (elapsed < durationMs) {
+        for (const delay of track.delaysMs) {
+          elapsed += delay;
+          if (elapsed >= durationMs) break;
+          changeTimes.add(elapsed);
+        }
+      }
+    }
+
+    const sortedTimes = [...changeTimes]
+      .filter(time => Number.isFinite(time) && time >= 0 && time <= durationMs)
+      .sort((a, b) => a - b);
+    if (sortedTimes.length < 2) return null;
+
+    let frameStarts = sortedTimes.slice(0, -1);
+    let clipped = false;
+    if (frameStarts.length > this.SCENE_GIF_AUTO_MAX_FRAMES) {
+      clipped = true;
+      const sampled = new Set<number>();
+      for (let i = 0; i < this.SCENE_GIF_AUTO_MAX_FRAMES; i++) {
+        sampled.add(Math.floor((durationMs * i) / this.SCENE_GIF_AUTO_MAX_FRAMES));
+      }
+      frameStarts = [...sampled].sort((a, b) => a - b);
+      if (frameStarts.length === 0) frameStarts = [0];
+    }
+
+    const baseSlots = this.cloneSlotsForSceneFrame(state.slots);
+    const placeholderThumb = this.captureSceneThumbnail(72);
+    const frames: SceneGifFrameV1[] = [];
+
+    for (let i = 0; i < frameStarts.length; i++) {
+      const startMs = frameStarts[i];
+      const nextMs = i + 1 < frameStarts.length ? frameStarts[i + 1] : durationMs;
+      const delayMs = Math.max(20, nextMs - startMs);
+      const snapshot = this.cloneSlotsForSceneFrame(baseSlots);
+      for (const track of tracks) {
+        const slot = snapshot[track.slotIndex];
+        if (!slot) continue;
+        slot._gifFrameIdx = this.getSceneGifTrackFrameIndex(track, startMs);
+      }
+      frames.push({
+        id: this.newSceneGifFrameId(),
+        delayMs,
+        sceneSlotsSnapshot: snapshot,
+        activeSlotIndex: state.activeSlotIndex,
+        thumbnail: placeholderThumb,
+      });
+    }
+
+    return frames.length > 0 ? { frames, trackCount: tracks.length, clipped } : null;
+  }
+
+  private buildSceneGifBar(): void {
+    this.sceneGifPlayBtn = el('button', { className: 'btn-sm', textContent: 'Play' }) as HTMLButtonElement;
+    this.sceneGifPlayBtn.addEventListener('click', () => this.toggleSceneGifPlayback());
+
+    this.sceneGifCloseBtn = el('button', { className: 'btn-sm', textContent: 'Close' }) as HTMLButtonElement;
+    this.sceneGifCloseBtn.addEventListener('click', () => this.closeSceneGifEditor());
+
+    this.sceneGifFrames = el('div', { className: 'scene-gif-frames' });
+    this.sceneGifStatus = el('div', { className: 'scene-gif-status' });
+
+    this.sceneGifBar = el('div', { className: 'scene-gif-bar', style: 'display:none' }, [
+      el('div', { className: 'scene-gif-controls' }, [
+        this.sceneGifPlayBtn,
+        this.sceneGifCloseBtn,
+      ]),
+      this.sceneGifFrames,
+      this.sceneGifStatus,
+    ]);
+  }
+
+  private toggleSceneGifEditor(): void {
+    if (this.sceneGifSession) {
+      this.closeSceneGifEditor();
+    } else {
+      this.openSceneGifEditor();
+    }
+  }
+
+  private openSceneGifEditor(): void {
+    if (this.sceneGifSession) return;
+    let timelineFrames: SceneGifFrameV1[];
+    let statusText = 'Use top-right Download GIF to export timeline.';
+    if (this.sceneGifTimeline?.frames?.length) {
+      timelineFrames = this.sceneGifTimeline.frames.map(frame => this.cloneSceneGifFrame(frame));
+      if (timelineFrames.length <= 1) {
+        const autoTimeline = this.buildAutoSceneGifFramesFromCurrentScene();
+        if (autoTimeline && autoTimeline.frames.length > timelineFrames.length) {
+          timelineFrames = autoTimeline.frames;
+          statusText = autoTimeline.clipped
+            ? `Synced ${timelineFrames.length} frame(s) from ${autoTimeline.trackCount} GIF layer(s) (capped for performance).`
+            : `Synced ${timelineFrames.length} frame(s) from ${autoTimeline.trackCount} GIF layer(s).`;
+        }
+      }
+    } else {
+      const autoTimeline = this.buildAutoSceneGifFramesFromCurrentScene();
+      if (autoTimeline) {
+        timelineFrames = autoTimeline.frames;
+        statusText = autoTimeline.clipped
+          ? `Synced ${timelineFrames.length} frame(s) from ${autoTimeline.trackCount} GIF layer(s) (capped for performance).`
+          : `Synced ${timelineFrames.length} frame(s) from ${autoTimeline.trackCount} GIF layer(s).`;
+      } else {
+        timelineFrames = [this.createSceneGifFrameFromCurrentState()];
+      }
+    }
+    const activeFrameId = this.sceneGifTimeline?.activeFrameId;
+    let activeFrameIndex = 0;
+    if (activeFrameId) {
+      const idx = timelineFrames.findIndex(frame => frame.id === activeFrameId);
+      if (idx >= 0) activeFrameIndex = idx;
+    }
+
+    this.sceneGifSession = {
+      frames: timelineFrames,
+      activeFrameIndex,
+    };
+    this.sceneGifBar.style.display = 'flex';
+    this.sceneGifStatus.textContent = statusText;
+    this.refreshSceneGifFrameUi();
+    this.loadSceneGifFrame(activeFrameIndex, false);
+    this.syncDownloadBtn();
+  }
+
+  private closeSceneGifEditor(persistTimeline = true): void {
+    if (persistTimeline && this.sceneGifSession) {
+      this.captureActiveSceneGifFrameSnapshot();
+      const activeFrame = this.sceneGifSession.frames[this.sceneGifSession.activeFrameIndex];
+      this.sceneGifTimeline = {
+        version: 1,
+        frames: this.sceneGifSession.frames.map(frame => this.cloneSceneGifFrame(frame)),
+        activeFrameId: activeFrame?.id,
+        loop: true,
+      };
+    }
+    this.stopSceneGifPlayback();
+    this.sceneGifSession = null;
+    this.sceneGifBar.style.display = 'none';
+    this.sceneGifFrames.innerHTML = '';
+    this.sceneGifStatus.textContent = '';
+    this.syncDownloadBtn();
+  }
+
+  private captureActiveSceneGifFrameSnapshot(): void {
+    if (!this.sceneGifSession || this.suppressSceneGifFrameAutosave) return;
+    const frame = this.sceneGifSession.frames[this.sceneGifSession.activeFrameIndex];
+    if (!frame) return;
+    frame.sceneSlotsSnapshot = this.cloneSlotsForSceneFrame(state.slots);
+    frame.activeSlotIndex = state.activeSlotIndex;
+    frame.thumbnail = this.captureSceneThumbnail(72);
+  }
+
+  private loadSceneGifFrame(index: number, capturePrevious = true): void {
+    if (!this.sceneGifSession) return;
+    if (capturePrevious) this.captureActiveSceneGifFrameSnapshot();
+    const clamped = Math.max(0, Math.min(index, this.sceneGifSession.frames.length - 1));
+    const frame = this.sceneGifSession.frames[clamped];
+    if (!frame) return;
+
+    this.sceneGifSession.activeFrameIndex = clamped;
+    this.suppressSceneGifFrameAutosave = true;
+    state.slots = this.cloneSlotsForSceneFrame(frame.sceneSlotsSnapshot);
+    state.activeSlotIndex = Math.min(frame.activeSlotIndex, state.slots.length - 1);
+    this.suppressSceneGifFrameAutosave = false;
+
+    bus.emit(Events.SLOT_CHANGED, null);
+    bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
+    bus.emit(Events.RENDER_REQUEST, null);
+    this.refreshSceneGifFrameUi();
+  }
+
+  private addSceneGifFrame(): void {
+    if (!this.sceneGifSession) return;
+    this.captureActiveSceneGifFrameSnapshot();
+    const base = this.sceneGifSession.frames[this.sceneGifSession.activeFrameIndex];
+    if (!base) return;
+    const duplicate: SceneGifFrameV1 = {
+      id: this.newSceneGifFrameId(),
+      delayMs: base.delayMs,
+      sceneSlotsSnapshot: this.cloneSlotsForSceneFrame(base.sceneSlotsSnapshot),
+      activeSlotIndex: base.activeSlotIndex,
+      thumbnail: base.thumbnail,
+    };
+    const insertAt = this.sceneGifSession.activeFrameIndex + 1;
+    this.sceneGifSession.frames.splice(insertAt, 0, duplicate);
+    this.loadSceneGifFrame(insertAt, false);
+  }
+
+  private deleteSceneGifFrame(index: number): void {
+    if (!this.sceneGifSession) return;
+    if (this.sceneGifSession.frames.length <= 1) return;
+    this.captureActiveSceneGifFrameSnapshot();
+    this.sceneGifSession.frames.splice(index, 1);
+    const nextIndex = Math.min(index, this.sceneGifSession.frames.length - 1);
+    this.loadSceneGifFrame(nextIndex, false);
+  }
+
+  private moveSceneGifFrame(from: number, insertBefore: number): void {
+    if (!this.sceneGifSession) return;
+    if (from === insertBefore || from + 1 === insertBefore) return;
+    this.captureActiveSceneGifFrameSnapshot();
+    const frames = this.sceneGifSession.frames;
+    const [moved] = frames.splice(from, 1);
+    const adjustedInsertBefore = insertBefore > from ? insertBefore - 1 : insertBefore;
+    const clampedInsertBefore = Math.max(0, Math.min(adjustedInsertBefore, frames.length));
+    frames.splice(clampedInsertBefore, 0, moved);
+    this.sceneGifSession.activeFrameIndex = clampedInsertBefore;
+    this.refreshSceneGifFrameUi();
+  }
+
+  private toggleSceneGifPlayback(): void {
+    if (this.sceneGifPlayTimer !== null) {
+      this.stopSceneGifPlayback();
+      return;
+    }
+    if (!this.sceneGifSession || this.sceneGifSession.frames.length < 2) return;
+    this.sceneGifPlayBtn.textContent = 'Pause';
+    const step = (): void => {
+      if (!this.sceneGifSession) return;
+      const current = this.sceneGifSession.frames[this.sceneGifSession.activeFrameIndex];
+      const delay = Math.max(20, current?.delayMs ?? this.DEFAULT_ANIM_FRAME_DELAY);
+      this.sceneGifPlayTimer = setTimeout(() => {
+        if (!this.sceneGifSession) return;
+        const next = (this.sceneGifSession.activeFrameIndex + 1) % this.sceneGifSession.frames.length;
+        this.loadSceneGifFrame(next, true);
+        step();
+      }, delay);
+    };
+    step();
+  }
+
+  private stopSceneGifPlayback(): void {
+    if (this.sceneGifPlayTimer !== null) {
+      clearTimeout(this.sceneGifPlayTimer);
+      this.sceneGifPlayTimer = null;
+    }
+    if (this.sceneGifPlayBtn) this.sceneGifPlayBtn.textContent = 'Play';
+  }
+
+  private refreshSceneGifFrameUi(): void {
+    if (!this.sceneGifSession) {
+      this.sceneGifFrames.innerHTML = '';
+      return;
+    }
+    this.sceneGifFrames.innerHTML = '';
+    const active = this.sceneGifSession.activeFrameIndex;
+    const clearDropIndicators = (): void => {
+      this.sceneGifFrames.querySelectorAll('.scene-gif-frame').forEach((node) => {
+        node.classList.remove('drop-before', 'drop-after', 'dragging');
+      });
+    };
+
+    this.sceneGifSession.frames.forEach((frame, index) => {
+      const thumb = el('div', { className: 'scene-gif-frame-thumb' });
+      if (frame.thumbnail) {
+        const img = document.createElement('img');
+        img.src = frame.thumbnail;
+        img.alt = '';
+        thumb.append(img);
+      }
+
+      const delayInput = el('input', {
+        type: 'number',
+        min: '20',
+        step: '10',
+        value: String(frame.delayMs),
+        className: 'scene-gif-delay',
+      }) as HTMLInputElement;
+      delayInput.title = 'Frame delay (ms)';
+      const stopFrameSelect = (event: Event): void => {
+        event.stopPropagation();
+      };
+      delayInput.addEventListener('pointerdown', stopFrameSelect);
+      delayInput.addEventListener('mousedown', stopFrameSelect);
+      delayInput.addEventListener('click', stopFrameSelect);
+      delayInput.addEventListener('dblclick', stopFrameSelect);
+      delayInput.addEventListener('keydown', stopFrameSelect);
+      const commitDelay = (): void => {
+        frame.delayMs = Math.max(20, this.parseIntOr(delayInput.value, frame.delayMs || this.DEFAULT_ANIM_FRAME_DELAY));
+        delayInput.value = String(frame.delayMs);
+      };
+      delayInput.addEventListener('change', (event) => {
+        stopFrameSelect(event);
+        commitDelay();
+      });
+      delayInput.addEventListener('blur', commitDelay);
+      const delayWrap = el('label', { className: 'scene-gif-delay-wrap' }) as HTMLElement;
+      const delayUnit = el('span', { className: 'scene-gif-delay-unit', textContent: 'ms' }) as HTMLElement;
+      delayWrap.append(delayInput, delayUnit);
+      delayWrap.addEventListener('pointerdown', stopFrameSelect);
+      delayWrap.addEventListener('mousedown', stopFrameSelect);
+      delayWrap.addEventListener('click', stopFrameSelect);
+
+      const dupBtn = el('button', { className: 'scene-gif-frame-btn', textContent: '⧉' }) as HTMLButtonElement;
+      dupBtn.title = 'Duplicate frame';
+      dupBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.loadSceneGifFrame(index, true);
+        this.addSceneGifFrame();
+      });
+
+      const delBtn = el('button', { className: 'scene-gif-frame-btn', textContent: '✕' }) as HTMLButtonElement;
+      delBtn.title = 'Delete frame';
+      delBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.deleteSceneGifFrame(index);
+      });
+
+      const frameEl = el('div', {
+        className: `scene-gif-frame${index === active ? ' active' : ''}`,
+        draggable: 'true',
+      }) as HTMLElement;
+      const header = el('div', { className: 'scene-gif-frame-head' }, [
+        el('div', { className: 'scene-gif-frame-index', textContent: String(index + 1) }),
+        el('span', {
+          className: 'scene-gif-frame-drag-hint',
+          textContent: '↕',
+          title: 'Drag to reorder',
+        }),
+      ]);
+      const footer = el('div', { className: 'scene-gif-frame-footer' }, [
+        delayWrap,
+        el('div', { className: 'scene-gif-frame-actions' }, [dupBtn, delBtn]),
+      ]);
+      frameEl.append(header, thumb, footer);
+      frameEl.addEventListener('click', () => this.loadSceneGifFrame(index, true));
+      frameEl.addEventListener('dragstart', (event) => {
+        event.dataTransfer?.setData('text/plain', String(index));
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+        frameEl.classList.add('dragging');
+      });
+      frameEl.addEventListener('dragend', () => {
+        clearDropIndicators();
+      });
+      frameEl.addEventListener('dragover', (event) => {
+        event.preventDefault();
+        const from = this.parseIntOr(event.dataTransfer?.getData('text/plain') ?? '', -1);
+        if (from < 0 || from >= this.sceneGifSession!.frames.length || from === index) return;
+        const rect = frameEl.getBoundingClientRect();
+        const before = event.clientX < rect.left + rect.width * 0.5;
+        clearDropIndicators();
+        frameEl.classList.add(before ? 'drop-before' : 'drop-after');
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      });
+      frameEl.addEventListener('dragleave', (event) => {
+        const related = event.relatedTarget as Node | null;
+        if (related && frameEl.contains(related)) return;
+        frameEl.classList.remove('drop-before', 'drop-after');
+      });
+      frameEl.addEventListener('drop', (event) => {
+        event.preventDefault();
+        const from = this.parseIntOr(event.dataTransfer?.getData('text/plain') ?? '', -1);
+        if (from < 0 || from >= this.sceneGifSession!.frames.length) return;
+        const rect = frameEl.getBoundingClientRect();
+        const before = event.clientX < rect.left + rect.width * 0.5;
+        const insertBefore = before ? index : index + 1;
+        clearDropIndicators();
+        this.moveSceneGifFrame(from, insertBefore);
+      });
+
+      this.sceneGifFrames.append(frameEl);
+    });
+
+    const addTile = el('button', {
+      className: 'scene-gif-frame scene-gif-frame-add',
+      textContent: '+',
+      title: 'Add frame',
+    }) as HTMLButtonElement;
+    addTile.addEventListener('click', () => this.addSceneGifFrame());
+    this.sceneGifFrames.append(addTile);
+  }
+
+  private async downloadSceneTimelineGIF(
+    frames: SceneGifFrameV1[],
+    statusEl: HTMLElement = this.downloadProgress,
+    disableToolbarBtn = true,
+  ): Promise<void> {
+    if (frames.length === 0) return;
+    if (disableToolbarBtn) this.downloadBtn.disabled = true;
+    statusEl.textContent = 'Rendering...';
+
+    const prevSlots = this.cloneSlotsForSceneFrame(state.slots);
+    const prevActive = state.activeSlotIndex;
+    const FULL = this.renderSize;
+    const EXPORT_MAX = 512;
+    const renderedFrames: { canvas: HTMLCanvasElement; delay: number }[] = [];
+
+    try {
+      for (let i = 0; i < frames.length; i++) {
+        const frame = frames[i];
+        statusEl.textContent = `Rendering frame ${i + 1}/${frames.length}...`;
+        this.suppressSceneGifFrameAutosave = true;
+        state.slots = this.cloneSlotsForSceneFrame(frame.sceneSlotsSnapshot);
+        state.activeSlotIndex = Math.min(frame.activeSlotIndex, state.slots.length - 1);
+        this.suppressSceneGifFrameAutosave = false;
+
+        const frameCanvas = document.createElement('canvas');
+        frameCanvas.width = FULL;
+        frameCanvas.height = FULL;
+        await renderAll(frameCanvas);
+
+        let outCanvas = frameCanvas;
+        if (FULL > EXPORT_MAX) {
+          outCanvas = document.createElement('canvas');
+          outCanvas.width = EXPORT_MAX;
+          outCanvas.height = EXPORT_MAX;
+          outCanvas.getContext('2d')!.drawImage(frameCanvas, 0, 0, EXPORT_MAX, EXPORT_MAX);
+        }
+
+        renderedFrames.push({
+          canvas: outCanvas,
+          delay: Math.max(20, frame.delayMs || this.DEFAULT_ANIM_FRAME_DELAY),
+        });
+      }
+
+      const width = renderedFrames[0].canvas.width;
+      const height = renderedFrames[0].canvas.height;
+      statusEl.textContent = 'Encoding GIF...';
+      const blob = await encodeGif({
+        frames: renderedFrames,
+        width,
+        height,
+        onProgress: (progress) => {
+          statusEl.textContent = `Encoding GIF... ${Math.round(progress * 100)}%`;
+        },
+      });
+
+      const link = document.createElement('a');
+      link.download = 'scene-timeline.gif';
+      link.href = URL.createObjectURL(blob);
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } catch (err) {
+      console.error('[GIF] Scene timeline export failed:', err);
+      statusEl.textContent = 'GIF export failed!';
+    } finally {
+      this.suppressSceneGifFrameAutosave = true;
+      state.slots = prevSlots;
+      state.activeSlotIndex = Math.min(prevActive, state.slots.length - 1);
+      this.suppressSceneGifFrameAutosave = false;
+      bus.emit(Events.SLOT_CHANGED, null);
+      bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
+      bus.emit(Events.RENDER_REQUEST, null);
+
+      if (disableToolbarBtn) this.downloadBtn.disabled = false;
+      if (statusEl === this.downloadProgress) statusEl.textContent = '';
+    }
   }
 
   private bindEvents(): void {
@@ -674,6 +1353,7 @@ export class App {
       const slot = getActiveSlot();
       this.syncTextSlotUI(slot);
       this.syncInspector(slot);
+      this.captureActiveSceneGifFrameSnapshot();
     });
     bus.on(Events.SLOT_SELECTED, () => {
       this.sanitizeSelection();
@@ -687,6 +1367,7 @@ export class App {
       }
       this.syncTextSlotUI(slot);
       this.syncInspector(slot);
+      this.captureActiveSceneGifFrameSnapshot();
     });
     bus.on(Events.RENDER_REQUEST, () => this.render());
     bus.on(Events.DATA_LOADED, () => {
@@ -716,7 +1397,7 @@ export class App {
         }
       }
 
-      // Delete active slot — only when no text input is focused
+      // Delete active slot â€” only when no text input is focused
       if (!inInput && (e.key === 'Delete' || e.key === 'Backspace')) {
         e.preventDefault();
         clearSlot(state.activeSlotIndex);
@@ -727,11 +1408,11 @@ export class App {
     this.setupCanvasDrag();
   }
 
-  // ── Text Layer ──────────────────────────────────────────────────────────────
+  // â”€â”€ Text Layer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   /** Build all text-layer control DOM elements (called once in buildUI). */
   private buildTextControls(): void {
-    // ── Font group selector ──
+    // â”€â”€ Font group selector â”€â”€
     const FONT_GROUPS = [
       { id: 'mg',      label: 'MG Fonts' },
       { id: 'system',  label: 'System Fonts' },
@@ -740,7 +1421,7 @@ export class App {
     ];
     this.fontGroupDropdown = new CustomDropdown({
       showThumbs: false,
-      placeholder: 'Font group…',
+      placeholder: 'Font group...',
       onSelect: (item) => this.onFontGroupSelect(item.id, false),
     });
     this.fontGroupDropdown.setItems(
@@ -748,10 +1429,10 @@ export class App {
       'mg',
     );
 
-    // ── Font item selector ──
+    // â”€â”€ Font item selector â”€â”€
     this.fontItemDropdown = new CustomDropdown({
       showThumbs: false,
-      placeholder: 'Select font…',
+      placeholder: 'Select font...',
       onSelect: (item) => {
         const slot = getActiveSlot();
         if (slot.type !== 'text' || !slot.textData) return;
@@ -761,10 +1442,10 @@ export class App {
       },
     });
 
-    // ── Google font search ──
+    // â”€â”€ Google font search â”€â”€
     this.fontGoogleSearch = el('input', {
       type: 'text',
-      placeholder: 'Search Google Fonts…',
+      placeholder: 'Search Google Fonts...',
       className: 'font-google-search',
       style: 'display:none',
     }) as HTMLInputElement;
@@ -772,7 +1453,7 @@ export class App {
 
     this.fontGoogleSearch.addEventListener('input', () => this.onGoogleFontSearch());
 
-    // ── Unicode style selector ──
+    // â”€â”€ Unicode style selector â”€â”€
     this.unicodeDropdown = new CustomDropdown({
       showThumbs: false,
       placeholder: 'None (off)',
@@ -794,10 +1475,10 @@ export class App {
       this.unicodeDropdown.element,
     ]);
 
-    // ── Text area ──
+    // â”€â”€ Text area â”€â”€
     this.textArea = el('textarea', {
       className: 'text-input-area',
-      placeholder: 'Type your text…',
+      placeholder: 'Type your text...',
       rows: '3',
     }) as HTMLTextAreaElement;
     this.textArea.addEventListener('input', () => {
@@ -808,11 +1489,11 @@ export class App {
       this.scheduleTextRerender();
     });
 
-    // ── Alignment ──
+    // â”€â”€ Alignment â”€â”€
     const alignLabels: Array<{ id: TextData['align']; glyph: string }> = [
-      { id: 'left',   glyph: '⫷' },
-      { id: 'center', glyph: '≡' },
-      { id: 'right',  glyph: '⫸' },
+      { id: 'left',   glyph: 'L' },
+      { id: 'center', glyph: 'C' },
+      { id: 'right',  glyph: 'R' },
     ];
     this.alignBtns = alignLabels.map(({ id, glyph }) => {
       const btn = el('button', { className: 'align-btn', textContent: glyph, title: id }) as HTMLButtonElement;
@@ -832,7 +1513,7 @@ export class App {
       ...this.alignBtns,
     ]);
 
-    // ── Word wrap ──
+    // â”€â”€ Word wrap â”€â”€
     this.wordWrapToggle = el('input', { type: 'checkbox', id: 'txtWordWrap' }) as HTMLInputElement;
     this.wordWrapWidthInput = el('input', { type: 'range', min: '100', max: '900', step: '10', value: '400', id: 'txtWrapWidth' }) as HTMLInputElement;
     this.wordWrapWidthRow = el('div', { className: 'word-wrap-width-row', style: 'display:none' }, [
@@ -856,7 +1537,7 @@ export class App {
       this.scheduleTextRerender();
     });
 
-    // ── Style toggles (bold, italic) ──
+    // â”€â”€ Style toggles (bold, italic) â”€â”€
     this.boldToggle   = el('input', { type: 'checkbox', id: 'txtBold' })   as HTMLInputElement;
     this.italicToggle = el('input', { type: 'checkbox', id: 'txtItalic' }) as HTMLInputElement;
     this.boldToggle.addEventListener('change', () => {
@@ -872,7 +1553,7 @@ export class App {
       this.scheduleTextRerender();
     });
 
-    // ── MG presets ──
+    // â”€â”€ MG presets â”€â”€
     this.mgShadowToggle = el('input', { type: 'checkbox', id: 'txtMgShadow' }) as HTMLInputElement;
     this.mgShadowToggle.checked = true; // default on for textSlapper
     this.mgShadowToggle.addEventListener('change', () => {
@@ -882,7 +1563,7 @@ export class App {
       this.scheduleTextRerender();
     });
 
-    // ── Stroke ──
+    // â”€â”€ Stroke â”€â”€
     this.strokeToggle = el('input', { type: 'checkbox', id: 'txtStroke' }) as HTMLInputElement;
     this.strokeColorInput = el('input', { type: 'color', id: 'txtStrokeColor', value: '#000000' }) as HTMLInputElement;
     this.strokeWidthInput = el('input', { type: 'range', min: '1', max: '20', step: '1', value: '3', id: 'txtStrokeWidth' }) as HTMLInputElement;
@@ -957,13 +1638,13 @@ export class App {
     } else if (groupId === 'google') {
       items = [
         ...GOOGLE_FONTS_CURATED.map(f => ({ id: f.id, label: f.label })),
-        { id: 'gf-search', label: '🔍 Search all Google Fonts…' },
+        { id: 'gf-search', label: 'Search all Google Fonts...' },
       ];
       this.fontGoogleSearch.style.display = 'none';
       this.fontGoogleResults.style.display = 'none';
       this.unicodeRow.style.display = 'none';
     } else {
-      // unicode group — font item dropdown shows base fonts, unicode style is separate
+      // unicode group â€” font item dropdown shows base fonts, unicode style is separate
       items = [
         ...MG_FONTS.map(f => ({ id: f.id, label: f.label })),
         ...SYSTEM_FONTS.map(f => ({ id: f.id, label: f.label })),
@@ -1297,7 +1978,7 @@ export class App {
     updateSlot(targetIdx, {
         type: 'text',
         spriteKey: 'text-layer',
-        spriteUrl: 'text:', // sentinel — tells renderSlot this is a text slot
+        spriteUrl: 'text:', // sentinel â€” tells renderSlot this is a text slot
         textData: td,
         fullCardData: undefined,
         petBarData: undefined,
@@ -1313,7 +1994,7 @@ export class App {
     this.scheduleTextRerender();
   }
 
-  // ── Blobling Rig ─────────────────────────────────────────────────────────────
+  // â”€â”€ Blobling Rig â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // BLOBLING_LAYER_ORDER imported from './drawers/blobling-drawer':
   // ['Banner', 'Bottom', 'Mid', 'Top', 'Expression', 'Status', 'FaceProp']
 
@@ -1670,7 +2351,7 @@ export class App {
     this.refreshSlots();
   }
 
-  // ── Full Card Layer ──────────────────────────────────────────────────────────
+  // â”€â”€ Full Card Layer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   /** Build the slot picker overlay (singleton, appended to document.body). */
   private buildSlotPickerOverlay(): void {
@@ -1679,7 +2360,7 @@ export class App {
     const search = el('input', {
       type: 'text',
       className: 'fc-slot-picker-search',
-      placeholder: 'Search sprites…',
+      placeholder: 'Search sprites...',
     }) as HTMLInputElement;
 
     const catSelect = el('select', { className: 'fc-slot-picker-cat' }) as HTMLSelectElement;
@@ -1748,7 +2429,7 @@ export class App {
         if (q && !displayName.toLowerCase().includes(q)) return;
         const img = document.createElement('img');
         img.dataset.src = thumbUrl;
-        // No crossOrigin — picker thumbnails are display-only.
+        // No crossOrigin â€” picker thumbnails are display-only.
         img.alt = displayName;
         img.title = displayName;
         const div = el('div', { className: 'fc-slot-picker-item' }, [img]);
@@ -1760,7 +2441,7 @@ export class App {
         observer.observe(img);
       };
 
-      // ── Atlas frames + animations ──
+      // â”€â”€ Atlas frames + animations â”€â”€
       const showAtlas = !catFilter || !catFilter.startsWith('cosmetic:');
       if (showAtlas && sd) {
         for (const cat of sd.categories) {
@@ -1796,7 +2477,7 @@ export class App {
         }
       }
 
-      // ── Cosmetics ──
+      // â”€â”€ Cosmetics â”€â”€
       const showCosmetics = !catFilter || catFilter.startsWith('cosmetic:');
       if (showCosmetics && cd) {
         for (const cat of cd.categories) {
@@ -1949,7 +2630,7 @@ export class App {
   private makeSlotRow(listType: SlotListType, index: number, slot: FullCardSpriteSlot): HTMLElement {
     const thumb = document.createElement('img');
     thumb.className = 'full-card-slot-thumb';
-    // No crossOrigin — thumbnails are display-only, don't need canvas access.
+    // No crossOrigin â€” thumbnails are display-only, don't need canvas access.
     // crossOrigin='anonymous' would break them in production if the server
     // doesn't send CORS headers (which mg-api does not per sprite-loader.ts).
     if (slot.spriteKey) {
@@ -1970,7 +2651,7 @@ export class App {
 
     const mutBtn = el('button', {
       className: `full-card-slot-mut-btn${slot.mutations.length > 0 ? ' has-mutations' : ''}`,
-      textContent: '✦',
+      textContent: '\u2726',
       title: 'Mutations',
       type: 'button',
     }) as HTMLButtonElement;
@@ -1981,7 +2662,7 @@ export class App {
 
     const removeBtn = el('button', {
       className: 'full-card-slot-remove',
-      textContent: '×',
+      textContent: '\u00D7',
       type: 'button',
     }) as HTMLButtonElement;
     removeBtn.addEventListener('click', () => {
@@ -2131,11 +2812,18 @@ export class App {
     const RARITIES: FullCardRarity[] = ['Common', 'Uncommon', 'Rare', 'Legendary', 'Mythic', 'Divine', 'Celestial'];
 
     this.fullCardTypeLabel = el('div', { className: 'full-card-type-label', textContent: 'Full Card' }) as HTMLElement;
+    this.fullCardVariantMeta = el('div', { className: 'full-card-variant-meta', textContent: 'Variant: Default' }) as HTMLElement;
+    this.fullCardSaveVariantBtn = el('button', {
+      type: 'button',
+      className: 'btn-sm',
+      textContent: 'Save as Variant',
+    }) as HTMLButtonElement;
+    this.fullCardSaveVariantBtn.addEventListener('click', () => this.saveActiveFullCardAsVariant());
 
     this.fullCardNameInput = el('input', { type: 'text', placeholder: 'Item name...' }) as HTMLInputElement;
     this.fullCardNameInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
-    // ── Pet section ──
+    // â”€â”€ Pet section â”€â”€
     this.fullCardRaritySelect = el('select') as HTMLSelectElement;
     for (const r of RARITIES) {
       this.fullCardRaritySelect.append(el('option', { value: r, textContent: r }));
@@ -2292,7 +2980,7 @@ export class App {
       el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Abilities' }), abilityWrap]),
     ]);
 
-    // ── Plant section ──
+    // â”€â”€ Plant section â”€â”€
     this.fullCardPlantSlotCountInput = el('input', { type: 'text', value: '1' }) as HTMLInputElement;
     this.fullCardPlantSlotCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
@@ -2320,7 +3008,7 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Crop Sell Price' }), this.fullCardPlantCropSellInput]),
     ]);
 
-    // ── Crop section ──
+    // â”€â”€ Crop section â”€â”€
     this.fullCardCropSlotList = el('div', { className: 'full-card-slot-list' });
 
     this.fullCardCropWeightInput = el('input', { type: 'text', placeholder: '0 kg' }) as HTMLInputElement;
@@ -2336,7 +3024,7 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Sell Price' }), this.fullCardCropSellInput]),
     ]);
 
-    // ── Seed section ──
+    // â”€â”€ Seed section â”€â”€
     this.fullCardSeedCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
     this.fullCardSeedCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
@@ -2352,7 +3040,7 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Rarity' }), this.fullCardSeedRaritySelect]),
     ]);
 
-    // ── Egg section ──
+    // â”€â”€ Egg section â”€â”€
     this.fullCardEggCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
     this.fullCardEggCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
@@ -2372,7 +3060,7 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Rainbow Rate' }), this.fullCardEggRainbowRateInput]),
     ]);
 
-    // ── Tool section ──
+    // â”€â”€ Tool section â”€â”€
     this.fullCardToolCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
     this.fullCardToolCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
@@ -2386,7 +3074,7 @@ export class App {
       el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Description' }), this.fullCardToolDescInput]),
     ]);
 
-    // ── Decor section ──
+    // â”€â”€ Decor section â”€â”€
     this.fullCardDecorCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
     this.fullCardDecorCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
@@ -2395,7 +3083,7 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Count' }), this.fullCardDecorCountInput]),
     ]);
 
-    // ── Shared: mutations (all card types) ──
+    // â”€â”€ Shared: mutations (all card types) â”€â”€
     this.fullCardItemMutationsContainer = el('div', { className: 'full-card-mutations-wrap' });
     for (const id of Object.keys(FILTERS)) {
       const chip = el('span', {
@@ -2420,11 +3108,11 @@ export class App {
       this.fullCardItemMutationsContainer.append(chip);
     }
 
-    // ── Shared: locked toggle ──
+    // â”€â”€ Shared: locked toggle â”€â”€
     this.fullCardLockedCheck = el('input', { type: 'checkbox' }) as HTMLInputElement;
     this.fullCardLockedCheck.addEventListener('change', () => this.scheduleFullCardRerender());
 
-    // ── Assemble ──
+    // â”€â”€ Assemble â”€â”€
     const mutationsSection = el('div', { className: 'full-card-section' }, [
       el('div', { className: 'full-card-section-title', textContent: 'Mutations' }),
       this.fullCardItemMutationsContainer,
@@ -2433,6 +3121,8 @@ export class App {
     const section = el('div', { className: 'full-card-controls-section' });
     section.append(
       this.fullCardTypeLabel,
+      this.fullCardVariantMeta,
+      el('div', { className: 'full-card-variant-actions' }, [this.fullCardSaveVariantBtn]),
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Name' }), this.fullCardNameInput]),
       el('label', { className: 'full-card-locked-wrap' }, [this.fullCardLockedCheck, document.createTextNode(' Locked')]),
       this.fullCardPetSection,
@@ -2486,7 +3176,7 @@ export class App {
     const removeBtn = el('button', {
       type: 'button',
       className: 'full-card-chip-remove',
-      textContent: '×',
+      textContent: '\u00D7',
     }) as HTMLButtonElement;
     const chip = el('span', { className: 'full-card-ability-chip' }, [
       document.createTextNode(name),
@@ -2521,7 +3211,7 @@ export class App {
     const removeBtn = el('button', {
       type: 'button',
       className: 'full-card-ability-remove',
-      textContent: '×',
+      textContent: '\u00D7',
       title: 'Remove ability',
     }) as HTMLButtonElement;
 
@@ -2568,6 +3258,9 @@ export class App {
   private syncFullCardUI(slot: Slot): void {
     const data = slot.fullCardData;
     if (!data) return;
+    this.currentCardVariantId = slot.fullCardVariantId ?? null;
+    this.currentCardVariantSource = slot.fullCardVariantSource ?? null;
+    this.syncFullCardVariantMeta();
 
     this.fullCardTypeLabel.textContent = `${data.cardType} Card`;
     this.fullCardNameInput.value = data.itemName ?? data.cardType;
@@ -2738,6 +3431,411 @@ export class App {
     }
 
     return result;
+  }
+
+  private cloneFullCardData(data: FullCardData): FullCardData {
+    return {
+      ...data,
+      petAbilityEntries: data.petAbilityEntries?.map(entry => ({ ...entry })),
+      petDietSlots: data.petDietSlots?.map(slot => ({ ...slot, mutations: [...slot.mutations] })),
+      cropSlots: data.cropSlots?.map(slot => ({ ...slot, mutations: [...slot.mutations] })),
+      eggHatchSlots: data.eggHatchSlots?.map(slot => ({ ...slot, mutations: [...slot.mutations] })),
+    };
+  }
+
+  private getCardVariantsByType(cardType: FullCardType): CardVariantV1[] {
+    return loadAllVariants()
+      .filter(variant => variant.cardType === cardType)
+      .sort((a, b) => {
+        if (a.source !== b.source) return a.source === 'builtin' ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+  }
+
+  private findCardVariantById(id: string | null | undefined): CardVariantV1 | null {
+    if (!id) return null;
+    return loadAllVariants().find(variant => variant.id === id) ?? null;
+  }
+
+  private syncFullCardVariantMeta(): void {
+    if (!this.fullCardVariantMeta) return;
+    if (this.fullCardSaveVariantBtn) {
+      this.fullCardSaveVariantBtn.textContent = this.currentCardVariantSource === 'builtin'
+        ? 'Duplicate + Save'
+        : 'Save as Variant';
+    }
+    if (!this.currentCardVariantId || !this.currentCardVariantSource) {
+      this.fullCardVariantMeta.textContent = 'Variant: Default';
+      return;
+    }
+    const variant = this.findCardVariantById(this.currentCardVariantId);
+    if (!variant) {
+      this.fullCardVariantMeta.textContent = 'Variant: Default';
+      return;
+    }
+    const source = variant.source === 'builtin' ? 'Shipped' : 'My Variant';
+    this.fullCardVariantMeta.textContent = `Variant: ${variant.name} (${source})`;
+  }
+
+  private saveActiveFullCardAsVariant(): void {
+    const slot = getActiveSlot();
+    if (slot.type !== 'full-card' || !slot.fullCardData) return;
+
+    const baseline = this.readFullCardDataFromUI(slot.fullCardData);
+    const defaultName = this.currentCardVariantSource === 'user'
+      ? (this.findCardVariantById(this.currentCardVariantId)?.name ?? baseline.itemName ?? baseline.cardType)
+      : `${baseline.itemName ?? baseline.cardType} Variant`;
+    const name = prompt('Variant name', defaultName);
+    if (!name) return;
+
+    const updateId = this.currentCardVariantSource === 'user' ? this.currentCardVariantId ?? undefined : undefined;
+    const saved = saveUserVariant({
+      id: updateId,
+      name,
+      cardType: baseline.cardType,
+      fullCardData: this.cloneFullCardData(baseline),
+    });
+
+    updateSlotSilent(state.activeSlotIndex, {
+      fullCardData: this.cloneFullCardData(saved.fullCardData),
+      fullCardVariantId: saved.id,
+      fullCardVariantSource: 'user',
+    });
+    this.currentCardVariantId = saved.id;
+    this.currentCardVariantSource = 'user';
+    this.syncFullCardVariantMeta();
+    this.refreshCardPickerVariantLists();
+    this.scheduleFullCardRerender();
+  }
+
+  private ensureEditableActiveFullCardVariant(): void {
+    if (this.suppressVariantForkOnce) {
+      this.suppressVariantForkOnce = false;
+      return;
+    }
+    const slot = getActiveSlot();
+    if (slot.type !== 'full-card' || !slot.fullCardData) return;
+    if (slot.fullCardVariantSource !== 'builtin' || !slot.fullCardVariantId) return;
+    const copied = duplicateBuiltinToUser(slot.fullCardVariantId, `${slot.fullCardData.itemName} Copy`);
+    if (!copied) return;
+    slot.fullCardVariantId = copied.id;
+    slot.fullCardVariantSource = 'user';
+    this.currentCardVariantId = copied.id;
+    this.currentCardVariantSource = 'user';
+    this.syncFullCardVariantMeta();
+    this.refreshCardPickerVariantLists();
+  }
+
+  private slotHasRenderableContent(slot: Slot): boolean {
+    if (slot.type === 'text') return slot.spriteUrl === 'text:' || !!slot.textData;
+    if (slot.type === 'full-card') return slot.spriteUrl === 'full-card:' || !!slot.fullCardData;
+    if (slot.type === 'cosmetic') return slot.spriteUrl === 'blobling:' || !!slot.cosmeticLayers;
+    if (slot.spriteUrl === 'pet-bar:') return !!slot.petBarData;
+    return !!slot.spriteUrl;
+  }
+
+  private buildVariantSceneSnapshot(
+    sceneSlots: Slot[],
+    sceneActiveIndex: number,
+    variant: CardVariantV1,
+  ): { slots: Slot[]; activeSlotIndex: number } {
+    const mapped = sceneSlots
+      .map((slot, originalIndex) => ({
+        slot: this.cloneSlotForSceneFrame(slot),
+        originalIndex,
+      }))
+      .filter(entry => this.slotHasRenderableContent(entry.slot));
+
+    for (const entry of mapped) {
+      if (entry.slot.type !== 'full-card') continue;
+      entry.slot.fullCardVariantId = variant.id;
+      entry.slot.fullCardVariantSource = variant.source;
+    }
+
+    if (mapped.length === 0) return { slots: [], activeSlotIndex: 0 };
+    const activeInMapped = mapped.findIndex(entry => entry.originalIndex === sceneActiveIndex);
+    const activeSlotIndex = activeInMapped >= 0 ? activeInMapped : 0;
+    return {
+      slots: mapped.map(entry => entry.slot),
+      activeSlotIndex,
+    };
+  }
+
+  private applySceneBackedVariant(variant: CardVariantV1, mode: 'append' | 'replace'): void {
+    if (!variant.scenePresetId) return;
+    const scenePreset = getBuiltinScenePreset(variant.scenePresetId);
+    if (!scenePreset) {
+      alert('Scene preset not found for this variant.');
+      return;
+    }
+
+    const snapshot = this.buildVariantSceneSnapshot(scenePreset.slots, scenePreset.activeSlotIndex, variant);
+    if (snapshot.slots.length === 0) {
+      alert('This scene preset has no renderable layers.');
+      return;
+    }
+
+    if (mode === 'append') {
+      const available = Math.max(0, MAX_SLOTS - state.slots.length);
+      if (available <= 0) {
+        alert(`Cannot append variant scene: max ${MAX_SLOTS} layers reached.`);
+        return;
+      }
+    }
+
+    pushUndo();
+    this.clearMultiSelection();
+    this.sceneGifTimeline = null;
+    if (this.sceneGifSession) this.closeSceneGifEditor(false);
+
+    if (mode === 'replace') {
+      const nextSlots = snapshot.slots.slice(0, MAX_SLOTS);
+      state.slots = nextSlots;
+      state.activeSlotIndex = Math.min(snapshot.activeSlotIndex, state.slots.length - 1);
+    } else {
+      const appendStart = state.slots.length;
+      const available = Math.max(0, MAX_SLOTS - appendStart);
+      const appended = snapshot.slots.slice(0, available);
+      state.slots = [...state.slots, ...appended];
+      const targetActive = appendStart + Math.min(snapshot.activeSlotIndex, appended.length - 1);
+      state.activeSlotIndex = Math.min(targetActive, state.slots.length - 1);
+      if (snapshot.slots.length > appended.length) {
+        alert(`Variant scene was trimmed to ${appended.length} layer(s) due to max layer limit.`);
+      }
+    }
+
+    bus.emit(Events.SLOT_CHANGED, null);
+    bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
+    bus.emit(Events.RENDER_REQUEST, null);
+    this.rerenderAllSpecialSlots().catch(err => console.error('[Card] Scene-backed variant re-render failed:', err));
+  }
+
+  private async buildVariantPreviewThumb(variant: CardVariantV1): Promise<HTMLCanvasElement | null> {
+    const version = this.getUiSpriteVersion();
+    const v = version ? `?v=${version}` : '';
+    const base = 'https://mg-api.ariedam.fr/assets/sprites/ui';
+    const cardType = variant.fullCardData.cardType;
+
+    type LayerSrc = HTMLImageElement | HTMLCanvasElement;
+    const getW = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.width : s.naturalWidth;
+    const getH = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.height : s.naturalHeight;
+
+    const [bottom, middle] = await Promise.all([
+      this.loadSpriteLayer(`${cardType}CardBottom`, `${base}/${cardType}CardBottom.png${v}`),
+      this.loadSpriteLayer(`${cardType}CardMiddle`, `${base}/${cardType}CardMiddle.png${v}`),
+    ]);
+    if (!bottom && !middle) return null;
+
+    const layers = [bottom, middle].filter((layer): layer is LayerSrc => !!layer);
+    const width = Math.max(...layers.map(getW));
+    const height = Math.max(...layers.map(getH));
+    if (width <= 0 || height <= 0) return null;
+
+    const full = document.createElement('canvas');
+    full.width = width;
+    full.height = height;
+    const fctx = full.getContext('2d');
+    if (!fctx) return null;
+    for (const layer of layers) {
+      fctx.drawImage(layer as CanvasImageSource, (width - getW(layer)) / 2, (height - getH(layer)) / 2);
+    }
+    await drawFullCardStats(full, this.cloneFullCardData(variant.fullCardData), []);
+
+    const thumb = document.createElement('canvas');
+    thumb.width = 40;
+    thumb.height = 56;
+    const tctx = thumb.getContext('2d');
+    if (!tctx) return null;
+    const scale = Math.max(thumb.width / full.width, thumb.height / full.height);
+    const dw = full.width * scale;
+    const dh = full.height * scale;
+    tctx.drawImage(full, (thumb.width - dw) / 2, (thumb.height - dh) / 2, dw, dh);
+    return thumb;
+  }
+
+  private async buildScenePresetPreviewThumb(scenePresetId: string): Promise<HTMLCanvasElement | null> {
+    const preset = getBuiltinScenePreset(scenePresetId);
+    if (!preset) return null;
+
+    const FULL = this.renderSize;
+    const SAFE_PAD = 24;
+    const sizeMap = new Map<Slot, { w: number; h: number }>();
+    const renderedMap = new Map<Slot, HTMLCanvasElement>();
+
+    for (const slot of preset.slots) {
+      if (!slot.visible || !this.slotHasRenderableContent(slot)) continue;
+      const gifIdx = slot.isAnimated && slot.gifFrames ? (slot._gifFrameIdx ?? 0) : undefined;
+      const rendered = await renderSlot(slot, gifIdx);
+      if (!rendered) continue;
+      renderedMap.set(slot, rendered);
+      sizeMap.set(slot, { w: rendered.width, h: rendered.height });
+    }
+
+    if (renderedMap.size === 0) return null;
+    const bounds = this.computeCompositeBounds(sizeMap, FULL, SAFE_PAD);
+    const full = document.createElement('canvas');
+    full.width = FULL;
+    full.height = FULL;
+    const fctx = full.getContext('2d');
+    if (!fctx) return null;
+
+    for (const slot of preset.slots) {
+      const rendered = renderedMap.get(slot);
+      if (!rendered) continue;
+      const scale = this.getEffectiveScale(slot);
+      fctx.save();
+      fctx.translate(FULL / 2 + slot.position.x, FULL / 2 + slot.position.y);
+      fctx.rotate((slot.rotation * Math.PI) / 180);
+      fctx.scale(scale, scale);
+      fctx.drawImage(rendered, -rendered.width / 2, -rendered.height / 2);
+      fctx.restore();
+    }
+
+    const thumb = document.createElement('canvas');
+    thumb.width = 40;
+    thumb.height = 56;
+    const tctx = thumb.getContext('2d');
+    if (!tctx) return null;
+    const scale = Math.max(thumb.width / bounds.w, thumb.height / bounds.h);
+    const dw = bounds.w * scale;
+    const dh = bounds.h * scale;
+    tctx.drawImage(
+      full,
+      bounds.x,
+      bounds.y,
+      bounds.w,
+      bounds.h,
+      (thumb.width - dw) / 2,
+      (thumb.height - dh) / 2,
+      dw,
+      dh,
+    );
+    return thumb;
+  }
+
+  private renderVariantThumbAsync(
+    container: HTMLElement,
+    variant: CardVariantV1,
+    token: number,
+  ): void {
+    if (variant.scenePresetId) {
+      const sceneThumb = getBuiltinScenePresetThumbnail(variant.scenePresetId);
+      this.buildScenePresetPreviewThumb(variant.scenePresetId)
+        .then((thumb) => {
+          if (token !== this.cardPickerVariantThumbToken) return;
+          if (!thumb && sceneThumb) {
+            const img = document.createElement('img');
+            img.src = sceneThumb;
+            img.alt = variant.name;
+            img.className = 'card-type-variant-thumb-img';
+            container.innerHTML = '';
+            container.append(img);
+            return;
+          }
+          if (!thumb) return;
+          container.innerHTML = '';
+          container.append(thumb);
+        })
+        .catch(() => {
+          if (token !== this.cardPickerVariantThumbToken || !sceneThumb) return;
+          const img = document.createElement('img');
+          img.src = sceneThumb;
+          img.alt = variant.name;
+          img.className = 'card-type-variant-thumb-img';
+          container.innerHTML = '';
+          container.append(img);
+        });
+      return;
+    }
+
+    this.buildVariantPreviewThumb(variant)
+      .then((thumb) => {
+        if (token !== this.cardPickerVariantThumbToken) return;
+        if (!container.isConnected || !thumb) return;
+        container.innerHTML = '';
+        container.append(thumb);
+      })
+      .catch(() => {
+        // keep placeholder fallback
+      });
+  }
+
+  private refreshCardPickerVariantLists(): void {
+    this.cardPickerVariantThumbToken += 1;
+    const renderToken = this.cardPickerVariantThumbToken;
+    for (const [type, list] of this.cardPickerVariantLists.entries()) {
+      list.innerHTML = '';
+      const variants = this.getCardVariantsByType(type);
+      if (variants.length === 0) {
+        const empty = el('div', { className: 'card-type-variant-empty', textContent: 'No variants yet' });
+        list.append(empty);
+        continue;
+      }
+      for (const variant of variants) {
+        const item = el('div', {
+          className: 'card-type-variant-item',
+        }) as HTMLElement;
+        const applyBtn = el('button', {
+          className: 'card-type-variant-apply',
+          type: 'button',
+        }) as HTMLButtonElement;
+        const thumb = el('span', { className: 'card-type-variant-thumb' }) as HTMLElement;
+        const name = el('span', { className: 'card-type-variant-name', textContent: variant.name }) as HTMLElement;
+        applyBtn.append(thumb, name);
+        this.renderVariantThumbAsync(thumb, variant, renderToken);
+        applyBtn.addEventListener('click', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const applyMode = await this.chooseVariantApplyMode(variant.name);
+          if (!applyMode) return;
+          this.cardTypePickerEl.style.display = 'none';
+          if (variant.source === 'builtin' && variant.scenePresetId) {
+            this.applySceneBackedVariant(variant, applyMode);
+            return;
+          }
+          if (applyMode === 'replace') {
+            this.sceneGifTimeline = null;
+            if (this.sceneGifSession) this.closeSceneGifEditor(false);
+            for (let i = 0; i < state.slots.length; i++) clearSlot(i);
+          }
+          this.addFullCardLayer(type, variant).catch(err => console.error('[Card] Variant add failed:', err));
+        });
+        item.append(applyBtn);
+        if (variant.source === 'user') {
+          const delBtn = el('button', {
+            className: 'card-type-variant-delete',
+            type: 'button',
+            textContent: 'X',
+            title: `Delete variant "${variant.name}"`,
+          }) as HTMLButtonElement;
+          delBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!confirm(`Delete variant "${variant.name}"?`)) return;
+            if (!deleteUserVariant(variant.id)) return;
+            if (this.currentCardVariantSource === 'user' && this.currentCardVariantId === variant.id) {
+              this.currentCardVariantId = null;
+              this.currentCardVariantSource = null;
+              this.syncFullCardVariantMeta();
+            }
+            const activeSlot = getActiveSlot();
+            if (
+              activeSlot.type === 'full-card' &&
+              activeSlot.fullCardVariantSource === 'user' &&
+              activeSlot.fullCardVariantId === variant.id
+            ) {
+              updateSlotSilent(state.activeSlotIndex, {
+                fullCardVariantId: undefined,
+                fullCardVariantSource: undefined,
+              });
+            }
+            this.refreshCardPickerVariantLists();
+          });
+          item.append(delBtn);
+        }
+        list.append(item);
+      }
+    }
   }
 
   private clonePetBarData(data: PetBarData): PetBarData {
@@ -2985,7 +4083,7 @@ export class App {
     const CARD_TYPES: FullCardType[] = ['Pet', 'Plant', 'Crop', 'Seed', 'Egg', 'Tool', 'Decor'];
     const pickerTitle = el('div', { className: 'card-type-picker-title', textContent: 'Choose card type' });
     const tiles = CARD_TYPES.map((type) => {
-      // Canvas placeholder — filled async by renderCardPickerThumbs()
+      // Canvas placeholder â€” filled async by renderCardPickerThumbs()
       const canvas = document.createElement('canvas');
       canvas.width  = 180;
       canvas.height = 240;
@@ -2994,6 +4092,7 @@ export class App {
       const tile = el('button', { className: 'card-type-tile' }) as HTMLButtonElement;
       tile.append(canvas, el('span', { className: 'card-type-tile-label', textContent: type }));
       tile.addEventListener('click', () => {
+        this.closeCardPickerVariantLists();
         this.cardTypePickerEl.style.display = 'none';
         if (this.cardPickerMode === 'full') {
           this.addFullCardLayer(type).catch(err => console.error('[Card] Full-card add failed:', err));
@@ -3001,7 +4100,34 @@ export class App {
           this.addCardLayers(type).catch(err => console.error('[Card] Layer load failed:', err));
         }
       });
-      return tile;
+
+      const variantsToggle = el('button', {
+        className: 'card-type-variants-toggle',
+      }) as HTMLButtonElement;
+      variantsToggle.title = 'Expand variants';
+      variantsToggle.setAttribute('aria-label', `Expand ${type} variants`);
+      variantsToggle.setAttribute('aria-expanded', 'false');
+      const variantsList = el('div', {
+        className: 'card-type-variants-list',
+        style: 'display:none',
+      }) as HTMLElement;
+
+      this.cardPickerVariantToggles.set(type, variantsToggle);
+      this.cardPickerVariantLists.set(type, variantsList);
+
+      variantsToggle.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const isOpen = variantsList.style.display !== 'none';
+        if (isOpen) {
+          this.closeCardPickerVariantLists();
+          return;
+        }
+        this.closeCardPickerVariantLists(type);
+        this.positionVariantListOverlay(variantsList);
+      });
+
+      return el('div', { className: 'card-type-tile-wrap' }, [tile, variantsToggle, variantsList]);
     });
 
     const cancelBtn = el('button', {
@@ -3020,9 +4146,102 @@ export class App {
       ]),
     ]);
     this.cardTypePickerEl.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      const inVariantUi = !!target?.closest('.card-type-variants-toggle, .card-type-variants-list');
+      if (!inVariantUi) this.closeCardPickerVariantLists();
       if (e.target === this.cardTypePickerEl) this.cardTypePickerEl.style.display = 'none';
     });
     document.body.appendChild(this.cardTypePickerEl);
+  }
+
+  private buildVariantApplyOverlay(): void {
+    const title = el('div', { className: 'variant-apply-title', textContent: 'Apply Variant' }) as HTMLElement;
+    const subtitle = el('div', {
+      className: 'variant-apply-subtitle',
+      textContent: 'Choose how to apply this variant preset.',
+    }) as HTMLElement;
+    const addBtn = el('button', {
+      className: 'variant-apply-btn',
+      type: 'button',
+      textContent: 'Add Layers',
+    }) as HTMLButtonElement;
+    const replaceBtn = el('button', {
+      className: 'variant-apply-btn danger',
+      type: 'button',
+      textContent: 'Replace Scene',
+    }) as HTMLButtonElement;
+    const cancelBtn = el('button', {
+      className: 'variant-apply-cancel',
+      type: 'button',
+      textContent: 'Cancel',
+    }) as HTMLButtonElement;
+
+    addBtn.addEventListener('click', () => this.resolveVariantApplyMode('append'));
+    replaceBtn.addEventListener('click', () => this.resolveVariantApplyMode('replace'));
+    cancelBtn.addEventListener('click', () => this.resolveVariantApplyMode(null));
+
+    const panel = el('div', { className: 'variant-apply-inner' }, [
+      title,
+      subtitle,
+      el('div', { className: 'variant-apply-actions' }, [addBtn, replaceBtn]),
+      cancelBtn,
+    ]);
+
+    const overlay = el('div', { className: 'variant-apply-overlay', style: 'display:none' }, [panel]) as HTMLElement;
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) this.resolveVariantApplyMode(null);
+    });
+    document.body.appendChild(overlay);
+    this.variantApplyOverlay = overlay;
+    this.variantApplyTitle = title;
+  }
+
+  private resolveVariantApplyMode(mode: 'append' | 'replace' | null): void {
+    if (!this.variantApplyOverlay) return;
+    this.variantApplyOverlay.style.display = 'none';
+    const resolver = this.variantApplyResolve;
+    this.variantApplyResolve = null;
+    resolver?.(mode);
+  }
+
+  private chooseVariantApplyMode(variantName: string): Promise<'append' | 'replace' | null> {
+    if (!this.variantApplyOverlay) return Promise.resolve(null);
+    this.variantApplyTitle.textContent = `Apply "${variantName}"`;
+    this.variantApplyOverlay.style.display = 'flex';
+    return new Promise<'append' | 'replace' | null>((resolve) => {
+      this.variantApplyResolve = resolve;
+    });
+  }
+
+  private closeCardPickerVariantLists(exceptType?: FullCardType): void {
+    for (const [type, list] of this.cardPickerVariantLists.entries()) {
+      const keepOpen = exceptType === type;
+      const toggle = this.cardPickerVariantToggles.get(type);
+      list.style.display = keepOpen ? 'grid' : 'none';
+      if (!keepOpen) list.style.transform = 'translateX(0)';
+      toggle?.classList.toggle('open', keepOpen);
+      toggle?.setAttribute('aria-expanded', keepOpen ? 'true' : 'false');
+      toggle?.closest('.card-type-tile-wrap')?.classList.toggle('variants-open', keepOpen);
+    }
+  }
+
+  private positionVariantListOverlay(list: HTMLElement): void {
+    const pickerInner = this.cardTypePickerEl.querySelector('.card-type-picker-inner') as HTMLElement | null;
+    if (!pickerInner) return;
+    list.style.transform = 'translateX(0)';
+    const listRect = list.getBoundingClientRect();
+    const innerRect = pickerInner.getBoundingClientRect();
+    const inset = 8;
+    let shiftX = 0;
+    if (listRect.right > innerRect.right - inset) {
+      shiftX -= listRect.right - (innerRect.right - inset);
+    }
+    if (listRect.left + shiftX < innerRect.left + inset) {
+      shiftX += (innerRect.left + inset) - (listRect.left + shiftX);
+    }
+    if (Math.abs(shiftX) > 0.5) {
+      list.style.transform = `translateX(${Math.round(shiftX)}px)`;
+    }
   }
 
   /** Show the card type picker in the given mode and (async) fill preview canvases. */
@@ -3034,6 +4253,15 @@ export class App {
         ? 'Choose card type (full editor)'
         : 'Choose card type';
     }
+    for (const [, btn] of this.cardPickerVariantToggles.entries()) {
+      if (mode === 'full') {
+        btn.style.display = '';
+      } else {
+        btn.style.display = 'none';
+      }
+    }
+    this.closeCardPickerVariantLists();
+    if (mode === 'full') this.refreshCardPickerVariantLists();
     this.cardTypePickerEl.style.display = 'flex';
     this.renderCardPickerThumbs().catch(() => {/* best effort */});
   }
@@ -3096,23 +4324,25 @@ export class App {
    * Load all individual sprite layers that make up a card, pixel-perfectly pre-positioned
    * using the exact layout constants from full-card-renderer.ts.
    *
-   * All cards are 500×720.  Positions are offsets from canvas centre (same coord space as
+   * All cards are 500Ã—720.  Positions are offsets from canvas centre (same coord space as
    * full-card-renderer which does ctx.translate(cardW/2, cardH/2)).
    */
   /**
    * Add a single full-card slot (type='full-card') and open the card editor drawer.
    * Mirrors the old preset behavior for users who want the live-stats editor.
    */
-  private async addFullCardLayer(type: FullCardType): Promise<void> {
+  private async addFullCardLayer(type: FullCardType, variant?: CardVariantV1): Promise<void> {
     const targetIdx = this.resolveTargetSlotIndex(0);
     if (targetIdx < 0) return;
 
-    const data = defaultFullCardData(type);
+    const data = variant ? this.cloneFullCardData(variant.fullCardData) : defaultFullCardData(type);
     updateSlot(targetIdx, {
       type:        'full-card',
       spriteKey:   `full-card/${type}`,
       spriteUrl:   'full-card:',
       fullCardData: data,
+      fullCardVariantId: variant?.id,
+      fullCardVariantSource: variant?.source,
       textData:    undefined,
       petBarData:  undefined,
       mutations:   [],
@@ -3125,26 +4355,27 @@ export class App {
     setActiveSlot(targetIdx);
     this.syncFullCardUI(state.slots[targetIdx]);
     this.drawer.open('Card Editor', this.fullCardControls);
+    this.suppressVariantForkOnce = variant?.source === 'builtin';
     this.scheduleFullCardRerender();
   }
 
   private async addCardLayers(type: FullCardType): Promise<void> {
-    // ── card dimensions (all types identical) ─────────────────────────────────
+    // â”€â”€ card dimensions (all types identical) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const CW = 500, CH = 720;
 
-    // ── layout constants (from full-card-renderer.ts) ─────────────────────────
+    // â”€â”€ layout constants (from full-card-renderer.ts) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const G5          = 8;
     const AH          = 60,  KH = 65,  XH = 0.44, HZ = 0.78;
     const JH          = 25,  RH = 88,  QM = 22;
     const LOCK_SIZE   = 75;
     const RARITY_SIZE = 64;
     const ICON_SIZE   = 70;
-    const ICON_NAT    = 88;   // all type icons are 88×88
+    const ICON_NAT    = 88;   // all type icons are 88Ã—88
     const CS          = 28;   // display size for bottom-row small icons
     const GAP         = 20;   // separator gap between bottom-row items
     const PART        = CS + 4; // space per icon+gap column
 
-    // ── natural sprite dimensions (measured live from mg-api.ariedam.fr) ──────
+    // â”€â”€ natural sprite dimensions (measured live from mg-api.ariedam.fr) â”€â”€â”€â”€â”€â”€
     const NAT = {
       Locked:      { w: 64,  h: 84  },
       RarityCommon:{ w: 55,  h: 55  },
@@ -3154,26 +4385,26 @@ export class App {
       Age:         { w: 27,  h: 32  },
     };
 
-    // ── exact positions (card-centre coords ≡ slot.position offsets from canvas centre) ──
+    // â”€â”€ exact positions (card-centre coords â‰¡ slot.position offsets from canvas centre) â”€â”€
 
-    // Type icon — top-left: drawImage at (-CW/2+G5+10, -CH/2+G5+9), size ICON_SIZE
-    const iconScale = ICON_SIZE / ICON_NAT;                   // 70/88 ≈ 0.7955
+    // Type icon â€” top-left: drawImage at (-CW/2+G5+10, -CH/2+G5+9), size ICON_SIZE
+    const iconScale = ICON_SIZE / ICON_NAT;                   // 70/88 â‰ˆ 0.7955
     const iconX     = (-CW / 2 + G5 + 10) + ICON_SIZE / 2;   // -232 + 35 = -197
     const iconY     = (-CH / 2 + G5 + 9)  + ICON_SIZE / 2;   // -343 + 35 = -308
 
-    // Lock — top-right: drawImageCentered(cx, cy, LOCK_SIZE)
+    // Lock â€” top-right: drawImageCentered(cx, cy, LOCK_SIZE)
     const lockScale = LOCK_SIZE / Math.max(NAT.Locked.w, NAT.Locked.h);  // 75/84
     const lockX     = CW / 2 - 4 - LOCK_SIZE / 2;   //  208.5
     const lockY     = -CH / 2 + 4 + LOCK_SIZE / 2;  // -318.5
 
-    // Rarity gem — bottom-left: drawImage at (x, y-dh, dw, dh) where
+    // Rarity gem â€” bottom-left: drawImage at (x, y-dh, dw, dh) where
     //   x = -CW/2+G5+15, y = CH/2-G5-17, scale = RARITY_SIZE/max(w,h)
     const rarScale  = RARITY_SIZE / Math.max(NAT.RarityCommon.w, NAT.RarityCommon.h); // 64/55
-    const rarDim    = NAT.RarityCommon.w * rarScale;                                   // ≈ 64
+    const rarDim    = NAT.RarityCommon.w * rarScale;                                   // â‰ˆ 64
     const rarX      = (-CW / 2 + G5 + 15) + rarDim / 2;   // -227 + 32 = -195
     const rarY      = (CH  / 2 - G5 - 17) - rarDim / 2;   //  335 - 32 =  303
 
-    // ── stats area positions ─────────────────────────────────────────────────
+    // â”€â”€ stats area positions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // From renderer: r = -CH/2+AH+KH = -235; n = (CH-AH*2)*XH = 264
     // nameY = r+n+JH = 54;  detailsY = nameY+RH/2+QM = 120
     // bottomOffset = CH/2-detailsY-58 = 182;  bottomRowY = 302
@@ -3183,35 +4414,35 @@ export class App {
     // barRight (showMaxLabel, k=50): rowLeft+rowWidth-50 = -195+390-50 = 145
     const barRight  = -rowWidth / 2 + rowWidth - 50;                                  // 145
 
-    // StrengthStar — right of strength bar, drawImageCentered(maxStarX, detailsY, 40)
+    // StrengthStar â€” right of strength bar, drawImageCentered(maxStarX, detailsY, 40)
     //   maxStarX = barRight + 36  (non-fully-grown: shows next + max)
     const strStarSize  = 40;
     const strStarScale = strStarSize / Math.max(NAT.StrengthStar.w, NAT.StrengthStar.h);
     const strStarX     = barRight + 36;  // 181
 
-    // Bottom-row icons: for an empty-text card startX = −(3*PART + 2*GAP)/2 = −68
+    // Bottom-row icons: for an empty-text card startX = âˆ’(3*PART + 2*GAP)/2 = âˆ’68
     //   Weight center: startX + dw/2
     //   Age    center: startX + PART + GAP + dw/2
     //   Coin   center: startX + PART*2 + GAP*2 + dw/2
-    const scW = CS / Math.max(NAT.Weight.w, NAT.Weight.h);      // 28/34 ≈ 0.824
+    const scW = CS / Math.max(NAT.Weight.w, NAT.Weight.h);      // 28/34 â‰ˆ 0.824
     const scA = CS / Math.max(NAT.Age.w,    NAT.Age.h);         // 28/32 = 0.875
-    const scC = CS / Math.max(NAT.Coin.w,   NAT.Coin.h);        // 28/95 ≈ 0.295
-    const wDw = NAT.Weight.w * scW;   // ≈ 23.9
-    const aDw = NAT.Age.w    * scA;   // ≈ 23.6
-    const cDw = NAT.Coin.w   * scC;   // ≈ 25.7
+    const scC = CS / Math.max(NAT.Coin.w,   NAT.Coin.h);        // 28/95 â‰ˆ 0.295
+    const wDw = NAT.Weight.w * scW;   // â‰ˆ 23.9
+    const aDw = NAT.Age.w    * scA;   // â‰ˆ 23.6
+    const cDw = NAT.Coin.w   * scC;   // â‰ˆ 25.7
 
-    // Pet row: weight | • | age | • | coin  (startX = −68)
+    // Pet row: weight | â€¢ | age | â€¢ | coin  (startX = âˆ’68)
     const PET_START   = -((PART * 3 + GAP * 2) / 2);
     const petWeightX  = PET_START + wDw / 2;
     const petAgeX     = PET_START + PART + GAP + aDw / 2;
     const petCoinX    = PET_START + PART * 2 + GAP * 2 + cDw / 2;
 
-    // Plant/Crop row: weight | • | coin  (startX = −42)
+    // Plant/Crop row: weight | â€¢ | coin  (startX = âˆ’42)
     const PLT_START   = -((PART * 2 + GAP) / 2);
     const pltWeightX  = PLT_START + wDw / 2;
     const pltCoinX    = PLT_START + PART + GAP + cDw / 2;
 
-    // ── URL builder ─────────────────────────────────────────────────────────
+    // â”€â”€ URL builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const version = this.getUiSpriteVersion();
     const v   = version ? `?v=${version}` : '';
     const base = 'https://mg-api.ariedam.fr/assets/sprites/ui';
@@ -3224,16 +4455,16 @@ export class App {
 
     type LayerSpec = { name: string; url: string; position: { x: number; y: number }; scale: number };
 
-    // ── assemble layer specs ─────────────────────────────────────────────────
+    // â”€â”€ assemble layer specs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const specs: LayerSpec[] = [
-      // Card frame — always centered
+      // Card frame â€” always centered
       { name: `${type}CardBottom`, url: u(`${type}CardBottom`), position: { x: 0, y: 0 }, scale: 1 },
       { name: `${type}CardMiddle`, url: u(`${type}CardMiddle`), position: { x: 0, y: 0 }, scale: 1 },
-      // Type icon — top-left
+      // Type icon â€” top-left
       { name: ICON_NAME[type], url: u(ICON_NAME[type]), position: { x: iconX, y: iconY }, scale: iconScale },
-      // Lock — top-right
+      // Lock â€” top-right
       { name: 'Locked', url: u('Locked'), position: { x: lockX, y: lockY }, scale: lockScale },
-      // Rarity gem — bottom-left
+      // Rarity gem â€” bottom-left
       { name: 'RarityCommon', url: u('RarityCommon'), position: { x: rarX, y: rarY }, scale: rarScale },
     ];
 
@@ -3355,6 +4586,7 @@ export class App {
 
   /** Debounce full-card re-renders (same pattern as text layer). */
   private scheduleFullCardRerender(): void {
+    this.ensureEditableActiveFullCardVariant();
     if (this.fullCardRenderDebounce !== null) clearTimeout(this.fullCardRenderDebounce);
     this.fullCardRenderDebounce = setTimeout(() => {
       this.fullCardRenderDebounce = null;
@@ -3369,7 +4601,7 @@ export class App {
 
     const data = this.readFullCardDataFromUI(slot.fullCardData);
     const idx  = state.activeSlotIndex;
-    // Update slot data silently (no undo push — visual refresh only)
+    // Update slot data silently (no undo push â€” visual refresh only)
     state.slots[idx].fullCardData = data;
 
     // Build layer URLs
@@ -3387,7 +4619,7 @@ export class App {
       this.loadSpriteLayer(`${cardType}CardMiddle`, `${apiBase}/${cardType}CardMiddle.png${v}`),
     ]);
 
-    // Layers drawn as-is — card PNG sprites are pre-colored per type, no JS tinting.
+    // Layers drawn as-is â€” card PNG sprites are pre-colored per type, no JS tinting.
     const layers: LayerSrc[] = layerResults.flatMap((r) => {
       if (r.status !== 'fulfilled' || r.value === null) return [];
       return [r.value];
@@ -3424,7 +4656,7 @@ export class App {
     this.refreshSlots();
   }
 
-  // ── Categories & Sprites ──
+  // â”€â”€ Categories & Sprites â”€â”€
 
   private populateCategories(): void {
     const items: DropdownItem[] = [];
@@ -3453,7 +4685,7 @@ export class App {
       }
     }
 
-    // setItems fires onSelect (→ populateSprites) if it has to auto-select.
+    // setItems fires onSelect (â†’ populateSprites) if it has to auto-select.
     // We also call populateSprites() unconditionally to handle the silent-restore case.
     this.categoryDropdown.setItems(
       items,
@@ -3482,7 +4714,7 @@ export class App {
     const sd = state.spriteData;
     const items: DropdownItem[] = [];
 
-    // Card preset / Full Card categories — build layer URLs from ui atlas
+    // Card preset / Full Card categories â€” build layer URLs from ui atlas
     if (cat === 'cards' || cat === 'full-cards') {
       const version = this.getUiSpriteVersion();
       const v = version ? `?v=${version}` : '';
@@ -3571,7 +4803,7 @@ export class App {
         }
       }
 
-      // CDN-only extras — assets that exist on the game CDN but are not in the sprite atlas.
+      // CDN-only extras â€” assets that exist on the game CDN but are not in the sprite atlas.
       // The sprite-loader proxy handles magicgarden.gg URLs identically to cosmetics.
       if (cat === 'ui' && state.gameVersion) {
         const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
@@ -3634,7 +4866,7 @@ export class App {
     spriteLoader.preloadUrls(thumbUrls);
   }
 
-  // ── Slots ──
+  // â”€â”€ Slots â”€â”€
 
   private refreshSlots(): void {
     this.sanitizeSelection();
@@ -3682,7 +4914,7 @@ export class App {
       const numEl = el('span', { className: 'slot-num', textContent: String(i + 1) });
 
       // Delete button
-      const delBtn = el('button', { className: 'slot-delete', textContent: '×', title: 'Remove slot' }) as HTMLButtonElement;
+      const delBtn = el('button', { className: 'slot-delete', textContent: '\u00D7', title: 'Remove slot' }) as HTMLButtonElement;
       delBtn.addEventListener('click', (e) => { e.stopPropagation(); clearSlot(i); });
 
       const tile = el('div', {
@@ -3760,7 +4992,7 @@ export class App {
     }
   }
 
-  // ── Mutations ──
+  // â”€â”€ Mutations â”€â”€
 
   private refreshMutations(): void {
     this.mutationList.innerHTML = '';
@@ -3795,7 +5027,7 @@ export class App {
     this.customOpacity.value = String(slot.customTint.opacity);
   }
 
-  // ── Meta ──
+  // â”€â”€ Meta â”€â”€
 
   private updateMeta(): void {
     const slot = getActiveSlot();
@@ -3806,7 +5038,7 @@ export class App {
     const muts = slot.mutations.length > 0 ? slot.mutations.join(', ') : 'None';
     if (slot.type === 'text') {
       const td = slot.textData;
-      this.metaEl.innerHTML = `<strong>Text Layer</strong> &middot; Slot ${state.activeSlotIndex + 1} &middot; Font: ${td?.fontLabel ?? '—'} &middot; ${td?.fontSize ?? 0}px`;
+      this.metaEl.innerHTML = `<strong>Text Layer</strong> &middot; Slot ${state.activeSlotIndex + 1} &middot; Font: ${td?.fontLabel ?? '-'} &middot; ${td?.fontSize ?? 0}px`;
     } else if (slot.type === 'full-card') {
       const fcd = slot.fullCardData;
       this.metaEl.innerHTML = `<strong>Full Card</strong> &middot; ${fcd?.cardType ?? '?'} Card &middot; Slot ${state.activeSlotIndex + 1}`;
@@ -3824,16 +5056,16 @@ export class App {
     }
   }
 
-  // ── Render ──
+  // â”€â”€ Render â”€â”€
 
   private async render(): Promise<void> {
     await renderAll(this.previewCanvas);
     this.drawSnapGridOverlay();
   }
 
-  // ── Canvas Drag ──
+  // â”€â”€ Canvas Drag â”€â”€
 
-  // ── Copy / paste / duplicate ──────────────────────────────────────────────
+  // â”€â”€ Copy / paste / duplicate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   private clampToolbarHeight(value: number): number {
     return Math.max(this.TOOLBAR_MIN_H, Math.min(this.TOOLBAR_MAX_H, Math.round(value)));
@@ -3845,6 +5077,24 @@ export class App {
 
   private clampAssetsWidth(value: number): number {
     return Math.max(this.ASSETS_MIN_W, Math.min(this.ASSETS_MAX_W, Math.round(value)));
+  }
+
+  private clampAssetsThumbZoom(value: number): number {
+    if (!Number.isFinite(value)) return 1;
+    return Math.max(this.ASSETS_ZOOM_MIN, Math.min(this.ASSETS_ZOOM_MAX, value));
+  }
+
+  private applyAssetBrowserZoom(): void {
+    const zoom = this.clampAssetsThumbZoom(this.assetsThumbZoom);
+    this.assetsThumbZoom = zoom;
+    if (this.browserZoomInput) this.browserZoomInput.value = zoom.toFixed(2);
+    if (this.browserZoomValueEl) this.browserZoomValueEl.textContent = `${Math.round(zoom * 100)}%`;
+    if (this.browserGridEl) {
+      const desktopSize = Math.round(52 * zoom);
+      const mobileSize = Math.round(64 * zoom);
+      this.browserGridEl.style.setProperty('--browser-thumb-size', `${desktopSize}px`);
+      this.browserGridEl.style.setProperty('--browser-thumb-size-mobile', `${mobileSize}px`);
+    }
   }
 
   private normalizeRenderSize(value: number): number {
@@ -3911,11 +5161,13 @@ export class App {
         toolbarHeight?: number;
         layersWidth?: number;
         assetsWidth?: number;
+        assetsThumbZoom?: number;
         renderSize?: number;
       };
       if (typeof parsed.toolbarHeight === 'number') this.toolbarHeight = this.clampToolbarHeight(parsed.toolbarHeight);
       if (typeof parsed.layersWidth === 'number') this.layersWidth = this.clampLayersWidth(parsed.layersWidth);
       if (typeof parsed.assetsWidth === 'number') this.assetsWidth = this.clampAssetsWidth(parsed.assetsWidth);
+      if (typeof parsed.assetsThumbZoom === 'number') this.assetsThumbZoom = this.clampAssetsThumbZoom(parsed.assetsThumbZoom);
       if (typeof parsed.renderSize === 'number') this.renderSize = this.normalizeRenderSize(parsed.renderSize);
     } catch {
       // Ignore invalid persisted layout payloads
@@ -3928,6 +5180,7 @@ export class App {
         toolbarHeight: this.toolbarHeight,
         layersWidth: this.layersWidth,
         assetsWidth: this.assetsWidth,
+        assetsThumbZoom: this.assetsThumbZoom,
         renderSize: this.renderSize,
       }));
     } catch {
@@ -4283,7 +5536,9 @@ export class App {
       visible:       slot.visible,
       gifFrames:     slot.gifFrames,
       isAnimated:    slot.isAnimated,
-      fullCardData:  slot.fullCardData  ? { ...slot.fullCardData }  : undefined,
+      fullCardData:  slot.fullCardData  ? this.cloneFullCardData(slot.fullCardData) : undefined,
+      fullCardVariantId: slot.fullCardVariantId,
+      fullCardVariantSource: slot.fullCardVariantSource,
       petBarData:    slot.petBarData    ? this.clonePetBarData(slot.petBarData) : undefined,
       textData:      slot.textData      ? { ...slot.textData }      : undefined,
       cosmeticLayers:slot.cosmeticLayers? { ...slot.cosmeticLayers }: undefined,
@@ -4336,14 +5591,14 @@ export class App {
     /**
      * Hit-test all visible slots (topmost first).
      *
-     * Stage 1 — tight bounding-box pre-filter:
+     * Stage 1 â€” tight bounding-box pre-filter:
      *   On first access, scanContentBounds() downsamples the rendered canvas to
-     *   ≤128×128 and finds the pixel-accurate content bounds (ignoring transparent
+     *   â‰¤128Ã—128 and finds the pixel-accurate content bounds (ignoring transparent
      *   padding). The result is cached in hitBoundsCache. A 8-px margin is added so
      *   the clickable region is slightly larger than the visible pixels.
      *   Fallback: full canvas bounds (if the canvas is tainted or not yet scanned).
      *
-     * Stage 2 — single-pixel alpha read:
+     * Stage 2 â€” single-pixel alpha read:
      *   Only fires for clicks that passed Stage 1. Catches SecurityError from tainted
      *   canvases and accepts the hit (Stage 1 already proved we're inside the content
      *   region in that case).
@@ -4386,7 +5641,7 @@ export class App {
               const chv = (hb.hv + MARGIN) * scale;
               if (Math.abs(localX - dx) > chw || Math.abs(localY - dy) > chv) continue;
             } else {
-              // Tainted or fully transparent — fall back to full canvas bounds
+              // Tainted or fully transparent â€” fall back to full canvas bounds
               if (Math.abs(localX) > (rendered.width / 2) * scale) continue;
               if (Math.abs(localY) > (rendered.height / 2) * scale) continue;
             }
@@ -4398,7 +5653,7 @@ export class App {
             try {
               if (ctx2d && ctx2d.getImageData(px, py, 1, 1).data[3] > 10) return i;
             } catch {
-              // Tainted canvas — bounds check passed, accept the hit
+              // Tainted canvas â€” bounds check passed, accept the hit
               return i;
             }
           } else {
@@ -4436,7 +5691,7 @@ export class App {
       const canvasY = (e.clientY - rect.top) / cssScale;
 
       const hitIdx = hitTestSlot(canvasX, canvasY);
-      if (hitIdx === null) return; // No sprite hit — don't start drag
+      if (hitIdx === null) return; // No sprite hit â€” don't start drag
       const hitWasSelected = this.isSlotSelected(hitIdx);
       if (!hitWasSelected) this.clearMultiSelection();
       if (hitIdx !== state.activeSlotIndex) setActiveSlot(hitIdx);
@@ -4488,7 +5743,7 @@ export class App {
 
     window.addEventListener('mouseup', finishDrag);
 
-    // ── Touch: single-finger drag + two-finger pinch-scale / twist-rotate ──
+    // â”€â”€ Touch: single-finger drag + two-finger pinch-scale / twist-rotate â”€â”€
 
     let pinchStartDist = 0;
     let pinchStartScale = 1;
@@ -4558,12 +5813,12 @@ export class App {
         const dy = t1.clientY - t0.clientY;
         const slot = getActiveSlot();
 
-        // Pinch → scale (clamped to slider range)
+        // Pinch â†’ scale (clamped to slider range)
         const dist = Math.hypot(dx, dy);
         slot.scale = this.clampScale(pinchStartScale * (dist / pinchStartDist));
         this.scaleInput.value = slot.scale.toFixed(3);
 
-        // Twist → rotation
+        // Twist â†’ rotation
         const angle = Math.atan2(dy, dx);
         slot.rotation = this.normalizeRotation(pinchStartRotation + (angle - pinchStartAngle) * (180 / Math.PI));
         this.rotationInput.value = slot.rotation.toFixed(1);
@@ -4576,7 +5831,7 @@ export class App {
     window.addEventListener('touchcancel', finishDrag);
   }
 
-  // ── Download ──
+  // â”€â”€ Download â”€â”€
 
   private buildFxPreviewOverlay(): void {
     this.fxPreviewCanvas = document.createElement('canvas');
@@ -4606,6 +5861,17 @@ export class App {
       value: '0.65',
     }) as HTMLInputElement;
     this.fxPreviewHoloIntensityValue = el('span', { className: 'fx-preview-value', textContent: '50%' }) as HTMLElement;
+
+    this.fxPreviewLensFlare = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    this.fxPreviewLensFlare.checked = true;
+    this.fxPreviewFlareIntensity = el('input', {
+      type: 'range',
+      min: '0',
+      max: '1',
+      step: '0.05',
+      value: '0.6',
+    }) as HTMLInputElement;
+    this.fxPreviewFlareIntensityValue = el('span', { className: 'fx-preview-value', textContent: '60%' }) as HTMLElement;
 
     this.fxPreviewTilt = el('input', { type: 'checkbox' }) as HTMLInputElement;
     this.fxPreviewTilt.checked = true;
@@ -4650,9 +5916,15 @@ export class App {
           this.fxPreviewHoloIntensity,
           this.fxPreviewHoloIntensityValue,
         ]),
+        el('label', { className: 'fx-preview-range' }, [
+          el('span', { className: 'fx-preview-range-label', textContent: 'Flare' }),
+          this.fxPreviewFlareIntensity,
+          this.fxPreviewFlareIntensityValue,
+        ]),
       ]),
       el('div', { className: 'fx-preview-toggles' }, [
         this.makeCheckLabel('Enable FX', this.fxPreviewEnable),
+        this.makeCheckLabel('Lens Flare', this.fxPreviewLensFlare),
         this.makeCheckLabel('Tilt', this.fxPreviewTilt),
         resetViewBtn,
       ]),
@@ -4674,6 +5946,7 @@ export class App {
 
     this.fxPreviewLightIntensity.addEventListener('input', () => this.syncFxPreviewIntensityLabels());
     this.fxPreviewHoloIntensity.addEventListener('input', () => this.syncFxPreviewIntensityLabels());
+    this.fxPreviewFlareIntensity.addEventListener('input', () => this.syncFxPreviewIntensityLabels());
     this.fxPreviewTilt.addEventListener('change', () => {
       if (!this.fxPreviewTilt.checked) this.resetFxPreviewTilt(false);
     });
@@ -4721,6 +5994,7 @@ export class App {
   private syncFxPreviewIntensityLabels(): void {
     this.fxPreviewLightIntensityValue.textContent = `${this.toSliderPercent(this.fxPreviewLightIntensity)}%`;
     this.fxPreviewHoloIntensityValue.textContent = `${this.toSliderPercent(this.fxPreviewHoloIntensity)}%`;
+    this.fxPreviewFlareIntensityValue.textContent = `${this.toSliderPercent(this.fxPreviewFlareIntensity)}%`;
   }
 
   private toSliderPercent(input: HTMLInputElement): number {
@@ -4756,6 +6030,8 @@ export class App {
     this.fxPreviewEnable.checked = true;
     this.setSliderToMidpoint(this.fxPreviewLightIntensity);
     this.setSliderToMidpoint(this.fxPreviewHoloIntensity);
+    this.fxPreviewFlareIntensity.value = '0.6';
+    this.fxPreviewLensFlare.checked = true;
     this.fxPreviewTilt.checked = true;
     this.syncFxPreviewIntensityLabels();
     this.resetFxPreviewTilt(true);
@@ -4834,7 +6110,7 @@ export class App {
     ctx.drawImage(base, 0, 0, this.fxPreviewCanvas.width, this.fxPreviewCanvas.height);
 
     if (this.fxPreviewEnable.checked) {
-      const lightIntensity = parseFloat(this.fxPreviewLightIntensity.value);
+      const lightIntensity = this.getFxPreviewLightIntensity();
       const holoIntensity = parseFloat(this.fxPreviewHoloIntensity.value);
       drawExportHoloOverlay(
         ctx,
@@ -4844,18 +6120,33 @@ export class App {
         holoIntensity,
         this.fxPreviewTiltCurrentX,
         this.fxPreviewTiltCurrentY,
+        this.fxPreviewLensFlare.checked,
+        parseFloat(this.fxPreviewFlareIntensity.value),
       );
     }
   }
 
+  private getFxPreviewLightIntensity(): number {
+    const raw = parseFloat(this.fxPreviewLightIntensity.value);
+    if (!Number.isFinite(raw)) return 0;
+    // Remap so 50% slider ~= prior 25% intensity.
+    return Math.max(0, raw * 0.5);
+  }
+
   private async download(): Promise<void> {
-      const hasGif = state.slots.some(s => s.visible && s.isAnimated && s.gifFrames && s.gifFrames.length > 1);
-      if (hasGif) {
-        await this.downloadGIF();
-      } else {
-        await this.downloadPNG();
-      }
+    const sceneFrames = this.sceneGifSession?.frames ?? this.sceneGifTimeline?.frames;
+    if (sceneFrames && sceneFrames.length > 1) {
+      await this.downloadSceneTimelineGIF(sceneFrames);
+      return;
     }
+
+    const hasGif = state.slots.some(s => s.visible && s.isAnimated && s.gifFrames && s.gifFrames.length > 1);
+    if (hasGif) {
+      await this.downloadGIF();
+    } else {
+      await this.downloadPNG();
+    }
+  }
 
     private getEffectiveScale(slot: Slot): number {
       return slot.type === 'text' ? 1 : slot.scale;
@@ -5128,7 +6419,7 @@ export class App {
     statusEl.textContent = '';
   }
 
-  // ── GIF Preview ──
+  // â”€â”€ GIF Preview â”€â”€
 
   private startGifPreview(): void {
     const slot = getActiveSlot();
@@ -5192,7 +6483,7 @@ export class App {
 
   /**
    * Asynchronously composite all card preset items and push the results into the
-   * dropdown list thumbnails. Runs in parallel — atlas is fetched once and cached.
+   * dropdown list thumbnails. Runs in parallel â€” atlas is fetched once and cached.
    */
   private async generateCardListThumbnails(items: DropdownItem[]): Promise<void> {
     type LayerSrc = HTMLImageElement | HTMLCanvasElement;
@@ -5329,7 +6620,7 @@ export class App {
     }
   }
 
-  // ── Helpers ──
+  // â”€â”€ Helpers â”€â”€
 
   private frameHasVisibleAlpha(canvas: HTMLCanvasElement): boolean {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -5441,8 +6732,9 @@ export class App {
 
   /** Set download button label based on whether any visible slot has an animated GIF. */
   private syncDownloadBtn(): void {
+    const hasSceneGif = (this.sceneGifSession?.frames.length ?? this.sceneGifTimeline?.frames.length ?? 0) > 1;
     const hasGif = state.slots.some(s => s.visible && s.isAnimated && s.gifFrames && s.gifFrames.length > 1);
-    this.downloadBtn.textContent = hasGif ? 'Download GIF' : 'Download PNG';
+    this.downloadBtn.textContent = hasSceneGif || hasGif ? 'Download GIF' : 'Download PNG';
   }
 
   /**
@@ -5521,22 +6813,54 @@ export class App {
     this.refreshSlots();
   }
 
-  /** Capture a small square JPEG of the current preview canvas for scene thumbnails. */
+  /** Capture a cropped square PNG of the current preview canvas for scene thumbnails. */
   private captureSceneThumbnail(size = 64): string | undefined {
     try {
       const src = this.previewCanvas;
       if (!src || src.width === 0 || src.height === 0) return undefined;
+      const bounds = scanContentBounds(src);
+      const pad = 24;
+      const minX = bounds
+        ? Math.max(0, Math.floor(bounds.cx - bounds.hw - pad))
+        : 0;
+      const minY = bounds
+        ? Math.max(0, Math.floor(bounds.cy - bounds.hv - pad))
+        : 0;
+      const maxX = bounds
+        ? Math.min(src.width, Math.ceil(bounds.cx + bounds.hw + pad))
+        : src.width;
+      const maxY = bounds
+        ? Math.min(src.height, Math.ceil(bounds.cy + bounds.hv + pad))
+        : src.height;
+      const cropW = Math.max(1, maxX - minX);
+      const cropH = Math.max(1, maxY - minY);
       const thumb = document.createElement('canvas');
       thumb.width = size;
       thumb.height = size;
-      thumb.getContext('2d')!.drawImage(src, 0, 0, size, size);
-      return thumb.toDataURL('image/jpeg', 0.8);
+      const ctx = thumb.getContext('2d');
+      if (!ctx) return undefined;
+      const scale = Math.max(size / cropW, size / cropH);
+      const drawW = cropW * scale;
+      const drawH = cropH * scale;
+      ctx.clearRect(0, 0, size, size);
+      ctx.drawImage(
+        src,
+        minX,
+        minY,
+        cropW,
+        cropH,
+        (size - drawW) / 2,
+        (size - drawH) / 2,
+        drawW,
+        drawH,
+      );
+      return thumb.toDataURL('image/png');
     } catch {
       return undefined;
     }
   }
 
-  // ── Scenes section ──────────────────────────────────────────────────────────
+  // â”€â”€ Scenes section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   private refreshScenesList(): void {
     this.scenesListEl.innerHTML = '';
@@ -5558,6 +6882,8 @@ export class App {
         this.clearMultiSelection();
         state.slots = scene.slots;
         state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
+        this.sceneGifTimeline = null;
+        if (this.sceneGifSession) this.closeSceneGifEditor(false);
         bus.emit(Events.SLOT_CHANGED, null);
         bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
         bus.emit(Events.RENDER_REQUEST, null);
@@ -5602,7 +6928,7 @@ export class App {
     });
   }
 
-  // ── End scenes section ───────────────────────────────────────────────────────
+  // â”€â”€ End scenes section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   private makeCheckLabel(text: string, input: HTMLInputElement): HTMLLabelElement {
     const label = el('label', {}, []) as HTMLLabelElement;
@@ -5610,3 +6936,4 @@ export class App {
     return label;
   }
 }
+

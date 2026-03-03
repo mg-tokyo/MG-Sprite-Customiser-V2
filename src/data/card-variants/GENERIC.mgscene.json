@@ -1,0 +1,822 @@
+{
+  "_v": 1,
+  "name": "GENERIC",
+  "savedAt": 1772526171756,
+  "slots": [
+    {
+      "id": "slot-1",
+      "type": "full-card",
+      "spriteKey": "full-card/Pet",
+      "spriteUrl": "full-card:",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "fullCardData": {
+        "cardType": "Pet",
+        "itemName": " ",
+        "isLocked": false,
+        "rarity": "Celestial",
+        "petStr": "350",
+        "petMaxStr": "500",
+        "petStrPct": 78,
+        "petHungerPct": 25,
+        "petAge": "FIRST",
+        "petWeight": "CLICK",
+        "petSellPrice": "LAYER",
+        "petStrColor": "#0067b4",
+        "petHungerColor": "#5eac46",
+        "petStrLabelPadding": 82,
+        "petHungerLabelPadding": 82,
+        "petStrCurrentIcon": "sprite/ui/ProgressStar",
+        "petStrNextIcon": "sprite/ui/ProgressStar",
+        "petStrMaxIcon": "sprite/ui/StrengthStar",
+        "petDietSlots": [
+          {
+            "spriteKey": "sprite/plant/Tulip",
+            "mutations": []
+          },
+          {
+            "spriteKey": "sprite/plant/Strawberry",
+            "mutations": []
+          },
+          {
+            "spriteKey": "sprite/plant/Pumpkin",
+            "mutations": []
+          }
+        ],
+        "petAbilityEntries": [
+          {
+            "kind": "game",
+            "id": "RainbowGranter"
+          }
+        ]
+      },
+      "isAnimated": false
+    },
+    {
+      "id": "slot-14",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-15",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-18",
+      "type": "sprite",
+      "spriteKey": "sprite/mutation/Ambercharged",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/mutations/Ambercharged.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 13.860314251750527,
+        "y": -141.3752053678554
+      },
+      "scale": 0.87,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-13",
+      "type": "sprite",
+      "spriteKey": "sprite/animation/CelestialActive",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/animations/CelestialActive-0.png?v=57",
+      "mutations": [
+        "Rainbow"
+      ],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 11.088251401400422,
+        "y": -117.81267113987948
+      },
+      "scale": 1.58,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-7",
+      "type": "sprite",
+      "spriteKey": "weather/ThunderstormAnimation",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/weather/ThunderstormAnimation.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 2.5771515202735813,
+        "y": -178.99296517765833
+      },
+      "scale": 0.25,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-8",
+      "type": "sprite",
+      "spriteKey": "weather/ThunderstormAnimation",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/weather/ThunderstormAnimation.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 62.966974180426625,
+        "y": -169.88630524898224
+      },
+      "scale": 0.25,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-24",
+      "type": "sprite",
+      "spriteKey": "weather/ThunderstormAnimation",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/weather/ThunderstormAnimation.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": -98.40823118742873,
+        "y": -166.32377102100634
+      },
+      "scale": 0.25,
+      "rotation": 352,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-9",
+      "type": "sprite",
+      "spriteKey": "weather/ThunderstormAnimation",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/weather/ThunderstormAnimation.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 93.86031425175052,
+        "y": -163.94153083080928
+      },
+      "scale": 0.25,
+      "rotation": 14,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-6",
+      "type": "sprite",
+      "spriteKey": "weather/ThunderstormAnimation",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/weather/ThunderstormAnimation.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": -52.073634109102734,
+        "y": -176.81646237485748
+      },
+      "scale": 0.25,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-23",
+      "type": "sprite",
+      "spriteKey": "sprite/decor/ColoredStringLights",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/decor/ColoredStringLights.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 1.3860314251750534,
+        "y": -137.21711109233024
+      },
+      "scale": 1.14,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-10",
+      "type": "sprite",
+      "spriteKey": "sprite/decor/ColoredStringLightsSideways",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/decor/ColoredStringLightsSideways.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 139.19870256505453,
+        "y": -132.46345676925577
+      },
+      "scale": 0.61,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-16",
+      "type": "sprite",
+      "spriteKey": "sprite/decor/ColoredStringLightsSideways",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/decor/ColoredStringLightsSideways.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": -145.53329964338053,
+        "y": -138.60314251750526
+      },
+      "scale": 0.61,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-25",
+      "type": "sprite",
+      "spriteKey": "sprite/decor/MiniWizardTowerOrnamentAmberMoon",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/decor/MiniWizardTowerOrnamentAmberMoon.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 113.65457686435433,
+        "y": -256.4158136573848
+      },
+      "scale": 1.45,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-11",
+      "type": "sprite",
+      "spriteKey": "sprite/decor/MiniWizardTowerOrnamentDawn",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/decor/MiniWizardTowerOrnamentDawn.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": -112.26854543917926,
+        "y": -253.64375080703465
+      },
+      "scale": 1.45,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-22",
+      "type": "sprite",
+      "spriteKey": "sprite/decor/MarbleCaribou",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/decor/MarbleCaribou.png?v=75",
+      "mutations": [
+        "Rainbow"
+      ],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": -137.2171110923302,
+        "y": -2.772062850350104
+      },
+      "scale": 0.53,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-13",
+      "type": "sprite",
+      "spriteKey": "Mythical Egg",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/pets/MythicalEgg.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 133.6545768643543,
+        "y": -2.176502802800841
+      },
+      "scale": 0.46,
+      "rotation": 35,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-27",
+      "type": "sprite",
+      "spriteKey": "Mythical Egg",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/pets/MythicalEgg.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 87.31997978602831,
+        "y": -1.3860314251750527
+      },
+      "scale": 0.46,
+      "rotation": 342,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-12",
+      "type": "sprite",
+      "spriteKey": "Mythical Egg",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/pets/MythicalEgg.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 110.09204263637842,
+        "y": -0.7904713776257886
+      },
+      "scale": 0.46,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-5",
+      "type": "cosmetic",
+      "spriteKey": "blobling",
+      "spriteUrl": "blobling:",
+      "mutations": [
+        "Rainbow"
+      ],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 1.7615155917365062,
+        "y": -107.39355338587445
+      },
+      "scale": 0.82,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "cosmeticLayers": {
+        "Bottom": "Bottom_DefaultGray",
+        "Mid": "Mid_DefaultGray",
+        "Top": "Top_DefaultGray",
+        "Expression": "Expression_Stressed"
+      },
+      "isAnimated": false
+    },
+    {
+      "id": "slot-19",
+      "type": "sprite",
+      "spriteKey": "sprite/ui/MutationFrame",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/ui/MutationFrame.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 164.93773959583126,
+        "y": -16.632377102100634
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-20",
+      "type": "sprite",
+      "spriteKey": "sprite/ui/MutationRainbow",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/ui/MutationRainbow.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 163.5517081706562,
+        "y": -16.632377102100634
+      },
+      "scale": 0.9,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-28",
+      "type": "sprite",
+      "spriteKey": "",
+      "spriteUrl": "",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-0",
+      "type": "sprite",
+      "spriteKey": "sprite/ui/CardTop",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/ui/CardTop.png?v=57",
+      "mutations": [
+        "Rainbow"
+      ],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": -1.609713125998212,
+        "y": -2.3846129422327635
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "fullCardData": {
+        "cardType": "Pet",
+        "itemName": "Pet",
+        "isLocked": false,
+        "rarity": "Common",
+        "petStr": "50",
+        "petMaxStr": "80",
+        "petStrPct": 0,
+        "petHungerPct": 100,
+        "petAge": "0h",
+        "petWeight": "0 kg",
+        "petSellPrice": "0",
+        "petDietSlots": [],
+        "petAbilityEntries": []
+      },
+      "isAnimated": false
+    },
+    {
+      "id": "slot-3",
+      "type": "sprite",
+      "spriteKey": "sprite/ui/Leaderboard",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/ui/Leaderboard.png?v=57",
+      "mutations": [
+        "Rainbow"
+      ],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": -196.81646237485748,
+        "y": -311.85707066438687
+      },
+      "scale": 0.87,
+      "rotation": 329,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-2",
+      "type": "sprite",
+      "spriteKey": "sprite/ui/RarityCelestial",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/ui/RarityCelestial.png?v=57",
+      "mutations": [
+        "Rainbow"
+      ],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": -196.81646237485748,
+        "y": 295.22469356228623
+      },
+      "scale": 1.27,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-26",
+      "type": "sprite",
+      "spriteKey": "sprite/decor/MiniWizardTower",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/decor/MiniWizardTower.png?v=57",
+      "mutations": [
+        "Rainbow"
+      ],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": -196.81646237485748,
+        "y": 296.61072498746125
+      },
+      "scale": 0.19,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-21",
+      "type": "sprite",
+      "spriteKey": "sprite/ui/EditIcon",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/ui/EditIcon.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 156.62155104478094,
+        "y": 55.44125700700211
+      },
+      "scale": 1.71,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    },
+    {
+      "id": "slot-4",
+      "type": "text",
+      "spriteKey": "text-layer",
+      "spriteUrl": "text:",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#050505",
+        "opacity": 0
+      },
+      "position": {
+        "x": 14.18785066633888,
+        "y": 67.30440822463716
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "textData": {
+        "content": "TYPE NAME HERE",
+        "fontFamily": "Shrikhand",
+        "fontLabel": "Shrikhand (textSlapper)",
+        "fontWeight": "400",
+        "fontStyle": "normal",
+        "fontSize": 36,
+        "align": "center",
+        "wordWrap": false,
+        "wordWrapWidth": 400,
+        "bold": false,
+        "italic": false,
+        "mgShadow": true,
+        "strokeEnabled": false,
+        "strokeColor": "#000000",
+        "strokeWidth": 3,
+        "gfFamily": "Shrikhand"
+      },
+      "isAnimated": false
+    },
+    {
+      "id": "slot-29",
+      "type": "sprite",
+      "spriteKey": "sprite/ui/Locked",
+      "spriteUrl": "https://mg-api.ariedam.fr/assets/sprites/ui/Locked.png?v=57",
+      "mutations": [],
+      "options": {
+        "icons": true,
+        "overlays": true
+      },
+      "customTint": {
+        "color": "#ffffff",
+        "opacity": 0
+      },
+      "position": {
+        "x": 206.51868235108284,
+        "y": -314.6291335147369
+      },
+      "scale": 1,
+      "rotation": 0,
+      "visible": true,
+      "locked": false,
+      "isAnimated": false
+    }
+  ],
+  "activeSlotIndex": 15,
+  "thumbnail": "data:image/jpeg;base64,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"
+}

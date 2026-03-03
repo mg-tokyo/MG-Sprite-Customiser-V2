@@ -5,6 +5,8 @@ export interface AssetBrowserRefs {
   el: HTMLElement;
   tabsEl: HTMLElement;
   searchInput: HTMLInputElement;
+  zoomInput: HTMLInputElement;
+  zoomValueEl: HTMLElement;
   gridEl: HTMLElement;
 }
 
@@ -33,15 +35,35 @@ export function buildAssetBrowser(): AssetBrowserRefs {
     placeholder: '🔍 Search sprites…',
   }) as HTMLInputElement;
 
+  const zoomInput = el('input', {
+    type: 'range',
+    className: 'browser-zoom-input',
+    min: '0.75',
+    max: '2',
+    step: '0.05',
+    value: '1',
+  }) as HTMLInputElement;
+  const zoomValueEl = el('span', {
+    className: 'browser-zoom-value',
+    textContent: '100%',
+  }) as HTMLElement;
+
   const gridEl = el('div', { className: 'browser-grid' });
 
   const browserEl = el('div', { className: 'sc2-col-browser' }, [
     tabsNav,
     el('div', { className: 'browser-search-wrap' }, [searchInput]),
     gridEl,
+    el('div', { className: 'browser-zoom-wrap' }, [
+      el('label', { className: 'browser-zoom-row' }, [
+        el('span', { className: 'browser-zoom-label', textContent: 'Zoom' }),
+        zoomInput,
+        zoomValueEl,
+      ]),
+    ]),
   ]);
 
-  return { el: browserEl, tabsEl, searchInput, gridEl };
+  return { el: browserEl, tabsEl, searchInput, zoomInput, zoomValueEl, gridEl };
 }
 
 /** Category tab accent colors by category name. */

@@ -151,6 +151,8 @@ export interface Slot {
   textData?: TextData;
   fullCardData?: FullCardData;
   petBarData?: PetBarData;
+  fullCardVariantId?: string;
+  fullCardVariantSource?: 'builtin' | 'user';
   // GIF animation data (not persisted)
   gifFrames?: { canvas: HTMLCanvasElement; delay: number }[];
   isAnimated?: boolean;

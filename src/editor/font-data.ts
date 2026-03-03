@@ -315,6 +315,22 @@ export const UNICODE_STYLES: UnicodeDef[] = [
 
 /** Tracks which fonts have already been loaded this session (by CSS font spec). */
 const loadedFonts = new Set<string>();
+const loadingFontTasks = new Map<string, Promise<void>>();
+
+async function waitForFontReady(font: FontDef): Promise<boolean> {
+  if (typeof document === 'undefined' || !('fonts' in document)) return false;
+  const fontSpec = `${font.style} ${font.weight} 16px "${font.family}"`;
+  const timeoutMs = 7000;
+  try {
+    await Promise.race([
+      document.fonts.load(fontSpec).then(() => undefined),
+      new Promise<void>(resolve => setTimeout(resolve, timeoutMs)),
+    ]);
+  } catch {
+    // Ignore and fall back to check below.
+  }
+  return document.fonts.check(fontSpec);
+}
 
 /**
  * Ensure a font is available in document.fonts before canvas fillText.
@@ -327,37 +343,72 @@ export async function ensureFontLoaded(font: FontDef): Promise<void> {
 
   const specKey = `${font.family}-${font.weight}-${font.style}`;
   if (loadedFonts.has(specKey)) return;
-  loadedFonts.add(specKey);
-
-  // Google Fonts (including Shrikhand)
-  if (font.gfFamily) {
-    const href = `https://fonts.googleapis.com/css2?family=${font.gfFamily}&display=swap`;
-    if (!document.querySelector(`link[href="${href}"]`)) {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = href;
-      document.head.appendChild(link);
-    }
-    // Wait for the injected sheet to load the font
-    await document.fonts.ready;
+  const existingTask = loadingFontTasks.get(specKey);
+  if (existingTask) {
+    await existingTask;
     return;
   }
 
-  // MG CDN woff2 via FontFace API
-  const urls = resolveFontUrls(font);
-  for (const url of urls) {
-    try {
-      const fetchUrl = proxyUrl(url);
-      const face = new FontFace(font.family, `url(${fetchUrl})`, {
-        weight: font.weight,
-        style: font.style,
-      });
-      const loaded = await face.load();
-      document.fonts.add(loaded);
+  const task = (async () => {
+    // Google Fonts (including Shrikhand)
+    if (font.gfFamily) {
+      const href = `https://fonts.googleapis.com/css2?family=${font.gfFamily}&display=swap`;
+      let link = document.querySelector(`link[href="${href}"]`) as HTMLLinkElement | null;
+      if (!link) {
+        const newLink = document.createElement('link');
+        newLink.rel = 'stylesheet';
+        newLink.href = href;
+        document.head.appendChild(newLink);
+        await new Promise<void>((resolve) => {
+          newLink.addEventListener('load', () => resolve(), { once: true });
+          newLink.addEventListener('error', () => resolve(), { once: true });
+          // Safety timeout so a blocked request doesn't hang render forever.
+          setTimeout(resolve, 4500);
+        });
+        link = newLink;
+      }
+      // Force a direct readiness check for the requested face before drawing.
+      if (typeof document !== 'undefined' && 'fonts' in document) {
+        const fontSpec = `${font.style} ${font.weight} 16px "${font.family}"`;
+        try {
+          await Promise.race([
+            document.fonts.load(fontSpec).then(() => undefined),
+            new Promise<void>(resolve => setTimeout(resolve, 4500)),
+          ]);
+        } catch {
+          // Fall through to check below.
+        }
+      }
+      if (await waitForFontReady(font)) loadedFonts.add(specKey);
       return;
-    } catch {
-      // Try the next candidate
     }
+
+    // MG CDN woff2 via FontFace API
+    const urls = resolveFontUrls(font);
+    for (const url of urls) {
+      try {
+        const fetchUrl = proxyUrl(url);
+        const face = new FontFace(font.family, `url(${fetchUrl})`, {
+          weight: font.weight,
+          style: font.style,
+        });
+        const loaded = await face.load();
+        document.fonts.add(loaded);
+        if (await waitForFontReady(font)) {
+          loadedFonts.add(specKey);
+          return;
+        }
+      } catch {
+        // Try the next candidate
+      }
+    }
+  })();
+
+  loadingFontTasks.set(specKey, task);
+  try {
+    await task;
+  } finally {
+    loadingFontTasks.delete(specKey);
   }
 }
 

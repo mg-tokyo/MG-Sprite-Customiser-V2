@@ -16,6 +16,7 @@ export interface ToolbarRefs {
   addHungerBarBtn: HTMLButtonElement;
   addStrengthBarBtn: HTMLButtonElement;
   addBloblingBtn: HTMLButtonElement;
+  editGifBtn: HTMLButtonElement;
   uploadInput: HTMLInputElement;
   uploadBtn: HTMLButtonElement;
   clearSlotBtn: HTMLButtonElement;
@@ -87,6 +88,12 @@ export function buildToolbar(): ToolbarRefs {
     textContent: '+ Blobling',
   }) as HTMLButtonElement;
 
+  const editGifBtn = el('button', {
+    className: 'sc2-tb-btn sc2-tb-btn--secondary',
+    title: 'Open scene GIF editor',
+    textContent: '+ Edit GIF',
+  }) as HTMLButtonElement;
+
   const addHungerBarBtn = el('button', {
     className: 'sc2-tb-btn sc2-tb-btn--secondary',
     title: 'Add Hunger Bar Layer',
@@ -129,7 +136,7 @@ export function buildToolbar(): ToolbarRefs {
     el('div', { className: 'sc2-tb-sep' }),
     el('div', { className: 'sc2-tb-group' }, [sceneNameInput, sceneSaveBtn, importBtn, sceneLoadInput]),
     el('div', { className: 'sc2-tb-sep' }),
-    el('div', { className: 'sc2-tb-group' }, [addTextBtn, addCardBtn, addFullCardBtn, addHungerBarBtn, addStrengthBarBtn, addBloblingBtn, uploadBtn, uploadInput]),
+    el('div', { className: 'sc2-tb-group' }, [addTextBtn, addCardBtn, addFullCardBtn, addHungerBarBtn, addStrengthBarBtn, addBloblingBtn, editGifBtn, uploadBtn, uploadInput]),
     el('div', { className: 'sc2-tb-spacer' }),
     el('div', { className: 'sc2-tb-group' }, [clearSlotBtn, resetAllBtn]),
     el('div', { className: 'sc2-tb-sep' }),
@@ -154,6 +161,7 @@ export function buildToolbar(): ToolbarRefs {
     addHungerBarBtn,
     addStrengthBarBtn,
     addBloblingBtn,
+    editGifBtn,
     uploadInput,
     uploadBtn,
     clearSlotBtn,
