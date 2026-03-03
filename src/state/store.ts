@@ -169,8 +169,8 @@ export interface AppState {
   mode: 'sprites' | 'cosmetics';
   slots: Slot[];
   activeSlotIndex: number;
-  undoStack: Slot[][];
-  redoStack: Slot[][];
+  undoStack: HistorySnapshot[];
+  redoStack: HistorySnapshot[];
 
   theme: 'light' | 'dark';
   selectedCategory: string;
@@ -197,6 +197,58 @@ function createEmptySlot(index: number): Slot {
   };
 }
 
+interface HistorySnapshot {
+  slots: Slot[];
+  activeSlotIndex: number;
+}
+
+function cloneSpriteSlot(slot: FullCardSpriteSlot): FullCardSpriteSlot {
+  return {
+    ...slot,
+    mutations: [...slot.mutations],
+  };
+}
+
+function cloneFullCardAbilityEntry(entry: FullCardAbilityEntry): FullCardAbilityEntry {
+  return { ...entry };
+}
+
+function cloneFullCardData(data: FullCardData): FullCardData {
+  return {
+    ...data,
+    petAbilityEntries: data.petAbilityEntries?.map(cloneFullCardAbilityEntry),
+    petDietSlots: data.petDietSlots?.map(cloneSpriteSlot),
+    cropSlots: data.cropSlots?.map(cloneSpriteSlot),
+    eggHatchSlots: data.eggHatchSlots?.map(cloneSpriteSlot),
+  };
+}
+
+function clonePetBarData(data: PetBarData): PetBarData {
+  return {
+    ...data,
+    dietSlots: data.dietSlots?.map(cloneSpriteSlot),
+  };
+}
+
+function cloneSlot(slot: Slot): Slot {
+  return {
+    ...slot,
+    mutations: [...slot.mutations],
+    options: { ...slot.options },
+    customTint: { ...slot.customTint },
+    position: { ...slot.position },
+    cosmeticLayers: slot.cosmeticLayers ? { ...slot.cosmeticLayers } : undefined,
+    textData: slot.textData ? { ...slot.textData } : undefined,
+    fullCardData: slot.fullCardData ? cloneFullCardData(slot.fullCardData) : undefined,
+    petBarData: slot.petBarData ? clonePetBarData(slot.petBarData) : undefined,
+    gifFrames: slot.gifFrames?.map(frame => ({ canvas: frame.canvas, delay: frame.delay })),
+  };
+}
+
+function cloneSlots(slots: Slot[]): Slot[] {
+  return slots.map(cloneSlot);
+}
+
 const INITIAL_SLOTS = 20;
 export const MAX_SLOTS = 100;
 const MAX_UNDO = 50;
@@ -219,12 +271,38 @@ export const state: AppState = {
   previewZoom: 1,
 };
 
+function clampActiveSlotIndex(index: number, slotsLength = state.slots.length): number {
+  if (slotsLength <= 0) return 0;
+  if (!Number.isFinite(index)) return 0;
+  const normalized = Math.trunc(index);
+  return Math.max(0, Math.min(normalized, slotsLength - 1));
+}
+
+function ensureValidActiveSlot(): void {
+  if (state.slots.length === 0) state.slots = [createEmptySlot(0)];
+  state.activeSlotIndex = clampActiveSlotIndex(state.activeSlotIndex, state.slots.length);
+}
+
+function createHistorySnapshot(): HistorySnapshot {
+  return {
+    slots: cloneSlots(state.slots),
+    activeSlotIndex: clampActiveSlotIndex(state.activeSlotIndex, state.slots.length),
+  };
+}
+
+function applyHistorySnapshot(snapshot: HistorySnapshot): void {
+  state.slots = cloneSlots(snapshot.slots);
+  if (state.slots.length === 0) state.slots = [createEmptySlot(0)];
+  state.activeSlotIndex = clampActiveSlotIndex(snapshot.activeSlotIndex, state.slots.length);
+}
+
 export function getActiveSlot(): Slot {
+  ensureValidActiveSlot();
   return state.slots[state.activeSlotIndex];
 }
 
 export function pushUndo(): void {
-  state.undoStack.push(JSON.parse(JSON.stringify(state.slots)));
+  state.undoStack.push(createHistorySnapshot());
   if (state.undoStack.length > MAX_UNDO) state.undoStack.shift();
   state.redoStack = [];
 }
@@ -232,22 +310,27 @@ export function pushUndo(): void {
 export function undo(): void {
   const prev = state.undoStack.pop();
   if (!prev) return;
-  state.redoStack.push(JSON.parse(JSON.stringify(state.slots)));
-  state.slots = prev;
+  state.redoStack.push(createHistorySnapshot());
+  if (state.redoStack.length > MAX_UNDO) state.redoStack.shift();
+  applyHistorySnapshot(prev);
   bus.emit(Events.SLOT_CHANGED, null);
+  bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
   bus.emit(Events.RENDER_REQUEST, null);
 }
 
 export function redo(): void {
   const next = state.redoStack.pop();
   if (!next) return;
-  state.undoStack.push(JSON.parse(JSON.stringify(state.slots)));
-  state.slots = next;
+  state.undoStack.push(createHistorySnapshot());
+  if (state.undoStack.length > MAX_UNDO) state.undoStack.shift();
+  applyHistorySnapshot(next);
   bus.emit(Events.SLOT_CHANGED, null);
+  bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
   bus.emit(Events.RENDER_REQUEST, null);
 }
 
 export function updateSlot(index: number, changes: Partial<Slot>): void {
+  if (index < 0 || index >= state.slots.length) return;
   pushUndo();
   Object.assign(state.slots[index], changes);
   bus.emit(Events.SLOT_CHANGED, index);
@@ -256,6 +339,7 @@ export function updateSlot(index: number, changes: Partial<Slot>): void {
 
 /** Update slot without pushing undo — use with beginBatchUpdate/endBatchUpdate. */
 export function updateSlotSilent(index: number, changes: Partial<Slot>): void {
+  if (index < 0 || index >= state.slots.length) return;
   Object.assign(state.slots[index], changes);
   bus.emit(Events.SLOT_CHANGED, index);
   bus.emit(Events.RENDER_REQUEST, null);
@@ -275,28 +359,47 @@ export function beginBatchUpdate(): void {
 }
 
 export function setActiveSlot(index: number): void {
-  state.activeSlotIndex = index;
-  bus.emit(Events.SLOT_SELECTED, index);
+  const clamped = clampActiveSlotIndex(index);
+  state.activeSlotIndex = clamped;
+  bus.emit(Events.SLOT_SELECTED, clamped);
 }
 
 export function reorderSlots(fromIndex: number, insertBefore: number): void {
-  if (fromIndex === insertBefore || fromIndex + 1 === insertBefore) return;
+  if (fromIndex < 0 || fromIndex >= state.slots.length) return;
+  const clampedInsertBefore = Math.max(0, Math.min(insertBefore, state.slots.length));
+  if (fromIndex === clampedInsertBefore || fromIndex + 1 === clampedInsertBefore) return;
   pushUndo();
   const activeSlot = state.slots[state.activeSlotIndex];
   const newSlots = [...state.slots];
   const [moved] = newSlots.splice(fromIndex, 1);
-  const adjustedPos = insertBefore > fromIndex ? insertBefore - 1 : insertBefore;
+  const adjustedPos = clampedInsertBefore > fromIndex ? clampedInsertBefore - 1 : clampedInsertBefore;
   newSlots.splice(adjustedPos, 0, moved);
   state.slots = newSlots;
-  state.activeSlotIndex = newSlots.indexOf(activeSlot);
+  const nextActiveIndex = newSlots.indexOf(activeSlot);
+  state.activeSlotIndex = nextActiveIndex >= 0 ? nextActiveIndex : clampActiveSlotIndex(state.activeSlotIndex, newSlots.length);
   bus.emit(Events.SLOT_CHANGED, null);
+  bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
   bus.emit(Events.RENDER_REQUEST, null);
 }
 
 export function clearSlot(index: number): void {
+  if (index < 0 || index >= state.slots.length) return;
   pushUndo();
   state.slots[index] = createEmptySlot(index);
   bus.emit(Events.SLOT_CHANGED, index);
+  bus.emit(Events.RENDER_REQUEST, null);
+}
+
+export function clearSlots(indexes: number[]): void {
+  if (indexes.length === 0) return;
+  const validIndexes = Array.from(new Set(indexes))
+    .filter((index) => index >= 0 && index < state.slots.length);
+  if (validIndexes.length === 0) return;
+  pushUndo();
+  for (const index of validIndexes) {
+    state.slots[index] = createEmptySlot(index);
+  }
+  bus.emit(Events.SLOT_CHANGED, validIndexes.length === 1 ? validIndexes[0] : null);
   bus.emit(Events.RENDER_REQUEST, null);
 }
 

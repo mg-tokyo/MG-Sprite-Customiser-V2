@@ -1,4 +1,4 @@
-﻿import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlot, reorderSlots, pushUndo, addSlot, MAX_SLOTS } from '../state/store';
+﻿import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlots, reorderSlots, pushUndo, addSlot, MAX_SLOTS } from '../state/store';
 import { listSavedScenes, saveNamedScene, deleteNamedScene, exportSceneJson, importSceneJson } from '../state/persistence';
 import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity, FullCardAbilityEntry, FullCardSpriteSlot, PetBarData, PetBarKind } from '../state/store';
 import { initTheme, toggleTheme } from './theme';
@@ -445,12 +445,14 @@ export class App {
     tb.fxPreviewBtn.addEventListener('click', () => {
       this.openFxPreview().catch(err => console.error('[MG] FX preview failed:', err));
     });
-    tb.clearSlotBtn.addEventListener('click', () => clearSlot(state.activeSlotIndex));
+    tb.clearSlotBtn.addEventListener('click', () => {
+      clearSlots(this.getEffectiveSelectionIndexes());
+    });
     tb.resetAllBtn.addEventListener('click', () => {
       if (confirm('Reset all slots?')) {
         this.sceneGifTimeline = null;
         if (this.sceneGifSession) this.closeSceneGifEditor(false);
-        for (let i = 0; i < state.slots.length; i++) clearSlot(i);
+        clearSlots(state.slots.map((_, index) => index));
       }
     });
     tb.addTextBtn.addEventListener('click', () => this.addTextLayer());
@@ -1428,19 +1430,24 @@ export class App {
         || (active instanceof HTMLElement && active.isContentEditable);
 
       if (e.ctrlKey || e.metaKey) {
-        if (e.key === 'z') { e.preventDefault(); undo(); }
-        if (e.key === 'y') { e.preventDefault(); redo(); }
+        const key = e.key.toLowerCase();
         if (!inInput) {
-          if (e.key === 'c') { e.preventDefault(); this.copyActiveSlot(); }
-          if (e.key === 'v') { e.preventDefault(); this.pasteCopiedSlot(); }
-          if (e.key === 'd') { e.preventDefault(); this.duplicateActiveSlot(); }
+          if (key === 'z') {
+            e.preventDefault();
+            if (e.shiftKey) redo();
+            else undo();
+          }
+          if (key === 'y') { e.preventDefault(); redo(); }
+          if (key === 'c') { e.preventDefault(); this.copyActiveSlot(); }
+          if (key === 'v') { e.preventDefault(); this.pasteCopiedSlot(); }
+          if (key === 'd') { e.preventDefault(); this.duplicateActiveSlot(); }
         }
       }
 
-      // Delete active slot â€” only when no text input is focused
+      // Delete selected slots (or active slot) only when no text input is focused
       if (!inInput && (e.key === 'Delete' || e.key === 'Backspace')) {
         e.preventDefault();
-        clearSlot(state.activeSlotIndex);
+        clearSlots(this.getEffectiveSelectionIndexes());
       }
     });
 
@@ -3836,7 +3843,7 @@ export class App {
           if (applyMode === 'replace') {
             this.sceneGifTimeline = null;
             if (this.sceneGifSession) this.closeSceneGifEditor(false);
-            for (let i = 0; i < state.slots.length; i++) clearSlot(i);
+            clearSlots(state.slots.map((_, index) => index));
           }
           this.addFullCardLayer(type, variant).catch(err => console.error('[Card] Variant add failed:', err));
         });
@@ -4955,7 +4962,11 @@ export class App {
 
       // Delete button
       const delBtn = el('button', { className: 'slot-delete', textContent: '\u00D7', title: 'Remove slot' }) as HTMLButtonElement;
-      delBtn.addEventListener('click', (e) => { e.stopPropagation(); clearSlot(i); });
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const indexes = this.isSlotSelected(i) ? this.getEffectiveSelectionIndexes() : [i];
+        clearSlots(indexes);
+      });
 
       const tile = el('div', {
         className: `slot-tile${isActive ? ' active' : ''}${isSelected ? ' selected' : ''}${hasContent ? '' : ' empty'}`,
