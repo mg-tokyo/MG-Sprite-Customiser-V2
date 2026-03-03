@@ -200,7 +200,11 @@ function createEmptySlot(index: number): Slot {
 interface HistorySnapshot {
   slots: Slot[];
   activeSlotIndex: number;
+  meta?: unknown;
 }
+
+type HistoryMetaCapture = () => unknown;
+type HistoryMetaRestore = (meta: unknown) => void;
 
 function cloneSpriteSlot(slot: FullCardSpriteSlot): FullCardSpriteSlot {
   return {
@@ -252,6 +256,10 @@ function cloneSlots(slots: Slot[]): Slot[] {
 const INITIAL_SLOTS = 20;
 export const MAX_SLOTS = 100;
 const MAX_UNDO = 50;
+let historyMetaCapture: HistoryMetaCapture | null = null;
+let historyMetaRestore: HistoryMetaRestore | null = null;
+let singleUndoDepth = 0;
+let singleUndoCaptured = false;
 
 export const state: AppState = {
   gameData: null,
@@ -284,9 +292,19 @@ function ensureValidActiveSlot(): void {
 }
 
 function createHistorySnapshot(): HistorySnapshot {
+  let meta: unknown;
+  if (historyMetaCapture) {
+    try {
+      meta = historyMetaCapture();
+    } catch (err) {
+      console.error('[Store] History meta capture failed:', err);
+      meta = undefined;
+    }
+  }
   return {
     slots: cloneSlots(state.slots),
     activeSlotIndex: clampActiveSlotIndex(state.activeSlotIndex, state.slots.length),
+    meta,
   };
 }
 
@@ -294,6 +312,13 @@ function applyHistorySnapshot(snapshot: HistorySnapshot): void {
   state.slots = cloneSlots(snapshot.slots);
   if (state.slots.length === 0) state.slots = [createEmptySlot(0)];
   state.activeSlotIndex = clampActiveSlotIndex(snapshot.activeSlotIndex, state.slots.length);
+  if (historyMetaRestore) {
+    try {
+      historyMetaRestore(snapshot.meta);
+    } catch (err) {
+      console.error('[Store] History meta restore failed:', err);
+    }
+  }
 }
 
 export function getActiveSlot(): Slot {
@@ -301,7 +326,48 @@ export function getActiveSlot(): Slot {
   return state.slots[state.activeSlotIndex];
 }
 
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return typeof value === 'object' && value !== null && typeof (value as PromiseLike<unknown>).then === 'function';
+}
+
+function beginSingleUndoTransaction(): void {
+  singleUndoDepth += 1;
+  if (singleUndoDepth === 1) singleUndoCaptured = false;
+}
+
+function endSingleUndoTransaction(): void {
+  if (singleUndoDepth === 0) return;
+  singleUndoDepth -= 1;
+  if (singleUndoDepth === 0) singleUndoCaptured = false;
+}
+
+export function setHistoryMetaHandlers(capture: () => unknown, restore: (meta: unknown) => void): void {
+  historyMetaCapture = capture;
+  historyMetaRestore = restore;
+}
+
+export function runWithSingleUndo<T>(fn: () => T): T {
+  beginSingleUndoTransaction();
+  try {
+    const result = fn();
+    if (isPromiseLike(result)) {
+      return Promise.resolve(result).finally(() => {
+        endSingleUndoTransaction();
+      }) as T;
+    }
+    endSingleUndoTransaction();
+    return result;
+  } catch (err) {
+    endSingleUndoTransaction();
+    throw err;
+  }
+}
+
 export function pushUndo(): void {
+  if (singleUndoDepth > 0) {
+    if (singleUndoCaptured) return;
+    singleUndoCaptured = true;
+  }
   state.undoStack.push(createHistorySnapshot());
   if (state.undoStack.length > MAX_UNDO) state.undoStack.shift();
   state.redoStack = [];

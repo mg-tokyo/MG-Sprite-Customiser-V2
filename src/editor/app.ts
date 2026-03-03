@@ -1,4 +1,4 @@
-﻿import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlots, reorderSlots, pushUndo, addSlot, MAX_SLOTS } from '../state/store';
+﻿import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlots, reorderSlots, pushUndo, addSlot, MAX_SLOTS, runWithSingleUndo, setHistoryMetaHandlers } from '../state/store';
 import { listSavedScenes, saveNamedScene, deleteNamedScene, exportSceneJson, importSceneJson } from '../state/persistence';
 import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity, FullCardAbilityEntry, FullCardSpriteSlot, PetBarData, PetBarKind } from '../state/store';
 import { initTheme, toggleTheme } from './theme';
@@ -118,6 +118,12 @@ interface SceneGifTimelineV1 {
 interface SceneGifEditorSession {
   frames: SceneGifFrameV1[];
   activeFrameIndex: number;
+}
+
+interface HistoryUndoMetaV1 {
+  version: 1;
+  sceneGifTimeline: SceneGifTimelineV1 | null;
+  sceneGifSession: SceneGifEditorSession | null;
 }
 
 interface SceneGifTrack {
@@ -424,6 +430,7 @@ export class App {
     this.loadLayoutSettings();
     container.innerHTML = '';
     this.buildUI(container);
+    this.registerHistoryUndoMetaHandlers();
     this.bindEvents();
     this.refreshSlots();
     this.render();
@@ -515,16 +522,18 @@ export class App {
       reader.onload = () => {
         const scene = importSceneJson(reader.result as string);
         if (!scene) { alert('Invalid scene file'); return; }
-        pushUndo();
-        this.clearMultiSelection();
-        state.slots = scene.slots;
-        state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
-        this.sceneGifTimeline = null;
-        if (this.sceneGifSession) this.closeSceneGifEditor(false);
-        bus.emit(Events.SLOT_CHANGED, null);
-        bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
-        bus.emit(Events.RENDER_REQUEST, null);
-        this.rerenderAllSpecialSlots().catch(err => console.error('[MG] Scene re-render failed:', err));
+        runWithSingleUndo(() => {
+          pushUndo();
+          this.clearMultiSelection();
+          state.slots = scene.slots;
+          state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
+          this.sceneGifTimeline = null;
+          if (this.sceneGifSession) this.closeSceneGifEditor(false);
+          bus.emit(Events.SLOT_CHANGED, null);
+          bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
+          bus.emit(Events.RENDER_REQUEST, null);
+          this.rerenderAllSpecialSlots().catch(err => console.error('[MG] Scene re-render failed:', err));
+        });
       };
       reader.readAsText(file);
       tb.sceneLoadInput.value = '';
@@ -615,6 +624,7 @@ export class App {
 
     this.scaleInput.addEventListener('input', () => {
       const parsed = parseFloat(this.scaleInput.value);
+      beginBatchUpdate();
       const { textIndexes, hasVisualChange } = this.applyScaleGestureValue(parsed);
       if (textIndexes.length > 0) this.scheduleTextRerender(textIndexes);
       if (hasVisualChange) bus.emit(Events.RENDER_REQUEST, null);
@@ -630,6 +640,7 @@ export class App {
     });
     this.rotationInput.addEventListener('input', () => {
       const parsed = parseFloat(this.rotationInput.value);
+      beginBatchUpdate();
       this.applyToSelection((slot) => {
         slot.rotation = this.normalizeRotation(Number.isFinite(parsed) ? parsed : slot.rotation);
       });
@@ -649,6 +660,7 @@ export class App {
       const opacity = parseFloat(this.customOpacity.value);
       const textIndexes: number[] = [];
       let hasSpriteLikeChange = false;
+      beginBatchUpdate();
       this.applyToSelection((slot, index) => {
         slot.customTint = { color: this.customColor.value, opacity };
         if (slot.type === 'text') textIndexes.push(index);
@@ -814,6 +826,77 @@ export class App {
       activeSlotIndex: frame.activeSlotIndex,
       thumbnail: frame.thumbnail,
     };
+  }
+
+  private cloneSceneGifSession(session: SceneGifEditorSession): SceneGifEditorSession {
+    return {
+      frames: session.frames.map(frame => this.cloneSceneGifFrame(frame)),
+      activeFrameIndex: Math.max(0, Math.min(session.activeFrameIndex, session.frames.length - 1)),
+    };
+  }
+
+  private isHistoryUndoMeta(meta: unknown): meta is HistoryUndoMetaV1 {
+    if (!meta || typeof meta !== 'object') return false;
+    const payload = meta as Partial<HistoryUndoMetaV1>;
+    return payload.version === 1 && 'sceneGifTimeline' in payload && 'sceneGifSession' in payload;
+  }
+
+  private captureHistoryUndoMeta(): unknown {
+    return {
+      version: 1 as const,
+      sceneGifTimeline: this.sceneGifTimeline
+        ? {
+            version: 1 as const,
+            frames: this.sceneGifTimeline.frames.map(frame => this.cloneSceneGifFrame(frame)),
+            activeFrameId: this.sceneGifTimeline.activeFrameId,
+            loop: this.sceneGifTimeline.loop,
+          }
+        : null,
+      sceneGifSession: this.sceneGifSession ? this.cloneSceneGifSession(this.sceneGifSession) : null,
+    } satisfies HistoryUndoMetaV1;
+  }
+
+  private restoreHistoryUndoMeta(meta: unknown): void {
+    this.stopSceneGifPlayback();
+    if (!this.isHistoryUndoMeta(meta)) {
+      this.sceneGifTimeline = null;
+      this.sceneGifSession = null;
+      this.sceneGifBar.style.display = 'none';
+      this.sceneGifFrames.innerHTML = '';
+      this.sceneGifStatus.textContent = '';
+      this.syncDownloadBtn();
+      return;
+    }
+
+    this.sceneGifTimeline = meta.sceneGifTimeline
+      ? {
+          version: 1,
+          frames: meta.sceneGifTimeline.frames.map(frame => this.cloneSceneGifFrame(frame)),
+          activeFrameId: meta.sceneGifTimeline.activeFrameId,
+          loop: meta.sceneGifTimeline.loop,
+        }
+      : null;
+    this.sceneGifSession = meta.sceneGifSession ? this.cloneSceneGifSession(meta.sceneGifSession) : null;
+
+    if (this.sceneGifSession) {
+      this.sceneGifBar.style.display = 'flex';
+      this.sceneGifStatus.textContent = 'Use top-right Download GIF to export timeline.';
+      this.refreshSceneGifFrameUi();
+      const activeFrame = this.sceneGifSession.frames[this.sceneGifSession.activeFrameIndex];
+      if (activeFrame && !activeFrame.thumbnail) this.scheduleSceneGifActiveThumbnailCapture(activeFrame.id);
+    } else {
+      this.sceneGifBar.style.display = 'none';
+      this.sceneGifFrames.innerHTML = '';
+      this.sceneGifStatus.textContent = '';
+    }
+    this.syncDownloadBtn();
+  }
+
+  private registerHistoryUndoMetaHandlers(): void {
+    setHistoryMetaHandlers(
+      () => this.captureHistoryUndoMeta(),
+      (meta) => this.restoreHistoryUndoMeta(meta),
+    );
   }
 
   private createSceneGifFrameFromCurrentState(delayMs = this.DEFAULT_ANIM_FRAME_DELAY): SceneGifFrameV1 {
@@ -1111,6 +1194,7 @@ export class App {
     this.captureActiveSceneGifFrameSnapshot();
     const base = this.sceneGifSession.frames[this.sceneGifSession.activeFrameIndex];
     if (!base) return;
+    pushUndo();
     const duplicate: SceneGifFrameV1 = {
       id: this.newSceneGifFrameId(),
       delayMs: base.delayMs,
@@ -1127,6 +1211,7 @@ export class App {
     if (!this.sceneGifSession) return;
     if (this.sceneGifSession.frames.length <= 1) return;
     this.captureActiveSceneGifFrameSnapshot();
+    pushUndo();
     this.sceneGifSession.frames.splice(index, 1);
     const nextIndex = Math.min(index, this.sceneGifSession.frames.length - 1);
     this.loadSceneGifFrame(nextIndex, false);
@@ -1136,6 +1221,7 @@ export class App {
     if (!this.sceneGifSession) return;
     if (from === insertBefore || from + 1 === insertBefore) return;
     this.captureActiveSceneGifFrameSnapshot();
+    pushUndo();
     const frames = this.sceneGifSession.frames;
     const [moved] = frames.splice(from, 1);
     const adjustedInsertBefore = insertBefore > from ? insertBefore - 1 : insertBefore;
@@ -1213,8 +1299,14 @@ export class App {
       delayInput.addEventListener('dblclick', stopFrameSelect);
       delayInput.addEventListener('keydown', stopFrameSelect);
       const commitDelay = (): void => {
-        frame.delayMs = Math.max(20, this.parseIntOr(delayInput.value, frame.delayMs || this.DEFAULT_ANIM_FRAME_DELAY));
-        delayInput.value = String(frame.delayMs);
+        const nextDelay = Math.max(20, this.parseIntOr(delayInput.value, frame.delayMs || this.DEFAULT_ANIM_FRAME_DELAY));
+        if (nextDelay === frame.delayMs) {
+          delayInput.value = String(frame.delayMs);
+          return;
+        }
+        pushUndo();
+        frame.delayMs = nextDelay;
+        delayInput.value = String(nextDelay);
       };
       delayInput.addEventListener('change', (event) => {
         stopFrameSelect(event);
@@ -1532,6 +1624,7 @@ export class App {
       const slot = getActiveSlot();
       if (slot.type !== 'text' || !slot.textData) return;
       const td = { ...slot.textData, content: this.textArea.value };
+      beginBatchUpdate();
       updateSlotSilent(state.activeSlotIndex, { textData: td });
       this.scheduleTextRerender();
     });
@@ -1580,6 +1673,7 @@ export class App {
       const slot = getActiveSlot();
       if (slot.type !== 'text' || !slot.textData) return;
       const td = { ...slot.textData, wordWrapWidth: parseInt(this.wordWrapWidthInput.value) };
+      beginBatchUpdate();
       updateSlotSilent(state.activeSlotIndex, { textData: td });
       this.scheduleTextRerender();
     });
@@ -1629,12 +1723,14 @@ export class App {
     this.strokeColorInput.addEventListener('input', () => {
       const slot = getActiveSlot();
       if (slot.type !== 'text' || !slot.textData) return;
+      beginBatchUpdate();
       updateSlotSilent(state.activeSlotIndex, { textData: { ...slot.textData, strokeColor: this.strokeColorInput.value } });
       this.scheduleTextRerender();
     });
     this.strokeWidthInput.addEventListener('input', () => {
       const slot = getActiveSlot();
       if (slot.type !== 'text' || !slot.textData) return;
+      beginBatchUpdate();
       updateSlotSilent(state.activeSlotIndex, { textData: { ...slot.textData, strokeWidth: parseInt(this.strokeWidthInput.value) } });
       this.scheduleTextRerender();
     });
@@ -2062,6 +2158,7 @@ export class App {
           } else {
             layers[cat] = item.id;
           }
+          beginBatchUpdate();
           updateSlotSilent(state.activeSlotIndex, { cosmeticLayers: layers });
           this.scheduleBloblingRerender();
         },
@@ -2089,6 +2186,7 @@ export class App {
         const slot = getActiveSlot();
         if (slot.type !== 'cosmetic') return;
         const animId = item.id === 'none' ? undefined : item.id;
+        beginBatchUpdate();
         updateSlotSilent(state.activeSlotIndex, { bloblingAnimId: animId });
         this.scheduleBloblingRerender();
       },
@@ -3147,6 +3245,7 @@ export class App {
           .map(c => c.dataset.mutationId ?? '')
           .filter(Boolean);
         if (getActiveSlot().type === 'full-card') {
+          beginBatchUpdate();
           updateSlotSilent(state.activeSlotIndex, { mutations: activeMutations });
           this.refreshMutations();
         }
@@ -3543,7 +3642,7 @@ export class App {
       fullCardData: this.cloneFullCardData(baseline),
     });
 
-    updateSlotSilent(state.activeSlotIndex, {
+    updateSlot(state.activeSlotIndex, {
       fullCardData: this.cloneFullCardData(saved.fullCardData),
       fullCardVariantId: saved.id,
       fullCardVariantSource: 'user',
@@ -3552,7 +3651,7 @@ export class App {
     this.currentCardVariantSource = 'user';
     this.syncFullCardVariantMeta();
     this.refreshCardPickerVariantLists();
-    this.scheduleFullCardRerender();
+    this.scheduleFullCardRerender(false);
   }
 
   private ensureEditableActiveFullCardVariant(): void {
@@ -3630,31 +3729,33 @@ export class App {
       }
     }
 
-    pushUndo();
-    this.clearMultiSelection();
-    this.sceneGifTimeline = null;
-    if (this.sceneGifSession) this.closeSceneGifEditor(false);
+    runWithSingleUndo(() => {
+      pushUndo();
+      this.clearMultiSelection();
+      this.sceneGifTimeline = null;
+      if (this.sceneGifSession) this.closeSceneGifEditor(false);
 
-    if (mode === 'replace') {
-      const nextSlots = snapshot.slots.slice(0, MAX_SLOTS);
-      state.slots = nextSlots;
-      state.activeSlotIndex = Math.min(snapshot.activeSlotIndex, state.slots.length - 1);
-    } else {
-      const appendStart = state.slots.length;
-      const available = Math.max(0, MAX_SLOTS - appendStart);
-      const appended = snapshot.slots.slice(0, available);
-      state.slots = [...state.slots, ...appended];
-      const targetActive = appendStart + Math.min(snapshot.activeSlotIndex, appended.length - 1);
-      state.activeSlotIndex = Math.min(targetActive, state.slots.length - 1);
-      if (snapshot.slots.length > appended.length) {
-        alert(`Variant scene was trimmed to ${appended.length} layer(s) due to max layer limit.`);
+      if (mode === 'replace') {
+        const nextSlots = snapshot.slots.slice(0, MAX_SLOTS);
+        state.slots = nextSlots;
+        state.activeSlotIndex = Math.min(snapshot.activeSlotIndex, state.slots.length - 1);
+      } else {
+        const appendStart = state.slots.length;
+        const available = Math.max(0, MAX_SLOTS - appendStart);
+        const appended = snapshot.slots.slice(0, available);
+        state.slots = [...state.slots, ...appended];
+        const targetActive = appendStart + Math.min(snapshot.activeSlotIndex, appended.length - 1);
+        state.activeSlotIndex = Math.min(targetActive, state.slots.length - 1);
+        if (snapshot.slots.length > appended.length) {
+          alert(`Variant scene was trimmed to ${appended.length} layer(s) due to max layer limit.`);
+        }
       }
-    }
 
-    bus.emit(Events.SLOT_CHANGED, null);
-    bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
-    bus.emit(Events.RENDER_REQUEST, null);
-    this.rerenderAllSpecialSlots().catch(err => console.error('[Card] Scene-backed variant re-render failed:', err));
+      bus.emit(Events.SLOT_CHANGED, null);
+      bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
+      bus.emit(Events.RENDER_REQUEST, null);
+      this.rerenderAllSpecialSlots().catch(err => console.error('[Card] Scene-backed variant re-render failed:', err));
+    });
   }
 
   private async buildVariantPreviewThumb(variant: CardVariantV1): Promise<HTMLCanvasElement | null> {
@@ -3840,12 +3941,14 @@ export class App {
             this.applySceneBackedVariant(variant, applyMode);
             return;
           }
-          if (applyMode === 'replace') {
-            this.sceneGifTimeline = null;
-            if (this.sceneGifSession) this.closeSceneGifEditor(false);
-            clearSlots(state.slots.map((_, index) => index));
-          }
-          this.addFullCardLayer(type, variant).catch(err => console.error('[Card] Variant add failed:', err));
+          runWithSingleUndo(() => {
+            if (applyMode === 'replace') {
+              this.sceneGifTimeline = null;
+              if (this.sceneGifSession) this.closeSceneGifEditor(false);
+              clearSlots(state.slots.map((_, index) => index));
+            }
+            return this.addFullCardLayer(type, variant);
+          }).catch(err => console.error('[Card] Variant add failed:', err));
         });
         item.append(applyBtn);
         if (variant.source === 'user') {
@@ -3871,7 +3974,7 @@ export class App {
               activeSlot.fullCardVariantSource === 'user' &&
               activeSlot.fullCardVariantId === variant.id
             ) {
-              updateSlotSilent(state.activeSlotIndex, {
+              updateSlot(state.activeSlotIndex, {
                 fullCardVariantId: undefined,
                 fullCardVariantSource: undefined,
               });
@@ -3907,6 +4010,7 @@ export class App {
     }) as HTMLInputElement;
     this.petBarLengthInput.addEventListener('input', () => {
       this.petBarLengthDisplay.textContent = this.petBarLengthInput.value;
+      beginBatchUpdate();
       this.rerenderPetBar(state.activeSlotIndex, true, true).catch(err => console.error('[MG] Pet bar render failed:', err));
     });
     this.petBarLengthInput.addEventListener('change', () => {
@@ -4063,7 +4167,8 @@ export class App {
     };
   }
 
-  private schedulePetBarRerender(): void {
+  private schedulePetBarRerender(trackUndo = true): void {
+    if (trackUndo) beginBatchUpdate();
     if (this.petBarRenderDebounce !== null) clearTimeout(this.petBarRenderDebounce);
     const slotIndex = state.activeSlotIndex;
     this.petBarRenderDebounce = setTimeout(() => {
@@ -4122,7 +4227,7 @@ export class App {
     setActiveSlot(targetIdx);
     this.syncPetBarUI(state.slots[targetIdx]);
     this.drawer.open('Pet Bar', this.petBarControls);
-    this.schedulePetBarRerender();
+    this.schedulePetBarRerender(false);
   }
 
   /** Build the card-type selection overlay with canvas previews (appended to body once). */
@@ -4403,10 +4508,11 @@ export class App {
     this.syncFullCardUI(state.slots[targetIdx]);
     this.drawer.open('Card Editor', this.fullCardControls);
     this.suppressVariantForkOnce = variant?.source === 'builtin';
-    this.scheduleFullCardRerender();
+    this.scheduleFullCardRerender(false);
   }
 
   private async addCardLayers(type: FullCardType): Promise<void> {
+    await runWithSingleUndo(async () => {
     // â”€â”€ card dimensions (all types identical) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const CW = 500, CH = 720;
 
@@ -4534,6 +4640,7 @@ export class App {
     }
 
     await this.addPositionedCardLayers(specs, `${type} Card`);
+    });
   }
 
   /**
@@ -4544,6 +4651,7 @@ export class App {
     specs: Array<{ name: string; url: string; position: { x: number; y: number }; scale: number }>,
     groupLabel: string,
   ): Promise<void> {
+    await runWithSingleUndo(async () => {
     this.stopGifPreview();
     type LayerSrc = HTMLImageElement | HTMLCanvasElement;
     const getW = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.width : s.naturalWidth;
@@ -4583,6 +4691,7 @@ export class App {
         mutations: [],
       });
     }
+    });
   }
 
   /**
@@ -4590,6 +4699,7 @@ export class App {
    * Used by browser-grid card items and card preset URLs from dropdown items.
    */
   private async addCardUrlsAsLayers(urls: string[], baseLabel: string): Promise<void> {
+    await runWithSingleUndo(async () => {
     this.stopGifPreview();
     type LayerSrc = HTMLImageElement | HTMLCanvasElement;
     const getW = (s: LayerSrc) => s instanceof HTMLCanvasElement ? s.width : s.naturalWidth;
@@ -4629,10 +4739,12 @@ export class App {
         mutations: [],
       });
     }
+    });
   }
 
   /** Debounce full-card re-renders (same pattern as text layer). */
-  private scheduleFullCardRerender(): void {
+  private scheduleFullCardRerender(trackUndo = true): void {
+    if (trackUndo) beginBatchUpdate();
     this.ensureEditableActiveFullCardVariant();
     if (this.fullCardRenderDebounce !== null) clearTimeout(this.fullCardRenderDebounce);
     this.fullCardRenderDebounce = setTimeout(() => {
@@ -5800,6 +5912,18 @@ export class App {
     let pinchStartScale = 1;
     let pinchStartAngle = 0;
     let pinchStartRotation = 0;
+    let pinchDidMutate = false;
+    let pinchUndoPushed = false;
+
+    const finishTouchGesture = (): void => {
+      finishDrag();
+      if (pinchDidMutate) {
+        bus.emit(Events.SLOT_CHANGED, null);
+        bus.emit(Events.RENDER_REQUEST, null);
+      }
+      pinchDidMutate = false;
+      pinchUndoPushed = false;
+    };
 
     this.previewCanvas.addEventListener('touchstart', (e) => {
       if (e.touches.length === 1) {
@@ -5834,6 +5958,8 @@ export class App {
         pinchStartScale = getActiveSlot().scale;
         pinchStartAngle = Math.atan2(t1.clientY - t0.clientY, t1.clientX - t0.clientX);
         pinchStartRotation = getActiveSlot().rotation;
+        pinchDidMutate = false;
+        pinchUndoPushed = false;
       }
     }, { passive: false });
 
@@ -5863,10 +5989,13 @@ export class App {
         const dx = t1.clientX - t0.clientX;
         const dy = t1.clientY - t0.clientY;
         const slot = getActiveSlot();
+        if (slot.locked) return;
+        const prevScale = slot.scale;
+        const prevRotation = slot.rotation;
 
         // Pinch â†’ scale (clamped to slider range)
         const dist = Math.hypot(dx, dy);
-        slot.scale = this.clampScale(pinchStartScale * (dist / pinchStartDist));
+        slot.scale = this.clampScale(pinchStartScale * (dist / Math.max(pinchStartDist, 0.0001)));
         this.scaleInput.value = slot.scale.toFixed(3);
 
         // Twist â†’ rotation
@@ -5874,12 +6003,21 @@ export class App {
         slot.rotation = this.normalizeRotation(pinchStartRotation + (angle - pinchStartAngle) * (180 / Math.PI));
         this.rotationInput.value = slot.rotation.toFixed(1);
 
+        const didChange = Math.abs(slot.scale - prevScale) > 0.0001 || Math.abs(slot.rotation - prevRotation) > 0.01;
+        if (didChange) {
+          if (!pinchUndoPushed) {
+            pushUndo();
+            pinchUndoPushed = true;
+          }
+          pinchDidMutate = true;
+        }
+
         this.render();
       }
     }, { passive: false });
 
-    window.addEventListener('touchend', finishDrag);
-    window.addEventListener('touchcancel', finishDrag);
+    window.addEventListener('touchend', finishTouchGesture);
+    window.addEventListener('touchcancel', finishTouchGesture);
   }
 
   // â”€â”€ Download â”€â”€
@@ -7088,16 +7226,18 @@ export class App {
 
       const loadBtn = el('button', { className: 'btn-sm', textContent: 'Load' }) as HTMLButtonElement;
       loadBtn.addEventListener('click', () => {
-        pushUndo();
-        this.clearMultiSelection();
-        state.slots = scene.slots;
-        state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
-        this.sceneGifTimeline = null;
-        if (this.sceneGifSession) this.closeSceneGifEditor(false);
-        bus.emit(Events.SLOT_CHANGED, null);
-        bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
-        bus.emit(Events.RENDER_REQUEST, null);
-        this.rerenderAllSpecialSlots().catch(err => console.error('[MG] Scene re-render failed:', err));
+        runWithSingleUndo(() => {
+          pushUndo();
+          this.clearMultiSelection();
+          state.slots = scene.slots;
+          state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
+          this.sceneGifTimeline = null;
+          if (this.sceneGifSession) this.closeSceneGifEditor(false);
+          bus.emit(Events.SLOT_CHANGED, null);
+          bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
+          bus.emit(Events.RENDER_REQUEST, null);
+          this.rerenderAllSpecialSlots().catch(err => console.error('[MG] Scene re-render failed:', err));
+        });
       });
 
       const exportBtn = el('button', { className: 'btn-sm', textContent: 'Export' }) as HTMLButtonElement;
