@@ -107,6 +107,7 @@ export class SpriteLoader {
   private queue: QueueItem[] = [];
   private activeCount = 0;
   private lruOrder: string[] = [];
+  private fallbackImagePromise: Promise<HTMLImageElement> | null = null;
 
   async load(url: string, priority = 0): Promise<HTMLImageElement> {
     const cached = this.cache.get(url);
@@ -162,7 +163,13 @@ export class SpriteLoader {
     // Use fetch + blob to avoid CORS issues with canvas taint
     const fetchUrl = proxyUrl(url);
     const res = await fetch(fetchUrl);
-    if (!res.ok) throw new Error(`Failed to load: ${url} (${res.status})`);
+    if (!res.ok) {
+      if (res.status === 404 || res.status === 410) {
+        console.warn(`[SpriteLoader] Missing asset, using fallback: ${url}`);
+        return this.getFallbackImage();
+      }
+      throw new Error(`Failed to load: ${url} (${res.status})`);
+    }
     const blob = await res.blob();
     const blobUrl = URL.createObjectURL(blob);
 
@@ -178,6 +185,21 @@ export class SpriteLoader {
       };
       img.src = blobUrl;
     });
+  }
+
+  private getFallbackImage(): Promise<HTMLImageElement> {
+    if (this.fallbackImagePromise) return this.fallbackImagePromise;
+    this.fallbackImagePromise = new Promise<HTMLImageElement>((resolve, reject) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 2;
+      canvas.height = 2;
+      const dataUrl = canvas.toDataURL('image/png');
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Failed to decode fallback image'));
+      img.src = dataUrl;
+    });
+    return this.fallbackImagePromise;
   }
 
   private storeInCache(url: string, img: HTMLImageElement): void {

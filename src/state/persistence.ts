@@ -12,6 +12,62 @@ interface PersistedState {
   previewZoom: number;
 }
 
+const REMOVED_OVERLAY_URLS = new Set([
+  'overlays/connector-callout-number-1.svg',
+  'overlays/connector-callout-number-2.svg',
+]);
+
+const REMOVED_OVERLAY_URL_PREFIXES = [
+  'overlays/comic-',
+  'overlays/weatherfx-',
+  'overlays/hand-',
+  'overlays/control-',
+  'overlays/flame-',
+];
+
+const REMOVED_OVERLAY_KEYS = new Set([
+  'overlay/connector-callout-number-1',
+  'overlay/connector-callout-number-2',
+]);
+
+const REMOVED_OVERLAY_KEY_PREFIXES = [
+  'overlay/comic-',
+  'overlay/weatherfx-',
+  'overlay/hand-',
+  'overlay/control-',
+  'overlay/flame-',
+];
+
+function isRemovedOverlayUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  const normalized = url.toLowerCase();
+  if (REMOVED_OVERLAY_URLS.has(normalized)) return true;
+  return REMOVED_OVERLAY_URL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+function isRemovedOverlayKey(key: string | undefined): boolean {
+  if (!key) return false;
+  const normalized = key.toLowerCase();
+  if (REMOVED_OVERLAY_KEYS.has(normalized)) return true;
+  return REMOVED_OVERLAY_KEY_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+function sanitizeSlotAssets(slot: Slot): void {
+  if (slot.spriteUrl && slot.spriteUrl.startsWith('blob:')) {
+    slot.spriteUrl = '';
+    slot.isAnimated = false;
+  }
+  if (isRemovedOverlayUrl(slot.spriteUrl) || isRemovedOverlayKey(slot.spriteKey)) {
+    slot.spriteUrl = '';
+    slot.spriteKey = '';
+    slot.isAnimated = false;
+  }
+}
+
+function sanitizeSlots(slots: Slot[]): void {
+  for (const slot of slots) sanitizeSlotAssets(slot);
+}
+
 export function saveState(): void {
   // Strip non-serializable GIF data from slots before persisting
   const cleanSlots = state.slots.map(s => {
@@ -44,13 +100,7 @@ export function restoreState(): void {
       return;
     }
     if (data.slots) {
-      // Sanitize: clear blob URLs that can't survive across sessions
-      for (const slot of data.slots) {
-        if (slot.spriteUrl && slot.spriteUrl.startsWith('blob:')) {
-          slot.spriteUrl = '';
-          slot.isAnimated = false;
-        }
-      }
+      sanitizeSlots(data.slots);
       state.slots = data.slots;
     }
     if (typeof data.activeSlotIndex === 'number') state.activeSlotIndex = data.activeSlotIndex;
@@ -84,7 +134,9 @@ export function listSavedScenes(): SavedScene[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return (parsed as SavedScene[]).filter(s => s._v === SCENE_SCHEMA_VERSION);
+    const scenes = (parsed as SavedScene[]).filter(s => s._v === SCENE_SCHEMA_VERSION);
+    for (const scene of scenes) sanitizeSlots(scene.slots);
+    return scenes;
   } catch {
     return [];
   }
@@ -166,13 +218,7 @@ export function importSceneJson(json: string): SavedScene | null {
     if (parsed._v !== SCENE_SCHEMA_VERSION) return null;
     if (!Array.isArray(parsed.slots)) return null;
     const scene = parsed as unknown as SavedScene;
-    // Sanitize blobs
-    for (const slot of scene.slots) {
-      if (slot.spriteUrl?.startsWith('blob:')) {
-        slot.spriteUrl = '';
-        slot.isAnimated = false;
-      }
-    }
+    sanitizeSlots(scene.slots);
     return scene;
   } catch {
     return null;
