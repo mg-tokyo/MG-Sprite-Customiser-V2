@@ -155,6 +155,18 @@ interface FxPreviewAnimatedScene {
 
 // MUTATION_CHIP_COLORS imported from './drawers/card-drawer'
 
+const LOCAL_UI_EXTRAS = [
+  { id: 'local/PolaroidBackground', label: 'PolaroidBackground', file: '/ui/PolaroidBackground.png' },
+] as const;
+
+const CDN_UI_EXTRAS = [
+  { id: 'cdn/GardenJournal', label: 'GardenJournal', file: 'ui/GardenJournal.webp' },
+  { id: 'cdn/AllRestocked', label: 'AllRestocked (banner)', file: 'ui/all-restocked.webp' },
+  { id: 'cdn/EggsRestocked', label: 'EggsRestocked (banner)', file: 'ui/eggs-restocked.webp' },
+  { id: 'cdn/SeedsRestocked', label: 'SeedsRestocked (banner)', file: 'ui/seeds-restocked.webp' },
+  { id: 'cdn/ToolsRestocked', label: 'ToolsRestocked (banner)', file: 'ui/tools-restocked.webp' },
+] as const;
+
 
 // (card-tinting functions removed â€” card PNG sprites are pre-colored per type)
 
@@ -2605,19 +2617,19 @@ export class App {
             }
           }
         }
-        // CDN-only extras (shown under 'ui' or when no filter)
-        if (state.gameVersion && (!catFilter || catFilter === 'ui')) {
-          const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
-          const cdnExtras: { label: string; file: string }[] = [
-            { label: 'GardenJournal',          file: 'ui/GardenJournal.webp' },
-            { label: 'AllRestocked (banner)',   file: 'ui/all-restocked.webp' },
-            { label: 'EggsRestocked (banner)',  file: 'ui/eggs-restocked.webp' },
-            { label: 'SeedsRestocked (banner)', file: 'ui/seeds-restocked.webp' },
-            { label: 'ToolsRestocked (banner)', file: 'ui/tools-restocked.webp' },
-          ];
-          for (const extra of cdnExtras) {
-            const url = `${cdnBase}/${extra.file}`;
+        // Local + CDN extras (shown under 'ui' or when no filter).
+        if (!catFilter || catFilter === 'ui') {
+          for (const extra of LOCAL_UI_EXTRAS) {
+            const url = new URL(extra.file, window.location.origin).href;
             addEntry(url, extra.label, url);
+          }
+
+          if (state.gameVersion) {
+            const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
+            for (const extra of CDN_UI_EXTRAS) {
+              const url = `${cdnBase}/${extra.file}`;
+              addEntry(url, extra.label, url);
+            }
           }
         }
       }
@@ -4962,19 +4974,18 @@ export class App {
         }
       }
 
-      // CDN-only extras â€” assets that exist on the game CDN but are not in the sprite atlas.
+      // Local + CDN extras â€” assets outside the sprite atlas.
       // The sprite-loader proxy handles magicgarden.gg URLs identically to cosmetics.
-      if (cat === 'ui' && state.gameVersion) {
-        const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
-        const cdnExtras: { id: string; label: string; file: string }[] = [
-          { id: 'cdn/GardenJournal',  label: 'GardenJournal',          file: 'ui/GardenJournal.webp' },
-          { id: 'cdn/AllRestocked',   label: 'AllRestocked (banner)',   file: 'ui/all-restocked.webp' },
-          { id: 'cdn/EggsRestocked',  label: 'EggsRestocked (banner)',  file: 'ui/eggs-restocked.webp' },
-          { id: 'cdn/SeedsRestocked', label: 'SeedsRestocked (banner)', file: 'ui/seeds-restocked.webp' },
-          { id: 'cdn/ToolsRestocked', label: 'ToolsRestocked (banner)', file: 'ui/tools-restocked.webp' },
-        ];
-        for (const extra of cdnExtras) {
-          items.push({ id: extra.id, label: extra.label, thumbUrl: `${cdnBase}/${extra.file}` });
+      if (cat === 'ui') {
+        for (const extra of LOCAL_UI_EXTRAS) {
+          items.push({ id: extra.id, label: extra.label, thumbUrl: extra.file });
+        }
+
+        if (state.gameVersion) {
+          const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
+          for (const extra of CDN_UI_EXTRAS) {
+            items.push({ id: extra.id, label: extra.label, thumbUrl: `${cdnBase}/${extra.file}` });
+          }
         }
       }
 
