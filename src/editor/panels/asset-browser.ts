@@ -87,6 +87,7 @@ const CAT_COLORS: Record<string, string> = {
 
 export function getCatColor(catId: string): string {
   const base = catId.startsWith('cosmetic:') ? catId.slice('cosmetic:'.length) : catId;
+  if (base.startsWith('overlays-')) return '#f472b6';
   return CAT_COLORS[base] ?? '#94a3b8';
 }
 

@@ -28,6 +28,13 @@ import { BLOBLING_LAYER_ORDER } from './drawers/blobling-drawer';
 import type { BloblingLayerKey } from './drawers/blobling-drawer';
 import { MUTATION_CHIP_COLORS } from './drawers/card-drawer';
 import {
+  LOCAL_OVERLAY_CATEGORIES,
+  OVERLAY_ALL_CATEGORY_ID,
+  getOverlayAssetsForCategory,
+  isOverlayCategoryId,
+  normalizeOverlayCategoryId,
+} from './overlay-assets';
+import {
   deleteUserVariant,
   duplicateBuiltinToUser,
   getBuiltinScenePreset,
@@ -154,10 +161,6 @@ interface FxPreviewAnimatedScene {
 }
 
 // MUTATION_CHIP_COLORS imported from './drawers/card-drawer'
-
-const LOCAL_UI_EXTRAS = [
-  { id: 'local/PolaroidBackground', label: 'PolaroidBackground', file: 'ui/PolaroidBackground.png' },
-] as const;
 
 const CDN_UI_EXTRAS = [
   { id: 'cdn/GardenJournal', label: 'GardenJournal', file: 'ui/GardenJournal.webp' },
@@ -2527,6 +2530,9 @@ export class App {
         catSelect.append(el('option', { value: cat.cat, textContent: cat.cat }));
       }
     }
+    for (const overlayCat of LOCAL_OVERLAY_CATEGORIES) {
+      catSelect.append(el('option', { value: overlayCat.id, textContent: overlayCat.label }));
+    }
     if (state.cosmeticsData) {
       for (const cat of state.cosmeticsData.categories) {
         catSelect.append(el('option', { value: `cosmetic:${cat.cat}`, textContent: `Blobling: ${cat.cat}` }));
@@ -2617,19 +2623,23 @@ export class App {
             }
           }
         }
-        // Local + CDN extras (shown under 'ui' or when no filter).
-        if (!catFilter || catFilter === 'ui') {
-          for (const extra of LOCAL_UI_EXTRAS) {
-            addEntry(extra.file, extra.label, extra.file);
-          }
 
-          if (state.gameVersion) {
-            const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
-            for (const extra of CDN_UI_EXTRAS) {
-              const url = `${cdnBase}/${extra.file}`;
-              addEntry(url, extra.label, url);
-            }
+        // CDN-only extras (shown under 'ui' or when no filter).
+        if ((!catFilter || catFilter === 'ui') && state.gameVersion) {
+          const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
+          for (const extra of CDN_UI_EXTRAS) {
+            const url = `${cdnBase}/${extra.file}`;
+            addEntry(url, extra.label, url);
           }
+        }
+      }
+
+      if (!catFilter || isOverlayCategoryId(catFilter)) {
+        const overlayCategoryId = catFilter
+          ? normalizeOverlayCategoryId(catFilter)
+          : OVERLAY_ALL_CATEGORY_ID;
+        for (const asset of getOverlayAssetsForCategory(overlayCategoryId)) {
+          addEntry(asset.file, asset.label, asset.file);
         }
       }
 
@@ -2892,6 +2902,9 @@ export class App {
   private fcBuildSpriteUrl(spriteKey: string): string | null {
     if (!spriteKey) return null;
     if (spriteKey.startsWith('http') || spriteKey.startsWith('blob:') || spriteKey.startsWith('data:')) return spriteKey;
+    if (/^(?:\.\/|\.\.\/|\/?[a-z0-9_-]+\/).+\.(?:png|jpe?g|webp|gif|svg)$/i.test(spriteKey)) {
+      return spriteKey;
+    }
     if (spriteKey.startsWith('sprite/')) {
       const [, cat, ...rest] = spriteKey.split('/');
       const name = rest.join('/');
@@ -4848,6 +4861,10 @@ export class App {
       }
     }
 
+    for (const overlayCat of LOCAL_OVERLAY_CATEGORIES) {
+      items.push({ id: overlayCat.id, label: overlayCat.label });
+    }
+
     // Blobling individual cosmetic categories
     if (state.cosmeticsData && state.cosmeticsData.categories.length > 0) {
       for (const cat of state.cosmeticsData.categories) {
@@ -4857,6 +4874,11 @@ export class App {
 
     // setItems fires onSelect (â†’ populateSprites) if it has to auto-select.
     // We also call populateSprites() unconditionally to handle the silent-restore case.
+    const normalizedSelectedCategory = normalizeOverlayCategoryId(state.selectedCategory);
+    if (normalizedSelectedCategory !== state.selectedCategory) {
+      state.selectedCategory = normalizedSelectedCategory;
+    }
+
     this.categoryDropdown.setItems(
       items,
       state.selectedCategory || undefined,
@@ -4880,9 +4902,16 @@ export class App {
   }
 
   private populateSprites(suppressAutoSelectOnMissingRestore: boolean): void {
-    const cat = state.selectedCategory;
+    const cat = normalizeOverlayCategoryId(state.selectedCategory);
+    state.selectedCategory = cat;
     const sd = state.spriteData;
     const items: DropdownItem[] = [];
+
+    if (isOverlayCategoryId(cat)) {
+      for (const asset of getOverlayAssetsForCategory(cat)) {
+        items.push({ id: asset.id, label: asset.label, thumbUrl: asset.file });
+      }
+    }
 
     // Card preset / Full Card categories â€” build layer URLs from ui atlas
     if (cat === 'cards' || cat === 'full-cards') {
@@ -4973,18 +5002,12 @@ export class App {
         }
       }
 
-      // Local + CDN extras â€” assets outside the sprite atlas.
+      // CDN extras â€” assets outside the sprite atlas.
       // The sprite-loader proxy handles magicgarden.gg URLs identically to cosmetics.
-      if (cat === 'ui') {
-        for (const extra of LOCAL_UI_EXTRAS) {
-          items.push({ id: extra.id, label: extra.label, thumbUrl: extra.file });
-        }
-
-        if (state.gameVersion) {
-          const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
-          for (const extra of CDN_UI_EXTRAS) {
-            items.push({ id: extra.id, label: extra.label, thumbUrl: `${cdnBase}/${extra.file}` });
-          }
+      if (cat === 'ui' && state.gameVersion) {
+        const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
+        for (const extra of CDN_UI_EXTRAS) {
+          items.push({ id: extra.id, label: extra.label, thumbUrl: `${cdnBase}/${extra.file}` });
         }
       }
 
