@@ -125,7 +125,19 @@ foreach ($spec in $specialArrows) {
 }
 
 # --- Shapes ---
-foreach ($sides in 3..12) {
+Write-Svg -Name 'shape-circle-outline.svg' -Inner "<circle cx='256' cy='256' r='176' fill='none' stroke='#111' stroke-width='22'/>"
+Write-Svg -Name 'shape-circle-fill.svg' -Inner "<circle cx='256' cy='256' r='176' fill='#fff' stroke='#111' stroke-width='22'/>"
+Write-Svg -Name 'shape-ellipse-outline.svg' -Inner "<ellipse cx='256' cy='256' rx='198' ry='146' fill='none' stroke='#111' stroke-width='22'/>"
+Write-Svg -Name 'shape-ellipse-fill.svg' -Inner "<ellipse cx='256' cy='256' rx='198' ry='146' fill='#fff' stroke='#111' stroke-width='22'/>"
+Write-Svg -Name 'shape-square-outline.svg' -Inner "<rect x='80' y='80' width='352' height='352' fill='none' stroke='#111' stroke-width='22'/>"
+Write-Svg -Name 'shape-square-fill.svg' -Inner "<rect x='80' y='80' width='352' height='352' fill='#fff' stroke='#111' stroke-width='22'/>"
+Write-Svg -Name 'shape-rect-outline.svg' -Inner "<rect x='72' y='128' width='368' height='256' fill='none' stroke='#111' stroke-width='22'/>"
+Write-Svg -Name 'shape-rect-fill.svg' -Inner "<rect x='72' y='128' width='368' height='256' fill='#fff' stroke='#111' stroke-width='22'/>"
+Write-Svg -Name 'shape-rounded-rect-outline.svg' -Inner "<rect x='68' y='104' width='376' height='304' rx='74' fill='none' stroke='#111' stroke-width='22'/>"
+Write-Svg -Name 'shape-rounded-rect-fill.svg' -Inner "<rect x='68' y='104' width='376' height='304' rx='74' fill='#fff' stroke='#111' stroke-width='22'/>"
+
+$polygonSides = @(3, 4, 5, 6, 8, 10, 12)
+foreach ($sides in $polygonSides) {
   $poly = Get-RegularPolygonPoints -Sides $sides -Radius 176
   Write-Svg -Name ("shape-polygon-{0:00}-outline.svg" -f $sides) -Inner "<polygon points='$poly' fill='none' stroke='#111' stroke-width='22' stroke-linejoin='round'/>"
   Write-Svg -Name ("shape-polygon-{0:00}-fill.svg" -f $sides) -Inner "<polygon points='$poly' fill='#fff' stroke='#111' stroke-width='22' stroke-linejoin='round'/>"
@@ -135,35 +147,12 @@ $starDefs = @(
   [pscustomobject]@{ Spikes = 4; Outer = 184; Inner = 90 },
   [pscustomobject]@{ Spikes = 5; Outer = 184; Inner = 84 },
   [pscustomobject]@{ Spikes = 6; Outer = 184; Inner = 86 },
-  [pscustomobject]@{ Spikes = 7; Outer = 182; Inner = 82 },
-  [pscustomobject]@{ Spikes = 8; Outer = 184; Inner = 84 },
-  [pscustomobject]@{ Spikes = 10; Outer = 182; Inner = 80 }
+  [pscustomobject]@{ Spikes = 8; Outer = 184; Inner = 84 }
 )
 
 foreach ($star in $starDefs) {
   $points = Get-StarPoints -Spikes $star.Spikes -OuterRadius $star.Outer -InnerRadius $star.Inner
   Write-Svg -Name ("shape-star-{0:00}.svg" -f $star.Spikes) -Inner "<polygon points='$points' fill='#fff' stroke='#111' stroke-width='18' stroke-linejoin='round'/>"
-}
-
-$shapeExtras = @(
-  [pscustomobject]@{ Name = 'shape-heart'; Inner = "<path d='M256 430 98 270c-40-42-40-112 0-154s104-42 144 0l14 14 14-14c40-42 104-42 144 0s40 112 0 154Z' fill='#fff' stroke='#111' stroke-width='20' stroke-linejoin='round'/>" },
-  [pscustomobject]@{ Name = 'shape-cloud'; Inner = "<path d='M136 368h246a82 82 0 0 0 0-164 108 108 0 0 0-204-24A78 78 0 0 0 136 368Z' fill='#fff' stroke='#111' stroke-width='20'/>" },
-  [pscustomobject]@{ Name = 'shape-tag'; Inner = "<path d='M86 170h220l120 120-120 120H86Z' fill='#fff' stroke='#111' stroke-width='20' stroke-linejoin='round'/><circle cx='148' cy='230' r='20' fill='none' stroke='#111' stroke-width='12'/>" },
-  [pscustomobject]@{ Name = 'shape-ribbon'; Inner = "<path d='M70 166h372v112H70Z' fill='#fff' stroke='#111' stroke-width='18'/><path d='m142 278-54 100h78l36-100Zm228 0 36 100h78l-54-100Z' fill='#fff' stroke='#111' stroke-width='16' stroke-linejoin='round'/>" },
-  [pscustomobject]@{ Name = 'shape-banner'; Inner = "<path d='M52 168h408v152H52Z' fill='#fff' stroke='#111' stroke-width='20'/><path d='m52 168 74 76-74 76Zm408 0-74 76 74 76Z' fill='#fff' stroke='#111' stroke-width='20'/>" },
-  [pscustomobject]@{ Name = 'shape-pill-outline'; Inner = "<rect x='60' y='168' width='392' height='176' rx='88' fill='none' stroke='#111' stroke-width='22'/>" },
-  [pscustomobject]@{ Name = 'shape-pill-fill'; Inner = "<rect x='60' y='168' width='392' height='176' rx='88' fill='#fff' stroke='#111' stroke-width='22'/>" },
-  [pscustomobject]@{ Name = 'shape-ring-double'; Inner = "<circle cx='256' cy='256' r='170' fill='none' stroke='#111' stroke-width='18'/><circle cx='256' cy='256' r='124' fill='none' stroke='#111' stroke-width='18'/>" },
-  [pscustomobject]@{ Name = 'shape-frame-rounded'; Inner = "<rect x='58' y='58' width='396' height='396' rx='72' fill='none' stroke='#111' stroke-width='20'/><rect x='122' y='122' width='268' height='268' rx='44' fill='none' stroke='#111' stroke-width='14'/>" },
-  [pscustomobject]@{ Name = 'shape-frame-square'; Inner = "<rect x='58' y='58' width='396' height='396' fill='none' stroke='#111' stroke-width='20'/><rect x='122' y='122' width='268' height='268' fill='none' stroke='#111' stroke-width='14'/>" },
-  [pscustomobject]@{ Name = 'shape-bracket-round'; Inner = "<path d='M184 80c-54 24-88 88-88 176s34 152 88 176' fill='none' stroke='#111' stroke-width='20' stroke-linecap='round'/><path d='M328 80c54 24 88 88 88 176s-34 152-88 176' fill='none' stroke='#111' stroke-width='20' stroke-linecap='round'/>" },
-  [pscustomobject]@{ Name = 'shape-bracket-square'; Inner = "<path d='M190 84H100v344h90' fill='none' stroke='#111' stroke-width='20' stroke-linecap='round'/><path d='M322 84h90v344h-90' fill='none' stroke='#111' stroke-width='20' stroke-linecap='round'/>" },
-  [pscustomobject]@{ Name = 'shape-plus-bold'; Inner = "<path d='M208 84h96v124h124v96H304v124h-96V304H84v-96h124Z' fill='#fff' stroke='#111' stroke-width='16' stroke-linejoin='round'/>" },
-  [pscustomobject]@{ Name = 'shape-x-bold'; Inner = "<path d='M116 92 92 116l140 140L92 396l24 24 140-140 140 140 24-24-140-140 140-140-24-24-140 140Z' fill='#fff' stroke='#111' stroke-width='10' stroke-linejoin='round'/>" }
-)
-
-foreach ($shape in $shapeExtras) {
-  Write-Svg -Name "$($shape.Name).svg" -Inner $shape.Inner
 }
 
 # --- Bubbles ---
