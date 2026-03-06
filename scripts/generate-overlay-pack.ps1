@@ -224,6 +224,7 @@ foreach ($style in $styleDefs) {
 }
 
 # --- Flames ---
+if ($false) {
 $flameDefs = @(
   [pscustomobject]@{ Name = 'flame-small'; Inner = "<path d='M256 446c86 0 142-64 142-142 0-76-52-116-92-164-6 44-24 78-52 108-8-36-32-66-64-96-16 38-74 88-74 158 0 78 56 136 140 136Z' fill='#fff' stroke='#111' stroke-width='20' stroke-linejoin='round'/><path d='M252 402c48 0 80-36 80-82 0-30-16-54-40-78-2 24-12 42-26 58-8-18-20-32-34-46-12 26-28 42-28 70 0 46 18 78 48 78Z' fill='#ffd36b' stroke='#111' stroke-width='14' stroke-linejoin='round'/>" },
   [pscustomobject]@{ Name = 'flame-medium'; Inner = "<path d='M258 468c108 0 176-78 176-174 0-96-72-150-116-208-10 52-30 96-62 132-12-42-38-78-76-114-24 54-106 114-106 210 0 96 70 154 184 154Z' fill='#fff' stroke='#111' stroke-width='20' stroke-linejoin='round'/><path d='M258 416c64 0 108-46 108-108 0-44-24-78-60-112-4 30-16 56-36 78-10-24-26-42-44-60-24 28-42 54-42 94 0 58 28 108 74 108Z' fill='#ffb347' stroke='#111' stroke-width='14' stroke-linejoin='round'/>" },
@@ -246,6 +247,7 @@ $flameDefs = @(
 
 foreach ($flame in $flameDefs) {
   Write-Svg -Name "$($flame.Name).svg" -Inner $flame.Inner
+}
 }
 
 Write-Host 'Overlay pack generation complete.'

@@ -6,34 +6,24 @@ export type OverlayGroupKey =
   | 'shapes'
   | 'bubbles'
   | 'styles'
-  | 'flames'
   | 'symbols'
   | 'panels'
   | 'frames'
   | 'connectors'
-  | 'comic'
-  | 'weather'
   | 'tech'
-  | 'patterns'
-  | 'hands'
-  | 'controls';
+  | 'patterns';
 
 const OVERLAY_GROUP_ORDER: OverlayGroupKey[] = [
   'arrows',
   'shapes',
   'bubbles',
   'styles',
-  'flames',
   'symbols',
   'panels',
   'frames',
   'connectors',
-  'comic',
-  'weather',
   'tech',
   'patterns',
-  'hands',
-  'controls',
 ];
 
 const OVERLAY_GROUP_LABELS: Record<OverlayGroupKey, string> = {
@@ -41,17 +31,12 @@ const OVERLAY_GROUP_LABELS: Record<OverlayGroupKey, string> = {
   shapes: 'Shapes',
   bubbles: 'Bubbles',
   styles: 'Styles',
-  flames: 'Flames',
   symbols: 'Symbols',
   panels: 'Panels & Labels',
   frames: 'Frames & Borders',
   connectors: 'Connectors & Callouts',
-  comic: 'Comic SFX',
-  weather: 'Weather & Nature',
   tech: 'Tech HUD',
   patterns: 'Patterns & Textures',
-  hands: 'Hands & Gestures',
-  controls: 'UI Controls',
 };
 
 export interface OverlayCategory {
@@ -129,15 +114,6 @@ const LOCAL_OVERLAY_FILES = [
   'overlays/bubble-thought-up.svg',
   'overlays/bubble-whisper-left.svg',
   'overlays/bubble-whisper-right.svg',
-  'overlays/comic-action-lines-radial.svg',
-  'overlays/comic-anger-mark.svg',
-  'overlays/comic-burst-boom.svg',
-  'overlays/comic-burst-pow.svg',
-  'overlays/comic-impact-ring.svg',
-  'overlays/comic-speed-smear-left.svg',
-  'overlays/comic-speed-smear-right.svg',
-  'overlays/comic-surprise-stars.svg',
-  'overlays/comic-sweat-drop.svg',
   'overlays/connector-callout-number-1.svg',
   'overlays/connector-callout-number-2.svg',
   'overlays/connector-curve-left.svg',
@@ -148,33 +124,6 @@ const LOCAL_OVERLAY_FILES = [
   'overlays/connector-leader-left.svg',
   'overlays/connector-leader-right.svg',
   'overlays/connector-leader-up.svg',
-  'overlays/control-badge.svg',
-  'overlays/control-button-pill.svg',
-  'overlays/control-button-square.svg',
-  'overlays/control-chip.svg',
-  'overlays/control-dropdown.svg',
-  'overlays/control-slider.svg',
-  'overlays/control-stepper.svg',
-  'overlays/control-toggle-off.svg',
-  'overlays/control-toggle-on.svg',
-  'overlays/control-tooltip.svg',
-  'overlays/flame-burst.svg',
-  'overlays/flame-comet-left.svg',
-  'overlays/flame-comet-right.svg',
-  'overlays/flame-dual.svg',
-  'overlays/flame-embers.svg',
-  'overlays/flame-jet.svg',
-  'overlays/flame-magic.svg',
-  'overlays/flame-medium.svg',
-  'overlays/flame-scorch-mark.svg',
-  'overlays/flame-small.svg',
-  'overlays/flame-smoke-puff-1.svg',
-  'overlays/flame-smoke-puff-2.svg',
-  'overlays/flame-smoke-puff-3.svg',
-  'overlays/flame-tall.svg',
-  'overlays/flame-torch.svg',
-  'overlays/flame-trail.svg',
-  'overlays/flame-wide.svg',
   'overlays/frame-corners-luxe.svg',
   'overlays/frame-dashed-rounded.svg',
   'overlays/frame-double-line.svg',
@@ -185,16 +134,6 @@ const LOCAL_OVERLAY_FILES = [
   'overlays/frame-photo-corners.svg',
   'overlays/frame-stitched-rect.svg',
   'overlays/frame-vintage.svg',
-  'overlays/hand-click-ring.svg',
-  'overlays/hand-cursor.svg',
-  'overlays/hand-drag.svg',
-  'overlays/hand-hold-press.svg',
-  'overlays/hand-pinch.svg',
-  'overlays/hand-pointer-left.svg',
-  'overlays/hand-pointer-right.svg',
-  'overlays/hand-swipe-left.svg',
-  'overlays/hand-swipe-right.svg',
-  'overlays/hand-tap-indicator.svg',
   'overlays/panel-chip-badge.svg',
   'overlays/panel-label-pill.svg',
   'overlays/panel-label-ribbon.svg',
@@ -298,16 +237,6 @@ const LOCAL_OVERLAY_FILES = [
   'overlays/tech-reticle-square.svg',
   'overlays/tech-scanlines.svg',
   'overlays/tech-signal-bars.svg',
-  'overlays/weatherfx-cloud-soft.svg',
-  'overlays/weatherfx-fog-band.svg',
-  'overlays/weatherfx-leaf-swirls.svg',
-  'overlays/weatherfx-lightning-bolt.svg',
-  'overlays/weatherfx-petals.svg',
-  'overlays/weatherfx-rain-streaks.svg',
-  'overlays/weatherfx-snow-flurry.svg',
-  'overlays/weatherfx-sun-rays.svg',
-  'overlays/weatherfx-water-splash.svg',
-  'overlays/weatherfx-wind-swirl.svg',
 ] as const;
 
 export interface LocalOverlayAsset {
@@ -341,17 +270,12 @@ function detectOverlayGroup(file: string): OverlayGroupKey {
   if (basename.startsWith('shape-')) return 'shapes';
   if (basename.startsWith('bubble-')) return 'bubbles';
   if (basename.startsWith('style-')) return 'styles';
-  if (basename.startsWith('flame-')) return 'flames';
   if (basename.startsWith('symbol-')) return 'symbols';
   if (basename.startsWith('panel-')) return 'panels';
   if (basename.startsWith('frame-')) return 'frames';
   if (basename.startsWith('connector-')) return 'connectors';
-  if (basename.startsWith('comic-')) return 'comic';
-  if (basename.startsWith('weatherfx-')) return 'weather';
   if (basename.startsWith('tech-')) return 'tech';
   if (basename.startsWith('pattern-')) return 'patterns';
-  if (basename.startsWith('hand-')) return 'hands';
-  if (basename.startsWith('control-')) return 'controls';
   return 'styles';
 }
 

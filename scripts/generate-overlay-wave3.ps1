@@ -135,6 +135,9 @@ $defs = @(
 )
 
 foreach ($item in $defs) {
+  if ($item.Name.StartsWith('comic-') -or $item.Name.StartsWith('weatherfx-') -or $item.Name.StartsWith('hand-') -or $item.Name.StartsWith('control-')) {
+    continue
+  }
   Write-Svg -Name "$($item.Name).svg" -Inner $item.Inner
 }
 
