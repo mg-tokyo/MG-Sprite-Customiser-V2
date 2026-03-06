@@ -156,7 +156,7 @@ interface FxPreviewAnimatedScene {
 // MUTATION_CHIP_COLORS imported from './drawers/card-drawer'
 
 const LOCAL_UI_EXTRAS = [
-  { id: 'local/PolaroidBackground', label: 'PolaroidBackground', file: '/ui/PolaroidBackground.png' },
+  { id: 'local/PolaroidBackground', label: 'PolaroidBackground', file: 'ui/PolaroidBackground.png' },
 ] as const;
 
 const CDN_UI_EXTRAS = [
@@ -2620,8 +2620,7 @@ export class App {
         // Local + CDN extras (shown under 'ui' or when no filter).
         if (!catFilter || catFilter === 'ui') {
           for (const extra of LOCAL_UI_EXTRAS) {
-            const url = new URL(extra.file, window.location.origin).href;
-            addEntry(url, extra.label, url);
+            addEntry(extra.file, extra.label, extra.file);
           }
 
           if (state.gameVersion) {
