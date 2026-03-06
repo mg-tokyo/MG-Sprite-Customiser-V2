@@ -28,11 +28,14 @@ import { BLOBLING_LAYER_ORDER } from './drawers/blobling-drawer';
 import type { BloblingLayerKey } from './drawers/blobling-drawer';
 import { MUTATION_CHIP_COLORS } from './drawers/card-drawer';
 import {
+  OVERLAY_CATEGORY_ID,
+  OVERLAY_CATEGORY_LABEL,
   LOCAL_OVERLAY_CATEGORIES,
   OVERLAY_ALL_CATEGORY_ID,
   getOverlayAssetsForCategory,
   isOverlayCategoryId,
   normalizeOverlayCategoryId,
+  normalizeOverlayRootCategoryId,
 } from './overlay-assets';
 import {
   deleteUserVariant,
@@ -238,9 +241,11 @@ export class App {
   private browserTabsEl!: HTMLElement;
   private browserGridEl!: HTMLElement;
   private browserSearchInput!: HTMLInputElement;
+  private browserOverlaySubcategorySelect!: HTMLSelectElement;
   private browserZoomInput!: HTMLInputElement;
   private browserZoomValueEl!: HTMLElement;
   private browserCleanup: (() => void) | null = null;
+  private overlaySubcategoryId = OVERLAY_ALL_CATEGORY_ID;
   private optionsDiv!: HTMLElement;
   private tintLabel!: HTMLElement;
   private browserItems: DropdownItem[] = [];
@@ -737,6 +742,7 @@ export class App {
       el: browserEl,
       tabsEl,
       searchInput: bsInput,
+      overlaySubcategorySelect: overlaySubcategorySelect,
       zoomInput: bzInput,
       zoomValueEl: bzValueEl,
       gridEl,
@@ -744,8 +750,15 @@ export class App {
     this.browserTabsEl     = tabsEl;
     this.browserGridEl     = gridEl;
     this.browserSearchInput = bsInput;
+    this.browserOverlaySubcategorySelect = overlaySubcategorySelect;
     this.browserZoomInput = bzInput;
     this.browserZoomValueEl = bzValueEl;
+    this.populateOverlaySubcategorySelect();
+    overlaySubcategorySelect.addEventListener('change', () => {
+      const next = overlaySubcategorySelect.value;
+      this.overlaySubcategoryId = isOverlayCategoryId(next) ? next : OVERLAY_ALL_CATEGORY_ID;
+      this.populateSprites(true);
+    });
     bsInput.addEventListener('input', () => this.updateBrowserGrid(bsInput.value));
     bzInput.addEventListener('input', () => {
       const parsed = parseFloat(bzInput.value);
@@ -4841,6 +4854,32 @@ export class App {
 
   // â”€â”€ Categories & Sprites â”€â”€
 
+  private populateOverlaySubcategorySelect(): void {
+    const select = this.browserOverlaySubcategorySelect;
+    if (!select) return;
+    select.innerHTML = '';
+    for (const cat of LOCAL_OVERLAY_CATEGORIES) {
+      const label = cat.label.replace(/^Overlays:\s*/i, '');
+      select.append(el('option', { value: cat.id, textContent: label }));
+    }
+    if (!isOverlayCategoryId(this.overlaySubcategoryId)) {
+      this.overlaySubcategoryId = OVERLAY_ALL_CATEGORY_ID;
+    }
+    select.value = this.overlaySubcategoryId;
+  }
+
+  private syncOverlaySubcategoryUi(categoryId: string): void {
+    const select = this.browserOverlaySubcategorySelect;
+    if (!select) return;
+    const show = categoryId === OVERLAY_CATEGORY_ID;
+    select.hidden = !show;
+    if (!show) return;
+    if (!isOverlayCategoryId(this.overlaySubcategoryId)) {
+      this.overlaySubcategoryId = OVERLAY_ALL_CATEGORY_ID;
+    }
+    select.value = this.overlaySubcategoryId;
+  }
+
   private populateCategories(): void {
     const items: DropdownItem[] = [];
     const sd = state.spriteData;
@@ -4861,9 +4900,7 @@ export class App {
       }
     }
 
-    for (const overlayCat of LOCAL_OVERLAY_CATEGORIES) {
-      items.push({ id: overlayCat.id, label: overlayCat.label });
-    }
+    items.push({ id: OVERLAY_CATEGORY_ID, label: OVERLAY_CATEGORY_LABEL });
 
     // Blobling individual cosmetic categories
     if (state.cosmeticsData && state.cosmeticsData.categories.length > 0) {
@@ -4874,10 +4911,16 @@ export class App {
 
     // setItems fires onSelect (â†’ populateSprites) if it has to auto-select.
     // We also call populateSprites() unconditionally to handle the silent-restore case.
-    const normalizedSelectedCategory = normalizeOverlayCategoryId(state.selectedCategory);
+    const selectedOverlaySubcategory = normalizeOverlayCategoryId(state.selectedCategory);
+    if (isOverlayCategoryId(selectedOverlaySubcategory)) {
+      this.overlaySubcategoryId = selectedOverlaySubcategory;
+    }
+    const normalizedSelectedCategory = normalizeOverlayRootCategoryId(state.selectedCategory);
     if (normalizedSelectedCategory !== state.selectedCategory) {
       state.selectedCategory = normalizedSelectedCategory;
     }
+
+    this.syncOverlaySubcategoryUi(state.selectedCategory);
 
     this.categoryDropdown.setItems(
       items,
@@ -4892,6 +4935,7 @@ export class App {
       state.selectedCategory || items[0]?.id || '',
       (catId) => {
         state.selectedCategory = catId;
+        this.syncOverlaySubcategoryUi(catId);
         this.categoryDropdown.selectById(catId);
         this.browserSearchInput.value = '';
         this.populateSprites(false);
@@ -4902,13 +4946,18 @@ export class App {
   }
 
   private populateSprites(suppressAutoSelectOnMissingRestore: boolean): void {
-    const cat = normalizeOverlayCategoryId(state.selectedCategory);
+    const cat = normalizeOverlayRootCategoryId(state.selectedCategory);
     state.selectedCategory = cat;
+    this.syncOverlaySubcategoryUi(cat);
     const sd = state.spriteData;
     const items: DropdownItem[] = [];
 
-    if (isOverlayCategoryId(cat)) {
-      for (const asset of getOverlayAssetsForCategory(cat)) {
+    if (cat === OVERLAY_CATEGORY_ID) {
+      const subcategory = isOverlayCategoryId(this.overlaySubcategoryId)
+        ? this.overlaySubcategoryId
+        : OVERLAY_ALL_CATEGORY_ID;
+      this.overlaySubcategoryId = subcategory;
+      for (const asset of getOverlayAssetsForCategory(subcategory)) {
         items.push({ id: asset.id, label: asset.label, thumbUrl: asset.file });
       }
     }

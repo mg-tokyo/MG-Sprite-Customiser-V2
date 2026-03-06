@@ -1,3 +1,5 @@
+export const OVERLAY_CATEGORY_ID = 'overlays';
+export const OVERLAY_CATEGORY_LABEL = 'Overlays';
 export const OVERLAY_ALL_CATEGORY_ID = 'overlays-all';
 export const OVERLAY_LEGACY_CATEGORY_ID = 'overlays-local';
 
@@ -276,6 +278,13 @@ export const LOCAL_OVERLAY_ASSETS: ReadonlyArray<LocalOverlayAsset> = LOCAL_OVER
 
 export function normalizeOverlayCategoryId(catId: string): string {
   return catId === OVERLAY_LEGACY_CATEGORY_ID ? OVERLAY_ALL_CATEGORY_ID : catId;
+}
+
+export function normalizeOverlayRootCategoryId(catId: string): string {
+  const normalized = normalizeOverlayCategoryId(catId);
+  if (normalized === OVERLAY_ALL_CATEGORY_ID) return OVERLAY_CATEGORY_ID;
+  if (LOCAL_OVERLAY_CATEGORIES.some((cat) => cat.id === normalized)) return OVERLAY_CATEGORY_ID;
+  return normalized;
 }
 
 export function isOverlayCategoryId(catId: string): boolean {

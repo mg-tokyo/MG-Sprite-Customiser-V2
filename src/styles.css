@@ -568,6 +568,8 @@ body {
   padding: 6px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  display: grid;
+  gap: 6px;
 }
 .browser-zoom-wrap {
   padding: 6px;
@@ -605,6 +607,20 @@ body {
   box-sizing: border-box;
 }
 .browser-search:focus { outline: none; border-color: var(--accent); }
+.browser-overlay-subcategory {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  color: var(--ink);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+.browser-overlay-subcategory:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .browser-grid {
   flex: 1;
   overflow-y: auto;
@@ -1838,6 +1854,7 @@ button.danger:hover { background: #ff3333; }
 .sc2-app.mobile .sc2-tb-btn,
 .sc2-app.mobile .btn-sm,
 .sc2-app.mobile .browser-tab,
+.sc2-app.mobile .browser-overlay-subcategory,
 .sc2-app.mobile .preview-controls .preview-size-select,
 .sc2-app.mobile .sc2-drawer-close {
   min-height: 44px;

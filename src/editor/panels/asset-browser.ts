@@ -5,6 +5,7 @@ export interface AssetBrowserRefs {
   el: HTMLElement;
   tabsEl: HTMLElement;
   searchInput: HTMLInputElement;
+  overlaySubcategorySelect: HTMLSelectElement;
   zoomInput: HTMLInputElement;
   zoomValueEl: HTMLElement;
   gridEl: HTMLElement;
@@ -34,6 +35,11 @@ export function buildAssetBrowser(): AssetBrowserRefs {
     className: 'browser-search',
     placeholder: '🔍 Search sprites…',
   }) as HTMLInputElement;
+  const overlaySubcategorySelect = el('select', {
+    className: 'browser-overlay-subcategory',
+    title: 'Overlay subcategory',
+  }) as HTMLSelectElement;
+  overlaySubcategorySelect.hidden = true;
 
   const zoomInput = el('input', {
     type: 'range',
@@ -52,7 +58,10 @@ export function buildAssetBrowser(): AssetBrowserRefs {
 
   const browserEl = el('div', { className: 'sc2-col-browser' }, [
     tabsNav,
-    el('div', { className: 'browser-search-wrap' }, [searchInput]),
+    el('div', { className: 'browser-search-wrap' }, [
+      searchInput,
+      overlaySubcategorySelect,
+    ]),
     gridEl,
     el('div', { className: 'browser-zoom-wrap' }, [
       el('label', { className: 'browser-zoom-row' }, [
@@ -63,7 +72,15 @@ export function buildAssetBrowser(): AssetBrowserRefs {
     ]),
   ]);
 
-  return { el: browserEl, tabsEl, searchInput, zoomInput, zoomValueEl, gridEl };
+  return {
+    el: browserEl,
+    tabsEl,
+    searchInput,
+    overlaySubcategorySelect,
+    zoomInput,
+    zoomValueEl,
+    gridEl,
+  };
 }
 
 /** Category tab accent colors by category name. */
@@ -87,6 +104,7 @@ const CAT_COLORS: Record<string, string> = {
 
 export function getCatColor(catId: string): string {
   const base = catId.startsWith('cosmetic:') ? catId.slice('cosmetic:'.length) : catId;
+  if (base === 'overlays') return '#f472b6';
   if (base.startsWith('overlays-')) return '#f472b6';
   return CAT_COLORS[base] ?? '#94a3b8';
 }
