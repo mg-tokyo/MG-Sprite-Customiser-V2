@@ -57,7 +57,6 @@ export const LOCAL_OVERLAY_CATEGORIES: ReadonlyArray<OverlayCategory> = [
 ];
 
 const LOCAL_OVERLAY_FILES = [
-  'ui/PolaroidBackground.png',
   'overlays/arrow-bidirectional-horizontal.svg',
   'overlays/arrow-bidirectional-vertical.svg',
   'overlays/arrow-bold-down.svg',
@@ -116,8 +115,6 @@ const LOCAL_OVERLAY_FILES = [
   'overlays/bubble-thought-up.svg',
   'overlays/bubble-whisper-left.svg',
   'overlays/bubble-whisper-right.svg',
-  'overlays/connector-callout-number-1.svg',
-  'overlays/connector-callout-number-2.svg',
   'overlays/connector-curve-left.svg',
   'overlays/connector-curve-right.svg',
   'overlays/connector-elbow-left.svg',

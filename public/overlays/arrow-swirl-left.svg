@@ -1,4 +1,4 @@
 ﻿<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'>
-<g transform='rotate(180 256 256)'><path d='M118 348c-16-108 78-214 194-202 66 8 116 46 130 98' fill='none' stroke='#111' stroke-width='22' stroke-linecap='round'/><path d='m360 170 88 76-100 56Z' fill='#fff' stroke='#111' stroke-width='16'/></g>
+<g transform='rotate(180 256 256)'><path d='M146 356C88 262 120 146 220 110C318 76 424 130 454 220C480 300 438 382 360 408C292 430 216 398 188 336C164 282 186 222 236 198C284 176 352 196 418 244' fill='none' stroke='#111' stroke-width='20' stroke-linecap='round' stroke-linejoin='round'/><path d='M334 184 448 256 334 328Z' fill='#fff' stroke='#111' stroke-width='16' stroke-linejoin='round'/></g>
 </svg>
 

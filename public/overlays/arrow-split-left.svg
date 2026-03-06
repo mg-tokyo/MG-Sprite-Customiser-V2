@@ -1,4 +1,4 @@
 ﻿<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'>
-<g transform='rotate(180 256 256)'><path d='M64 256h188' fill='none' stroke='#111' stroke-width='22' stroke-linecap='round'/><path d='M250 256c90 0 118-56 182-120' fill='none' stroke='#111' stroke-width='20' stroke-linecap='round'/><path d='M250 256c90 0 118 56 182 120' fill='none' stroke='#111' stroke-width='20' stroke-linecap='round'/><path d='M350 88 448 138 362 210Z' fill='#fff' stroke='#111' stroke-width='16'/><path d='m350 424 98-50-86-72Z' fill='#fff' stroke='#111' stroke-width='16'/></g>
+<g transform='rotate(180 256 256)'><path d='M64 256h176' fill='none' stroke='#111' stroke-width='22' stroke-linecap='round'/><path d='M240 256C300 256 338 224 396 176' fill='none' stroke='#111' stroke-width='20' stroke-linecap='round'/><path d='M240 256C300 256 338 288 396 336' fill='none' stroke='#111' stroke-width='20' stroke-linecap='round'/><path d='M328 132 448 176 328 220Z' fill='#fff' stroke='#111' stroke-width='16' stroke-linejoin='round'/><path d='M328 292 448 336 328 380Z' fill='#fff' stroke='#111' stroke-width='16' stroke-linejoin='round'/></g>
 </svg>
 

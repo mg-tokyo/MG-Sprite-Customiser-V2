@@ -173,6 +173,10 @@ const CDN_UI_EXTRAS = [
   { id: 'cdn/ToolsRestocked', label: 'ToolsRestocked (banner)', file: 'ui/tools-restocked.webp' },
 ] as const;
 
+const LOCAL_UI_EXTRAS = [
+  { id: 'ui/PolaroidBackground', label: 'PolaroidBackground', url: 'ui/PolaroidBackground.png' },
+] as const;
+
 
 // (card-tinting functions removed â€” card PNG sprites are pre-colored per type)
 
@@ -2637,12 +2641,17 @@ export class App {
           }
         }
 
-        // CDN-only extras (shown under 'ui' or when no filter).
-        if ((!catFilter || catFilter === 'ui') && state.gameVersion) {
-          const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
-          for (const extra of CDN_UI_EXTRAS) {
-            const url = `${cdnBase}/${extra.file}`;
-            addEntry(url, extra.label, url);
+        // UI extras (shown under 'ui' or when no filter).
+        if (!catFilter || catFilter === 'ui') {
+          for (const extra of LOCAL_UI_EXTRAS) {
+            addEntry(extra.url, extra.label, extra.url);
+          }
+          if (state.gameVersion) {
+            const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
+            for (const extra of CDN_UI_EXTRAS) {
+              const url = `${cdnBase}/${extra.file}`;
+              addEntry(url, extra.label, url);
+            }
           }
         }
       }
@@ -5051,12 +5060,17 @@ export class App {
         }
       }
 
-      // CDN extras â€” assets outside the sprite atlas.
+      // UI extras â€” assets outside the sprite atlas plus local custom UI files.
       // The sprite-loader proxy handles magicgarden.gg URLs identically to cosmetics.
-      if (cat === 'ui' && state.gameVersion) {
-        const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
-        for (const extra of CDN_UI_EXTRAS) {
-          items.push({ id: extra.id, label: extra.label, thumbUrl: `${cdnBase}/${extra.file}` });
+      if (cat === 'ui') {
+        for (const extra of LOCAL_UI_EXTRAS) {
+          items.push({ id: extra.id, label: extra.label, thumbUrl: extra.url });
+        }
+        if (state.gameVersion) {
+          const cdnBase = `https://magicgarden.gg/version/${state.gameVersion}/assets`;
+          for (const extra of CDN_UI_EXTRAS) {
+            items.push({ id: extra.id, label: extra.label, thumbUrl: `${cdnBase}/${extra.file}` });
+          }
         }
       }
 

@@ -59,8 +59,6 @@ $defs = @(
   [pscustomobject]@{ Name = 'connector-elbow-left'; Inner = "<g transform='rotate(180 256 256)'><path d='M88 394V250h244' fill='none' stroke='#111' stroke-width='18' stroke-linecap='round' stroke-linejoin='round'/><circle cx='88' cy='394' r='18' fill='#fff' stroke='#111' stroke-width='10'/><path d='m278 182 160 68-160 68Z' fill='#fff' stroke='#111' stroke-width='14'/></g>" },
   [pscustomobject]@{ Name = 'connector-curve-right'; Inner = "<path d='M84 380c78-174 184-220 346-220' fill='none' stroke='#111' stroke-width='18' stroke-linecap='round'/><circle cx='84' cy='380' r='16' fill='#fff' stroke='#111' stroke-width='10'/><path d='M338 94 448 160 338 226Z' fill='#fff' stroke='#111' stroke-width='14'/>" },
   [pscustomobject]@{ Name = 'connector-curve-left'; Inner = "<g transform='rotate(180 256 256)'><path d='M84 380c78-174 184-220 346-220' fill='none' stroke='#111' stroke-width='18' stroke-linecap='round'/><circle cx='84' cy='380' r='16' fill='#fff' stroke='#111' stroke-width='10'/><path d='M338 94 448 160 338 226Z' fill='#fff' stroke='#111' stroke-width='14'/></g>" },
-  [pscustomobject]@{ Name = 'connector-callout-number-1'; Inner = "<circle cx='96' cy='96' r='44' fill='#fff' stroke='#111' stroke-width='12'/><path d='M96 78v46M126 110h278' fill='none' stroke='#111' stroke-width='12' stroke-linecap='round'/>" },
-  [pscustomobject]@{ Name = 'connector-callout-number-2'; Inner = "<circle cx='96' cy='96' r='44' fill='#fff' stroke='#111' stroke-width='12'/><path d='M82 86c0-10 8-18 20-18s20 8 20 18-6 14-16 20c-8 4-12 10-12 18h28M126 110h278' fill='none' stroke='#111' stroke-width='8' stroke-linecap='round'/>" },
 
   # comic
   [pscustomobject]@{ Name = 'comic-burst-boom'; Inner = "<path d='M256 54 298 116l80-34 12 92 90 6-48 78 62 58-84 34 26 90-90-10-20 88-72-52-72 52-20-88-90 10 26-90-84-34 62-58-48-78 90-6 12-92 80 34Z' fill='#fff' stroke='#111' stroke-width='14' stroke-linejoin='round'/>" },
@@ -135,7 +133,12 @@ $defs = @(
 )
 
 foreach ($item in $defs) {
-  if ($item.Name.StartsWith('comic-') -or $item.Name.StartsWith('weatherfx-') -or $item.Name.StartsWith('hand-') -or $item.Name.StartsWith('control-')) {
+  if (
+    $item.Name.StartsWith('comic-') -or
+    $item.Name.StartsWith('weatherfx-') -or
+    $item.Name.StartsWith('hand-') -or
+    $item.Name.StartsWith('control-')
+  ) {
     continue
   }
   Write-Svg -Name "$($item.Name).svg" -Inner $item.Inner
