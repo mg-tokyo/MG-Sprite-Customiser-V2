@@ -1069,6 +1069,8 @@ button.danger:hover { background: #ff3333; }
 .full-card-type-label { font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--accent); margin: 0 0 10px; }
 .full-card-variant-meta { font-size: 12px; color: var(--muted); margin: -4px 0 8px; }
 .full-card-variant-actions { display: flex; gap: 6px; margin: 0 0 6px; }
+.full-card-field-check-row { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.full-card-field-check-row > input[type="checkbox"] { margin: 0; flex-shrink: 0; }
 .full-card-field { display: flex; flex-direction: column; gap: 0; margin-bottom: 2px; }
 .full-card-field label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 6px; }
 .full-card-field input:not([type="checkbox"]):not([type="range"]):not([type="color"]), .full-card-field select { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--input-bg); color: var(--ink); font-size: 13px; }

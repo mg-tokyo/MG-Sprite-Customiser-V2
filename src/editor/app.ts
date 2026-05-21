@@ -3185,15 +3185,19 @@ export class App {
       this.fullCardRarityRow,
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Current STR' }), this.fullCardPetCurrentStrInput]),
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Max STR' }), this.fullCardPetMaxStrInput]),
-      el('div', { className: 'full-card-field' }, [
+      el('div', { className: 'full-card-field-check-row' }, [
         this.fullCardPetStrBarVisibleCheck,
-        el('label', { textContent: 'XP % (within level)' }),
-        el('div', { className: 'full-card-slider-row' }, [this.fullCardPetStrPctInput, this.fullCardPetStrPctDisplay]),
+        el('div', { className: 'full-card-field', style: 'flex:1;margin-bottom:0' }, [
+          el('label', { textContent: 'XP % (within level)' }),
+          el('div', { className: 'full-card-slider-row' }, [this.fullCardPetStrPctInput, this.fullCardPetStrPctDisplay]),
+        ]),
       ]),
-      el('div', { className: 'full-card-field' }, [
+      el('div', { className: 'full-card-field-check-row' }, [
         this.fullCardPetHungerBarVisibleCheck,
-        el('label', { textContent: 'Hunger %' }),
-        el('div', { className: 'full-card-slider-row' }, [this.fullCardPetHungerPctInput, this.fullCardPetHungerPctDisplay]),
+        el('div', { className: 'full-card-field', style: 'flex:1;margin-bottom:0' }, [
+          el('label', { textContent: 'Hunger %' }),
+          el('div', { className: 'full-card-slider-row' }, [this.fullCardPetHungerPctInput, this.fullCardPetHungerPctDisplay]),
+        ]),
       ]),
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Age' }), this.fullCardPetAgeInput]),
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Weight' }), this.fullCardPetWeightInput]),
