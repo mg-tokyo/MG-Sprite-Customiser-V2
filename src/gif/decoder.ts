@@ -12,16 +12,37 @@ export interface DecodedGif {
   loopCount: number; // 0 = infinite
 }
 
+export interface DecodeGifOptions {
+  maxFrames?: number;
+  maxWidth?: number;
+  maxHeight?: number;
+  maxPixels?: number;
+}
+
 /**
  * Decode a GIF file buffer into individual frames.
  * Follows GIF89a spec: disposal methods, local palettes, transparency.
  */
-export function decodeGif(buffer: ArrayBuffer): DecodedGif {
+export function decodeGif(buffer: ArrayBuffer, options: DecodeGifOptions = {}): DecodedGif {
   const data = new Uint8Array(buffer);
   const reader = new GifReader(data as unknown as number[]);
   const width = reader.width;
   const height = reader.height;
   const numFrames = reader.numFrames();
+  const maxFrames = options.maxFrames ?? 180;
+  const maxWidth = options.maxWidth ?? 2048;
+  const maxHeight = options.maxHeight ?? 2048;
+  const maxPixels = options.maxPixels ?? 4_194_304;
+
+  if (width <= 0 || height <= 0) {
+    throw new Error('GIF has invalid dimensions.');
+  }
+  if (width > maxWidth || height > maxHeight || width * height > maxPixels) {
+    throw new Error(`GIF dimensions exceed supported limits (${maxWidth}x${maxHeight}).`);
+  }
+  if (numFrames <= 0 || numFrames > maxFrames) {
+    throw new Error(`GIF frame count exceeds supported limit (${maxFrames}).`);
+  }
 
   // Compositing canvas (carries state between frames per disposal rules)
   const compCanvas = document.createElement('canvas');

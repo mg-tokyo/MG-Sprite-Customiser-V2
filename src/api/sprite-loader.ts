@@ -1,3 +1,5 @@
+import { isLocalhostHost, resolveCorsProxy } from './proxy-config';
+
 interface QueueItem {
   url: string;
   resolve: (img: HTMLImageElement) => void;
@@ -9,47 +11,6 @@ const MAX_CONCURRENCY = 6;
 const MAX_CACHE_SIZE = 500;
 
 const IS_DEV = import.meta.env.DEV;
-
-/**
- * Optional CORS proxy prefix for production builds (set via VITE_CORS_PROXY env var).
- * e.g. "https://corsproxy.io/?url=" — appended with encodeURIComponent(targetUrl).
- */
-const BUILD_CORS_PROXY = import.meta.env.VITE_CORS_PROXY ?? '';
-
-function isLocalhostHost(hostname: string): boolean {
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return true;
-  return hostname.endsWith('.localhost');
-}
-
-function getRuntimeCorsProxy(): string {
-  if (typeof window === 'undefined') return '';
-
-  const params = new URLSearchParams(window.location.search);
-  const qp = params.get('proxy')?.trim() ?? '';
-  if (qp) {
-    try {
-      const parsed = new URL(qp);
-      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-        try {
-          localStorage.setItem('mg_sprite_proxy', qp);
-        } catch {
-          // ignore storage errors
-        }
-        return qp;
-      }
-    } catch {
-      // ignore invalid query param
-    }
-  }
-
-  try {
-    return localStorage.getItem('mg_sprite_proxy') ?? '';
-  } catch {
-    return '';
-  }
-}
-
-const RUNTIME_CORS_PROXY = getRuntimeCorsProxy();
 
 function buildProxyUrl(prefix: string, target: string): string {
   if (!prefix) return target;
@@ -89,7 +50,7 @@ export function proxyUrl(url: string): string {
     }
   }
 
-  const corsProxy = RUNTIME_CORS_PROXY || BUILD_CORS_PROXY;
+  const corsProxy = resolveCorsProxy();
   // Production: proxy both game asset domains directly (no URL rewriting)
   if (
     corsProxy &&

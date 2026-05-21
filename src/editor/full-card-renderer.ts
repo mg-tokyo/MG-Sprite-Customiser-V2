@@ -1301,54 +1301,58 @@ export async function drawFullCardStats(
       ? String(currentStrNum + 1)
       : '';
 
-    const [currentIconCustom, nextIconCustom, maxIconCustom] = await Promise.all([
-      loadSprite(data.petStrCurrentIcon),
-      loadSprite(data.petStrNextIcon),
-      loadSprite(data.petStrMaxIcon),
-    ]);
-    const strLabelPadding = clampLabelPadding(data.petStrLabelPadding ?? 82);
-    const strColor = (data.petStrColor ?? '#0067B4').trim() || '#0067B4';
-    drawProgressBarRow(ctx, {
-      label: data.petStrLabel?.trim() || 'Strength',
-      value: barValue,
-      max: 1,
-      color: strColor,
-      y: detailsY + cursorY,
-      rowWidth,
-      showMaxLabel: true,
-      leftPad: strLabelPadding,
-      rightPad: 50,
-      maxLabelValue: maxStrText,
-      nextLabelValue: nextStrText,
-      currentLabelValue: currentStrText,
-      fullyGrown: isMax,
-    }, {
-      currentIcon: currentIconCustom ?? progressStar,
-      nextIcon: nextIconCustom ?? progressStar,
-      maxIcon: maxIconCustom ?? strengthStar,
-    });
-    cursorY += 32 + 14;
+    if (data.petStrBarVisible !== false) {
+      const [currentIconCustom, nextIconCustom, maxIconCustom] = await Promise.all([
+        loadSprite(data.petStrCurrentIcon),
+        loadSprite(data.petStrNextIcon),
+        loadSprite(data.petStrMaxIcon),
+      ]);
+      const strLabelPadding = clampLabelPadding(data.petStrLabelPadding ?? 82);
+      const strColor = (data.petStrColor ?? '#0067B4').trim() || '#0067B4';
+      drawProgressBarRow(ctx, {
+        label: data.petStrLabel?.trim() || 'Strength',
+        value: barValue,
+        max: 1,
+        color: strColor,
+        y: detailsY + cursorY,
+        rowWidth,
+        showMaxLabel: true,
+        leftPad: strLabelPadding,
+        rightPad: 50,
+        maxLabelValue: maxStrText,
+        nextLabelValue: nextStrText,
+        currentLabelValue: currentStrText,
+        fullyGrown: isMax,
+      }, {
+        currentIcon: currentIconCustom ?? progressStar,
+        nextIcon: nextIconCustom ?? progressStar,
+        maxIcon: maxIconCustom ?? strengthStar,
+      });
+      cursorY += 32 + 14;
+    }
 
-    const hungerPct = data.petHungerPct ?? 100;
-    const dietSlots = data.petDietSlots ?? [];
-    const leftPad   = clampLabelPadding(data.petHungerLabelPadding ?? (rowWidth * 0.35 - 55));
-    const rightPad  = dietSlots.length * 34 + 12; // step(34) * N + gap
-    const hungerColor = (data.petHungerColor ?? '#5EAC46').trim() || '#5EAC46';
-    drawProgressBarRow(ctx, {
-      label: data.petHungerLabel?.trim() || 'Hunger',
-      value: hungerPct,
-      max: 100,
-      color: hungerColor,
-      y: detailsY + cursorY,
-      rowWidth,
-      leftPad,
-      rightPad,
-      colorByPct: (pct) => pct <= HUNGER_LOW_THRESHOLD ? HUNGER_LOW_COLOR : hungerColor,
-    }, { maxIcon: strengthStar });
+    if (data.petHungerBarVisible !== false) {
+      const hungerPct = data.petHungerPct ?? 100;
+      const dietSlots = data.petDietSlots ?? [];
+      const leftPad   = clampLabelPadding(data.petHungerLabelPadding ?? (rowWidth * 0.35 - 55));
+      const rightPad  = dietSlots.length * 34 + 12; // step(34) * N + gap
+      const hungerColor = (data.petHungerColor ?? '#5EAC46').trim() || '#5EAC46';
+      drawProgressBarRow(ctx, {
+        label: data.petHungerLabel?.trim() || 'Hunger',
+        value: hungerPct,
+        max: 100,
+        color: hungerColor,
+        y: detailsY + cursorY,
+        rowWidth,
+        leftPad,
+        rightPad,
+        colorByPct: (pct) => pct <= HUNGER_LOW_THRESHOLD ? HUNGER_LOW_COLOR : hungerColor,
+      }, { maxIcon: strengthStar });
 
-    const dietCanvases = await renderSlotList(dietSlots);
-    drawDietSpritesOnly(ctx, detailsY + cursorY, rowWidth, dietCanvases);
-    cursorY += 32 + 9;
+      const dietCanvases = await renderSlotList(dietSlots);
+      drawDietSpritesOnly(ctx, detailsY + cursorY, rowWidth, dietCanvases);
+      cursorY += 32 + 9;
+    }
 
     // Weight / Age / Sell row (direct text values)
     drawWeightAgeRow(ctx, detailsY + bottomOffset,
@@ -1421,6 +1425,8 @@ export function defaultFullCardData(cardType: FullCardType): FullCardData {
   switch (cardType) {
     case 'Pet':
       data.rarity = 'Common';
+      data.petStrBarVisible = true;
+      data.petHungerBarVisible = true;
       data.petStr = '50';
       data.petMaxStr = '80';
       data.petStrPct = 0;

@@ -1,4 +1,4 @@
-﻿import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlots, reorderSlots, pushUndo, addSlot, MAX_SLOTS, runWithSingleUndo, setHistoryMetaHandlers } from '../state/store';
+import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlots, reorderSlots, pushUndo, addSlot, MAX_SLOTS, runWithSingleUndo, setHistoryMetaHandlers, refreshBlobUrlTracking } from '../state/store';
 import { listSavedScenes, saveNamedScene, deleteNamedScene, exportSceneJson, importSceneJson } from '../state/persistence';
 import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity, FullCardAbilityEntry, FullCardSpriteSlot, PetBarData, PetBarKind } from '../state/store';
 import { initTheme, toggleTheme } from './theme';
@@ -10,6 +10,7 @@ import { el } from '../utils/dom';
 import { decodeGif } from '../gif/decoder';
 import { FrameScheduler } from '../gif/frame-scheduler';
 import { encodeGif } from '../gif/encoder';
+import { clampDisplayText, setMetaLine } from '../utils/safe-text';
 import { applyMutations } from '../renderer/mutation-engine';
 import { CustomDropdown } from './custom-dropdown';
 import { renderThumb } from './thumbnail';
@@ -47,7 +48,7 @@ import {
 } from './card-variants/store';
 import type { CardVariantV1 } from './card-variants/types';
 
-// â”€â”€ Hit-test content bounds â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Hit-test content bounds ──────────────────────────────────────────────────
 // Cache tight bounding boxes (content only, transparent padding stripped) so
 // the canvas hit-test uses a small region rather than the full canvas size.
 // Key = renderCache key (rendered path) or spriteUrl (pre-render fallback).
@@ -57,7 +58,7 @@ const hitBoundsCache = new Map<string, { cx: number; cy: number; hw: number; hv:
 /**
  * Scan `source` for non-transparent pixels and return the tight content
  * bounding box as { cx, cy, hw, hv } (centre + half-extents in source pixels).
- * Uses a â‰¤128Ã—128 downsample for speed. Returns null if the canvas is tainted
+ * Uses a ≤128×128 downsample for speed. Returns null if the canvas is tainted
  * or the source is entirely transparent.
  */
 function scanContentBounds(
@@ -178,7 +179,7 @@ const LOCAL_UI_EXTRAS = [
 ] as const;
 
 
-// (card-tinting functions removed â€” card PNG sprites are pre-colored per type)
+// (card-tinting functions removed — card PNG sprites are pre-colored per type)
 
 export class App {
   private categoryDropdown!: CustomDropdown;
@@ -229,7 +230,7 @@ export class App {
   private groupDragIndexes: number[] = [];
   private groupDragStartPos = new Map<number, { x: number; y: number }>();
   private frameScheduler = new FrameScheduler();
-  // â”€â”€ New layout refs â”€â”€
+  // ── New layout refs ──
   private drawer!: Drawer;
   private mainEl!: HTMLElement;
   private cardTypePickerEl!: HTMLElement;
@@ -281,6 +282,10 @@ export class App {
   private readonly DEFAULT_ANIM_FRAME_DELAY = 100;
   private readonly FX_PREVIEW_MAX_DIM = 960;
   private readonly FX_PREVIEW_TILT_MAX_DEG = 14;
+  private readonly MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
+  private readonly MAX_GIF_FRAMES = 180;
+  private readonly MAX_GIF_DIMENSION = 2048;
+  private readonly MAX_GIF_PIXELS = 4_194_304;
   private toolbarHeight = 52;
   private layersWidth = 280;
   private assetsWidth = 260;
@@ -290,7 +295,7 @@ export class App {
   private mobileModeQuery: MediaQueryList | null = null;
   private mobileModeChangeHandler: ((e: MediaQueryListEvent) => void) | null = null;
 
-  // â”€â”€ Text layer UI â”€â”€
+  // ── Text layer UI ──
   private textControls!: HTMLElement;     // text-layer-specific section (shown in drawer)
   private textArea!: HTMLTextAreaElement;
   private fontGroupDropdown!: CustomDropdown; // font category (MG / System / Google / Unicode)
@@ -316,16 +321,16 @@ export class App {
   private scaleGestureBaselines = new Map<number, { kind: 'text' | 'visual'; value: number }>();
   private scaleGestureActiveBaseline = 1;
 
-  // â”€â”€ Scenes UI â”€â”€
+  // ── Scenes UI ──
   private scenesListEl!: HTMLElement;
 
-  // â”€â”€ Blobling Rig UI â”€â”€
+  // ── Blobling Rig UI ──
   private bloblingControls!: HTMLElement;
   private bloblingCatDropdowns = new Map<string, CustomDropdown>();
   private bloblingAnimDropdown!: CustomDropdown;
   private bloblingRenderDebounce: ReturnType<typeof setTimeout> | null = null;
 
-  // â”€â”€ Full Card layer UI â”€â”€
+  // ── Full Card layer UI ──
   private fullCardControls!: HTMLElement;
   private fullCardTypeLabel!: HTMLElement;
   private fullCardVariantMeta!: HTMLElement;
@@ -376,6 +381,9 @@ export class App {
   private fullCardEggHatchSlotList!: HTMLElement;
   private fullCardEggGoldRateInput!: HTMLInputElement;
   private fullCardEggRainbowRateInput!: HTMLInputElement;
+  // Pet bar visibility checkboxes
+  private fullCardPetStrBarVisibleCheck!: HTMLInputElement;
+  private fullCardPetHungerBarVisibleCheck!: HTMLInputElement;
   // Pet bar label inputs
   private fullCardPetStrLabelInput!: HTMLInputElement;
   private fullCardPetHungerLabelInput!: HTMLInputElement;
@@ -435,9 +443,9 @@ export class App {
   private petBarDietSlots: FullCardSpriteSlot[] = [];
   private petBarRenderDebounce: ReturnType<typeof setTimeout> | null = null;
 
-  // â”€â”€ Copy / paste clipboard â”€â”€
+  // ── Copy / paste clipboard ──
   private copiedSlot: Partial<Slot> | null = null;
-  // â”€â”€ Scene GIF timeline editor â”€â”€
+  // ── Scene GIF timeline editor ──
   private sceneGifBar!: HTMLElement;
   private sceneGifFrames!: HTMLElement;
   private sceneGifPlayBtn!: HTMLButtonElement;
@@ -461,7 +469,7 @@ export class App {
   }
 
   private buildUI(container: HTMLElement): void {
-    // â”€â”€ Toolbar â”€â”€
+    // ── Toolbar ──
     const tb = buildToolbar();
     this.downloadBtn = tb.downloadBtn;
 
@@ -497,34 +505,49 @@ export class App {
     tb.uploadInput.addEventListener('change', async () => {
       const file = tb.uploadInput.files?.[0];
       if (!file) return;
+      if (file.size > this.MAX_UPLOAD_BYTES) {
+        alert('File is too large. Please use files smaller than 15 MB.');
+        tb.uploadInput.value = '';
+        return;
+      }
       const name = file.name.replace(/\.[^.]+$/, '');
-      if (file.type === 'image/gif' || file.name.toLowerCase().endsWith('.gif')) {
-        const buffer = await file.arrayBuffer();
-        const decoded = decodeGif(buffer);
-        const firstFrameBlob = await new Promise<Blob>((resolve) =>
-          decoded.frames[0].canvas.toBlob((b) => resolve(b!), 'image/png'),
-        );
-        const url = URL.createObjectURL(firstFrameBlob);
-        updateSlot(state.activeSlotIndex, {
-          type: 'custom',
-          spriteKey: name,
-          spriteUrl: url,
-          gifFrames: decoded.frames,
-          isAnimated: true,
-          petBarData: undefined,
-        });
-        this.startGifPreview();
-      } else {
-        const url = URL.createObjectURL(file);
-        updateSlot(state.activeSlotIndex, {
-          type: 'custom',
-          spriteKey: name,
-          spriteUrl: url,
-          gifFrames: undefined,
-          isAnimated: false,
-          petBarData: undefined,
-        });
-        this.stopGifPreview();
+      try {
+        if (file.type === 'image/gif' || file.name.toLowerCase().endsWith('.gif')) {
+          const buffer = await file.arrayBuffer();
+          const decoded = decodeGif(buffer, {
+            maxFrames: this.MAX_GIF_FRAMES,
+            maxWidth: this.MAX_GIF_DIMENSION,
+            maxHeight: this.MAX_GIF_DIMENSION,
+            maxPixels: this.MAX_GIF_PIXELS,
+          });
+          const firstFrameBlob = await new Promise<Blob>((resolve) =>
+            decoded.frames[0].canvas.toBlob((b) => resolve(b!), 'image/png'),
+          );
+          const url = URL.createObjectURL(firstFrameBlob);
+          updateSlot(state.activeSlotIndex, {
+            type: 'custom',
+            spriteKey: name,
+            spriteUrl: url,
+            gifFrames: decoded.frames,
+            isAnimated: true,
+            petBarData: undefined,
+          });
+          this.startGifPreview();
+        } else {
+          const url = URL.createObjectURL(file);
+          updateSlot(state.activeSlotIndex, {
+            type: 'custom',
+            spriteKey: name,
+            spriteUrl: url,
+            gifFrames: undefined,
+            isAnimated: false,
+            petBarData: undefined,
+          });
+          this.stopGifPreview();
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unsupported image format.';
+        alert(`Import failed: ${message}`);
       }
       tb.uploadInput.value = '';
     });
@@ -542,14 +565,24 @@ export class App {
     tb.sceneLoadInput.addEventListener('change', () => {
       const file = tb.sceneLoadInput.files?.[0];
       if (!file) return;
+      if (file.size > 2_000_000) {
+        alert('Scene file is too large (max 2 MB).');
+        tb.sceneLoadInput.value = '';
+        return;
+      }
       const reader = new FileReader();
       reader.onload = () => {
-        const scene = importSceneJson(reader.result as string);
-        if (!scene) { alert('Invalid scene file'); return; }
+        const result = importSceneJson(String(reader.result ?? ''));
+        if (!result.ok) {
+          alert(result.error);
+          return;
+        }
+        const scene = result.scene;
         runWithSingleUndo(() => {
           pushUndo();
           this.clearMultiSelection();
           state.slots = scene.slots;
+          refreshBlobUrlTracking();
           state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
           this.sceneGifTimeline = null;
           if (this.sceneGifSession) this.closeSceneGifEditor(false);
@@ -563,7 +596,7 @@ export class App {
       tb.sceneLoadInput.value = '';
     });
 
-    // â”€â”€ Category + Sprite dropdowns (hidden singletons â€” browser grid renders from their data) â”€â”€
+    // ── Category + Sprite dropdowns (hidden singletons — browser grid renders from their data) ──
     this.categoryDropdown = new CustomDropdown({
       showThumbs: false,
       placeholder: 'Select category\u2026',
@@ -581,14 +614,14 @@ export class App {
       onSelect: (item: DropdownItem) => this.applySpriteItem(item),
     });
 
-    // â”€â”€ Drawer content: text / full-card / blobling â”€â”€
+    // ── Drawer content: text / full-card / blobling ──
     this.textControls = el('div', { className: 'text-controls-section' });
     this.buildTextControls();
     this.fullCardControls = this.buildFullCardControls();
     this.petBarControls = this.buildPetBarControls();
     this.bloblingControls = this.buildBloblingControls();
 
-    // â”€â”€ Inspector control elements (created once, reparented by syncInspector) â”€â”€
+    // ── Inspector control elements (created once, reparented by syncInspector) ──
     this.mutationList = el('div', { className: 'mutation-chips' });
     this.tintLabel = el('label', { textContent: 'Custom Tint' }) as HTMLElement;
     this.customColor = el('input', { type: 'color', id: 'customColor', value: '#ffffff' }) as HTMLInputElement;
@@ -721,7 +754,7 @@ export class App {
       if (slot.isAnimated && slot.gifFrames) { this.startGifPreview(); } else { this.stopGifPreview(); }
     });
 
-    // â”€â”€ Layout â”€â”€
+    // ── Layout ──
     this.applyLayoutCssVars();
     this.slotContainer = el('div', { className: 'slot-grid' });
     this.inspectorEl   = el('div', { className: 'inspector' });
@@ -1211,6 +1244,7 @@ export class App {
     this.sceneGifSession.activeFrameIndex = clamped;
     this.suppressSceneGifFrameAutosave = true;
     state.slots = this.cloneSlotsForSceneFrame(frame.sceneSlotsSnapshot);
+    refreshBlobUrlTracking();
     state.activeSlotIndex = Math.min(frame.activeSlotIndex, state.slots.length - 1);
     this.suppressSceneGifFrameAutosave = false;
 
@@ -1352,7 +1386,7 @@ export class App {
       delayWrap.addEventListener('mousedown', stopFrameSelect);
       delayWrap.addEventListener('click', stopFrameSelect);
 
-      const dupBtn = el('button', { className: 'scene-gif-frame-btn', textContent: '⧉' }) as HTMLButtonElement;
+      const dupBtn = el('button', { className: 'scene-gif-frame-btn', textContent: '?' }) as HTMLButtonElement;
       dupBtn.title = 'Duplicate frame';
       dupBtn.addEventListener('click', (event) => {
         event.stopPropagation();
@@ -1360,7 +1394,7 @@ export class App {
         this.addSceneGifFrame();
       });
 
-      const delBtn = el('button', { className: 'scene-gif-frame-btn', textContent: '✕' }) as HTMLButtonElement;
+      const delBtn = el('button', { className: 'scene-gif-frame-btn', textContent: '?' }) as HTMLButtonElement;
       delBtn.title = 'Delete frame';
       delBtn.addEventListener('click', (event) => {
         event.stopPropagation();
@@ -1375,7 +1409,7 @@ export class App {
         el('div', { className: 'scene-gif-frame-index', textContent: String(index + 1) }),
         el('span', {
           className: 'scene-gif-frame-drag-hint',
-          textContent: '↕',
+          textContent: '?',
           title: 'Drag to reorder',
         }),
       ]);
@@ -1452,6 +1486,7 @@ export class App {
         statusEl.textContent = `Rendering frame ${i + 1}/${frames.length}...`;
         this.suppressSceneGifFrameAutosave = true;
         state.slots = this.cloneSlotsForSceneFrame(frame.sceneSlotsSnapshot);
+        refreshBlobUrlTracking();
         state.activeSlotIndex = Math.min(frame.activeSlotIndex, state.slots.length - 1);
         this.suppressSceneGifFrameAutosave = false;
 
@@ -1497,6 +1532,7 @@ export class App {
     } finally {
       this.suppressSceneGifFrameAutosave = true;
       state.slots = prevSlots;
+      refreshBlobUrlTracking();
       state.activeSlotIndex = Math.min(prevActive, state.slots.length - 1);
       this.suppressSceneGifFrameAutosave = false;
       bus.emit(Events.SLOT_CHANGED, null);
@@ -1579,11 +1615,11 @@ export class App {
     this.setupCanvasDrag();
   }
 
-  // â”€â”€ Text Layer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Text Layer ──────────────────────────────────────────────────────────────
 
   /** Build all text-layer control DOM elements (called once in buildUI). */
   private buildTextControls(): void {
-    // â”€â”€ Font group selector â”€â”€
+    // ── Font group selector ──
     const FONT_GROUPS = [
       { id: 'mg',      label: 'MG Fonts' },
       { id: 'system',  label: 'System Fonts' },
@@ -1600,7 +1636,7 @@ export class App {
       'mg',
     );
 
-    // â”€â”€ Font item selector â”€â”€
+    // ── Font item selector ──
     this.fontItemDropdown = new CustomDropdown({
       showThumbs: false,
       placeholder: 'Select font...',
@@ -1613,7 +1649,7 @@ export class App {
       },
     });
 
-    // â”€â”€ Google font search â”€â”€
+    // ── Google font search ──
     this.fontGoogleSearch = el('input', {
       type: 'text',
       placeholder: 'Search Google Fonts...',
@@ -1624,7 +1660,7 @@ export class App {
 
     this.fontGoogleSearch.addEventListener('input', () => this.onGoogleFontSearch());
 
-    // â”€â”€ Unicode style selector â”€â”€
+    // ── Unicode style selector ──
     this.unicodeDropdown = new CustomDropdown({
       showThumbs: false,
       placeholder: 'None (off)',
@@ -1646,7 +1682,7 @@ export class App {
       this.unicodeDropdown.element,
     ]);
 
-    // â”€â”€ Text area â”€â”€
+    // ── Text area ──
     this.textArea = el('textarea', {
       className: 'text-input-area',
       placeholder: 'Type your text...',
@@ -1661,7 +1697,7 @@ export class App {
       this.scheduleTextRerender();
     });
 
-    // â”€â”€ Alignment â”€â”€
+    // ── Alignment ──
     const alignLabels: Array<{ id: TextData['align']; glyph: string }> = [
       { id: 'left',   glyph: 'L' },
       { id: 'center', glyph: 'C' },
@@ -1685,7 +1721,7 @@ export class App {
       ...this.alignBtns,
     ]);
 
-    // â”€â”€ Word wrap â”€â”€
+    // ── Word wrap ──
     this.wordWrapToggle = el('input', { type: 'checkbox', id: 'txtWordWrap' }) as HTMLInputElement;
     this.wordWrapWidthInput = el('input', { type: 'range', min: '100', max: '900', step: '10', value: '400', id: 'txtWrapWidth' }) as HTMLInputElement;
     this.wordWrapWidthRow = el('div', { className: 'word-wrap-width-row', style: 'display:none' }, [
@@ -1710,7 +1746,7 @@ export class App {
       this.scheduleTextRerender();
     });
 
-    // â”€â”€ Style toggles (bold, italic) â”€â”€
+    // ── Style toggles (bold, italic) ──
     this.boldToggle   = el('input', { type: 'checkbox', id: 'txtBold' })   as HTMLInputElement;
     this.italicToggle = el('input', { type: 'checkbox', id: 'txtItalic' }) as HTMLInputElement;
     this.boldToggle.addEventListener('change', () => {
@@ -1726,7 +1762,7 @@ export class App {
       this.scheduleTextRerender();
     });
 
-    // â”€â”€ MG presets â”€â”€
+    // ── MG presets ──
     this.mgShadowToggle = el('input', { type: 'checkbox', id: 'txtMgShadow' }) as HTMLInputElement;
     this.mgShadowToggle.checked = true; // default on for textSlapper
     this.mgShadowToggle.addEventListener('change', () => {
@@ -1736,7 +1772,7 @@ export class App {
       this.scheduleTextRerender();
     });
 
-    // â”€â”€ Stroke â”€â”€
+    // ── Stroke ──
     this.strokeToggle = el('input', { type: 'checkbox', id: 'txtStroke' }) as HTMLInputElement;
     this.strokeColorInput = el('input', { type: 'color', id: 'txtStrokeColor', value: '#000000' }) as HTMLInputElement;
     this.strokeWidthInput = el('input', { type: 'range', min: '1', max: '20', step: '1', value: '3', id: 'txtStrokeWidth' }) as HTMLInputElement;
@@ -1819,7 +1855,7 @@ export class App {
       this.fontGoogleResults.style.display = 'none';
       this.unicodeRow.style.display = 'none';
     } else {
-      // unicode group â€” font item dropdown shows base fonts, unicode style is separate
+      // unicode group — font item dropdown shows base fonts, unicode style is separate
       items = [
         ...MG_FONTS.map(f => ({ id: f.id, label: f.label })),
         ...SYSTEM_FONTS.map(f => ({ id: f.id, label: f.label })),
@@ -2153,7 +2189,7 @@ export class App {
     updateSlot(targetIdx, {
         type: 'text',
         spriteKey: 'text-layer',
-        spriteUrl: 'text:', // sentinel â€” tells renderSlot this is a text slot
+        spriteUrl: 'text:', // sentinel — tells renderSlot this is a text slot
         textData: td,
         fullCardData: undefined,
         petBarData: undefined,
@@ -2169,7 +2205,7 @@ export class App {
     this.scheduleTextRerender();
   }
 
-  // â”€â”€ Blobling Rig â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Blobling Rig ─────────────────────────────────────────────────────────────
   // BLOBLING_LAYER_ORDER imported from './drawers/blobling-drawer':
   // ['Banner', 'Bottom', 'Mid', 'Top', 'Expression', 'Status', 'FaceProp']
 
@@ -2528,7 +2564,7 @@ export class App {
     this.refreshSlots();
   }
 
-  // â”€â”€ Full Card Layer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Full Card Layer ──────────────────────────────────────────────────────────
 
   /** Build the slot picker overlay (singleton, appended to document.body). */
   private buildSlotPickerOverlay(): void {
@@ -2609,7 +2645,7 @@ export class App {
         if (q && !displayName.toLowerCase().includes(q)) return;
         const img = document.createElement('img');
         img.dataset.src = thumbUrl;
-        // No crossOrigin â€” picker thumbnails are display-only.
+        // No crossOrigin — picker thumbnails are display-only.
         img.alt = displayName;
         img.title = displayName;
         const div = el('div', { className: 'fc-slot-picker-item' }, [img]);
@@ -2621,7 +2657,7 @@ export class App {
         observer.observe(img);
       };
 
-      // â”€â”€ Atlas frames + animations â”€â”€
+      // ── Atlas frames + animations ──
       const showAtlas = !catFilter || !catFilter.startsWith('cosmetic:');
       if (showAtlas && sd) {
         for (const cat of sd.categories) {
@@ -2665,7 +2701,7 @@ export class App {
         }
       }
 
-      // â”€â”€ Cosmetics â”€â”€
+      // ── Cosmetics ──
       const showCosmetics = !catFilter || catFilter.startsWith('cosmetic:');
       if (showCosmetics && cd) {
         for (const cat of cd.categories) {
@@ -2818,7 +2854,7 @@ export class App {
   private makeSlotRow(listType: SlotListType, index: number, slot: FullCardSpriteSlot): HTMLElement {
     const thumb = document.createElement('img');
     thumb.className = 'full-card-slot-thumb';
-    // No crossOrigin â€” thumbnails are display-only, don't need canvas access.
+    // No crossOrigin — thumbnails are display-only, don't need canvas access.
     // crossOrigin='anonymous' would break them in production if the server
     // doesn't send CORS headers (which mg-api does not per sprite-loader.ts).
     if (slot.spriteKey) {
@@ -3014,7 +3050,7 @@ export class App {
     this.fullCardNameInput = el('input', { type: 'text', placeholder: 'Item name...' }) as HTMLInputElement;
     this.fullCardNameInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
-    // â”€â”€ Pet section â”€â”€
+    // ── Pet section ──
     this.fullCardRaritySelect = el('select') as HTMLSelectElement;
     for (const r of RARITIES) {
       this.fullCardRaritySelect.append(el('option', { value: r, textContent: r }));
@@ -3044,6 +3080,14 @@ export class App {
       this.fullCardPetHungerPctDisplay.textContent = `${this.fullCardPetHungerPctInput.value}%`;
       this.scheduleFullCardRerender();
     });
+
+    this.fullCardPetStrBarVisibleCheck = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    this.fullCardPetStrBarVisibleCheck.checked = true;
+    this.fullCardPetStrBarVisibleCheck.addEventListener('change', () => this.scheduleFullCardRerender());
+
+    this.fullCardPetHungerBarVisibleCheck = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    this.fullCardPetHungerBarVisibleCheck.checked = true;
+    this.fullCardPetHungerBarVisibleCheck.addEventListener('change', () => this.scheduleFullCardRerender());
 
     this.fullCardPetAgeInput = el('input', { type: 'text', placeholder: '0h' }) as HTMLInputElement;
     this.fullCardPetAgeInput.addEventListener('input', () => this.scheduleFullCardRerender());
@@ -3142,10 +3186,12 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Current STR' }), this.fullCardPetCurrentStrInput]),
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Max STR' }), this.fullCardPetMaxStrInput]),
       el('div', { className: 'full-card-field' }, [
+        this.fullCardPetStrBarVisibleCheck,
         el('label', { textContent: 'XP % (within level)' }),
         el('div', { className: 'full-card-slider-row' }, [this.fullCardPetStrPctInput, this.fullCardPetStrPctDisplay]),
       ]),
       el('div', { className: 'full-card-field' }, [
+        this.fullCardPetHungerBarVisibleCheck,
         el('label', { textContent: 'Hunger %' }),
         el('div', { className: 'full-card-slider-row' }, [this.fullCardPetHungerPctInput, this.fullCardPetHungerPctDisplay]),
       ]),
@@ -3171,7 +3217,7 @@ export class App {
       el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Abilities' }), abilityWrap]),
     ]);
 
-    // â”€â”€ Plant section â”€â”€
+    // ── Plant section ──
     this.fullCardPlantSlotCountInput = el('input', { type: 'text', value: '1' }) as HTMLInputElement;
     this.fullCardPlantSlotCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
@@ -3199,7 +3245,7 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Crop Sell Price' }), this.fullCardPlantCropSellInput]),
     ]);
 
-    // â”€â”€ Crop section â”€â”€
+    // ── Crop section ──
     this.fullCardCropSlotList = el('div', { className: 'full-card-slot-list' });
 
     this.fullCardCropWeightInput = el('input', { type: 'text', placeholder: '0 kg' }) as HTMLInputElement;
@@ -3215,7 +3261,7 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Sell Price' }), this.fullCardCropSellInput]),
     ]);
 
-    // â”€â”€ Seed section â”€â”€
+    // ── Seed section ──
     this.fullCardSeedCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
     this.fullCardSeedCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
@@ -3231,7 +3277,7 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Rarity' }), this.fullCardSeedRaritySelect]),
     ]);
 
-    // â”€â”€ Egg section â”€â”€
+    // ── Egg section ──
     this.fullCardEggCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
     this.fullCardEggCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
@@ -3251,7 +3297,7 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Rainbow Rate' }), this.fullCardEggRainbowRateInput]),
     ]);
 
-    // â”€â”€ Tool section â”€â”€
+    // ── Tool section ──
     this.fullCardToolCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
     this.fullCardToolCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
@@ -3265,7 +3311,7 @@ export class App {
       el('div', { className: 'full-card-field full-card-field--stack' }, [el('label', { textContent: 'Description' }), this.fullCardToolDescInput]),
     ]);
 
-    // â”€â”€ Decor section â”€â”€
+    // ── Decor section ──
     this.fullCardDecorCountInput = el('input', { type: 'text', placeholder: '1' }) as HTMLInputElement;
     this.fullCardDecorCountInput.addEventListener('input', () => this.scheduleFullCardRerender());
 
@@ -3274,7 +3320,7 @@ export class App {
       el('div', { className: 'full-card-field' }, [el('label', { textContent: 'Count' }), this.fullCardDecorCountInput]),
     ]);
 
-    // â”€â”€ Shared: mutations (all card types) â”€â”€
+    // ── Shared: mutations (all card types) ──
     this.fullCardItemMutationsContainer = el('div', { className: 'full-card-mutations-wrap' });
     for (const id of Object.keys(FILTERS)) {
       const chip = el('span', {
@@ -3300,11 +3346,11 @@ export class App {
       this.fullCardItemMutationsContainer.append(chip);
     }
 
-    // â”€â”€ Shared: locked toggle â”€â”€
+    // ── Shared: locked toggle ──
     this.fullCardLockedCheck = el('input', { type: 'checkbox' }) as HTMLInputElement;
     this.fullCardLockedCheck.addEventListener('change', () => this.scheduleFullCardRerender());
 
-    // â”€â”€ Assemble â”€â”€
+    // ── Assemble ──
     const mutationsSection = el('div', { className: 'full-card-section' }, [
       el('div', { className: 'full-card-section-title', textContent: 'Mutations' }),
       this.fullCardItemMutationsContainer,
@@ -3475,6 +3521,8 @@ export class App {
     this.fullCardDecorSection.style.display = isDecor ? '' : 'none';
 
     if (isPet) {
+      this.fullCardPetStrBarVisibleCheck.checked = data.petStrBarVisible !== false;
+      this.fullCardPetHungerBarVisibleCheck.checked = data.petHungerBarVisible !== false;
       this.fullCardRaritySelect.value = data.rarity ?? 'Common';
       this.fullCardPetCurrentStrInput.value = data.petStr ?? '50';
       this.fullCardPetMaxStrInput.value = data.petMaxStr ?? '80';
@@ -3567,6 +3615,8 @@ export class App {
     };
 
     if (cardType === 'Pet') {
+      result.petStrBarVisible = this.fullCardPetStrBarVisibleCheck.checked;
+      result.petHungerBarVisible = this.fullCardPetHungerBarVisibleCheck.checked;
       result.rarity = (this.fullCardRaritySelect.value as FullCardRarity) || 'Common';
       result.petStr = this.fullCardPetCurrentStrInput.value;
       result.petMaxStr = this.fullCardPetMaxStrInput.value;
@@ -3784,12 +3834,14 @@ export class App {
       if (mode === 'replace') {
         const nextSlots = snapshot.slots.slice(0, MAX_SLOTS);
         state.slots = nextSlots;
+        refreshBlobUrlTracking();
         state.activeSlotIndex = Math.min(snapshot.activeSlotIndex, state.slots.length - 1);
       } else {
         const appendStart = state.slots.length;
         const available = Math.max(0, MAX_SLOTS - appendStart);
         const appended = snapshot.slots.slice(0, available);
         state.slots = [...state.slots, ...appended];
+        refreshBlobUrlTracking();
         const targetActive = appendStart + Math.min(snapshot.activeSlotIndex, appended.length - 1);
         state.activeSlotIndex = Math.min(targetActive, state.slots.length - 1);
         if (snapshot.slots.length > appended.length) {
@@ -4281,7 +4333,7 @@ export class App {
     const CARD_TYPES: FullCardType[] = ['Pet', 'Plant', 'Crop', 'Seed', 'Egg', 'Tool', 'Decor'];
     const pickerTitle = el('div', { className: 'card-type-picker-title', textContent: 'Choose card type' });
     const tiles = CARD_TYPES.map((type) => {
-      // Canvas placeholder â€” filled async by renderCardPickerThumbs()
+      // Canvas placeholder — filled async by renderCardPickerThumbs()
       const canvas = document.createElement('canvas');
       canvas.width  = 180;
       canvas.height = 240;
@@ -4522,7 +4574,7 @@ export class App {
    * Load all individual sprite layers that make up a card, pixel-perfectly pre-positioned
    * using the exact layout constants from full-card-renderer.ts.
    *
-   * All cards are 500Ã—720.  Positions are offsets from canvas centre (same coord space as
+   * All cards are 500×720.  Positions are offsets from canvas centre (same coord space as
    * full-card-renderer which does ctx.translate(cardW/2, cardH/2)).
    */
   /**
@@ -4559,22 +4611,22 @@ export class App {
 
   private async addCardLayers(type: FullCardType): Promise<void> {
     await runWithSingleUndo(async () => {
-    // â”€â”€ card dimensions (all types identical) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── card dimensions (all types identical) ─────────────────────────────────
     const CW = 500, CH = 720;
 
-    // â”€â”€ layout constants (from full-card-renderer.ts) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── layout constants (from full-card-renderer.ts) ─────────────────────────
     const G5          = 8;
     const AH          = 60,  KH = 65,  XH = 0.44, HZ = 0.78;
     const JH          = 25,  RH = 88,  QM = 22;
     const LOCK_SIZE   = 75;
     const RARITY_SIZE = 64;
     const ICON_SIZE   = 70;
-    const ICON_NAT    = 88;   // all type icons are 88Ã—88
+    const ICON_NAT    = 88;   // all type icons are 88×88
     const CS          = 28;   // display size for bottom-row small icons
     const GAP         = 20;   // separator gap between bottom-row items
     const PART        = CS + 4; // space per icon+gap column
 
-    // â”€â”€ natural sprite dimensions (measured live from mg-api.ariedam.fr) â”€â”€â”€â”€â”€â”€
+    // ── natural sprite dimensions (measured live from mg-api.ariedam.fr) ──────
     const NAT = {
       Locked:      { w: 64,  h: 84  },
       RarityCommon:{ w: 55,  h: 55  },
@@ -4584,26 +4636,26 @@ export class App {
       Age:         { w: 27,  h: 32  },
     };
 
-    // â”€â”€ exact positions (card-centre coords â‰¡ slot.position offsets from canvas centre) â”€â”€
+    // ── exact positions (card-centre coords ≡ slot.position offsets from canvas centre) ──
 
-    // Type icon â€” top-left: drawImage at (-CW/2+G5+10, -CH/2+G5+9), size ICON_SIZE
-    const iconScale = ICON_SIZE / ICON_NAT;                   // 70/88 â‰ˆ 0.7955
+    // Type icon — top-left: drawImage at (-CW/2+G5+10, -CH/2+G5+9), size ICON_SIZE
+    const iconScale = ICON_SIZE / ICON_NAT;                   // 70/88 ≈ 0.7955
     const iconX     = (-CW / 2 + G5 + 10) + ICON_SIZE / 2;   // -232 + 35 = -197
     const iconY     = (-CH / 2 + G5 + 9)  + ICON_SIZE / 2;   // -343 + 35 = -308
 
-    // Lock â€” top-right: drawImageCentered(cx, cy, LOCK_SIZE)
+    // Lock — top-right: drawImageCentered(cx, cy, LOCK_SIZE)
     const lockScale = LOCK_SIZE / Math.max(NAT.Locked.w, NAT.Locked.h);  // 75/84
     const lockX     = CW / 2 - 4 - LOCK_SIZE / 2;   //  208.5
     const lockY     = -CH / 2 + 4 + LOCK_SIZE / 2;  // -318.5
 
-    // Rarity gem â€” bottom-left: drawImage at (x, y-dh, dw, dh) where
+    // Rarity gem — bottom-left: drawImage at (x, y-dh, dw, dh) where
     //   x = -CW/2+G5+15, y = CH/2-G5-17, scale = RARITY_SIZE/max(w,h)
     const rarScale  = RARITY_SIZE / Math.max(NAT.RarityCommon.w, NAT.RarityCommon.h); // 64/55
-    const rarDim    = NAT.RarityCommon.w * rarScale;                                   // â‰ˆ 64
+    const rarDim    = NAT.RarityCommon.w * rarScale;                                   // ≈ 64
     const rarX      = (-CW / 2 + G5 + 15) + rarDim / 2;   // -227 + 32 = -195
     const rarY      = (CH  / 2 - G5 - 17) - rarDim / 2;   //  335 - 32 =  303
 
-    // â”€â”€ stats area positions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── stats area positions ─────────────────────────────────────────────────
     // From renderer: r = -CH/2+AH+KH = -235; n = (CH-AH*2)*XH = 264
     // nameY = r+n+JH = 54;  detailsY = nameY+RH/2+QM = 120
     // bottomOffset = CH/2-detailsY-58 = 182;  bottomRowY = 302
@@ -4613,35 +4665,35 @@ export class App {
     // barRight (showMaxLabel, k=50): rowLeft+rowWidth-50 = -195+390-50 = 145
     const barRight  = -rowWidth / 2 + rowWidth - 50;                                  // 145
 
-    // StrengthStar â€” right of strength bar, drawImageCentered(maxStarX, detailsY, 40)
+    // StrengthStar — right of strength bar, drawImageCentered(maxStarX, detailsY, 40)
     //   maxStarX = barRight + 36  (non-fully-grown: shows next + max)
     const strStarSize  = 40;
     const strStarScale = strStarSize / Math.max(NAT.StrengthStar.w, NAT.StrengthStar.h);
     const strStarX     = barRight + 36;  // 181
 
-    // Bottom-row icons: for an empty-text card startX = âˆ’(3*PART + 2*GAP)/2 = âˆ’68
+    // Bottom-row icons: for an empty-text card startX = −(3*PART + 2*GAP)/2 = −68
     //   Weight center: startX + dw/2
     //   Age    center: startX + PART + GAP + dw/2
     //   Coin   center: startX + PART*2 + GAP*2 + dw/2
-    const scW = CS / Math.max(NAT.Weight.w, NAT.Weight.h);      // 28/34 â‰ˆ 0.824
+    const scW = CS / Math.max(NAT.Weight.w, NAT.Weight.h);      // 28/34 ≈ 0.824
     const scA = CS / Math.max(NAT.Age.w,    NAT.Age.h);         // 28/32 = 0.875
-    const scC = CS / Math.max(NAT.Coin.w,   NAT.Coin.h);        // 28/95 â‰ˆ 0.295
-    const wDw = NAT.Weight.w * scW;   // â‰ˆ 23.9
-    const aDw = NAT.Age.w    * scA;   // â‰ˆ 23.6
-    const cDw = NAT.Coin.w   * scC;   // â‰ˆ 25.7
+    const scC = CS / Math.max(NAT.Coin.w,   NAT.Coin.h);        // 28/95 ≈ 0.295
+    const wDw = NAT.Weight.w * scW;   // ≈ 23.9
+    const aDw = NAT.Age.w    * scA;   // ≈ 23.6
+    const cDw = NAT.Coin.w   * scC;   // ≈ 25.7
 
-    // Pet row: weight | â€¢ | age | â€¢ | coin  (startX = âˆ’68)
+    // Pet row: weight | • | age | • | coin  (startX = −68)
     const PET_START   = -((PART * 3 + GAP * 2) / 2);
     const petWeightX  = PET_START + wDw / 2;
     const petAgeX     = PET_START + PART + GAP + aDw / 2;
     const petCoinX    = PET_START + PART * 2 + GAP * 2 + cDw / 2;
 
-    // Plant/Crop row: weight | â€¢ | coin  (startX = âˆ’42)
+    // Plant/Crop row: weight | • | coin  (startX = −42)
     const PLT_START   = -((PART * 2 + GAP) / 2);
     const pltWeightX  = PLT_START + wDw / 2;
     const pltCoinX    = PLT_START + PART + GAP + cDw / 2;
 
-    // â”€â”€ URL builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── URL builder ─────────────────────────────────────────────────────────
     const version = this.getUiSpriteVersion();
     const v   = version ? `?v=${version}` : '';
     const base = 'https://mg-api.ariedam.fr/assets/sprites/ui';
@@ -4654,16 +4706,16 @@ export class App {
 
     type LayerSpec = { name: string; url: string; position: { x: number; y: number }; scale: number };
 
-    // â”€â”€ assemble layer specs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── assemble layer specs ─────────────────────────────────────────────────
     const specs: LayerSpec[] = [
-      // Card frame â€” always centered
+      // Card frame — always centered
       { name: `${type}CardBottom`, url: u(`${type}CardBottom`), position: { x: 0, y: 0 }, scale: 1 },
       { name: `${type}CardMiddle`, url: u(`${type}CardMiddle`), position: { x: 0, y: 0 }, scale: 1 },
-      // Type icon â€” top-left
+      // Type icon — top-left
       { name: ICON_NAME[type], url: u(ICON_NAME[type]), position: { x: iconX, y: iconY }, scale: iconScale },
-      // Lock â€” top-right
+      // Lock — top-right
       { name: 'Locked', url: u('Locked'), position: { x: lockX, y: lockY }, scale: lockScale },
-      // Rarity gem â€” bottom-left
+      // Rarity gem — bottom-left
       { name: 'RarityCommon', url: u('RarityCommon'), position: { x: rarX, y: rarY }, scale: rarScale },
     ];
 
@@ -4806,7 +4858,7 @@ export class App {
 
     const data = this.readFullCardDataFromUI(slot.fullCardData);
     const idx  = state.activeSlotIndex;
-    // Update slot data silently (no undo push â€” visual refresh only)
+    // Update slot data silently (no undo push — visual refresh only)
     state.slots[idx].fullCardData = data;
 
     // Build layer URLs
@@ -4824,7 +4876,7 @@ export class App {
       this.loadSpriteLayer(`${cardType}CardMiddle`, `${apiBase}/${cardType}CardMiddle.png${v}`),
     ]);
 
-    // Layers drawn as-is â€” card PNG sprites are pre-colored per type, no JS tinting.
+    // Layers drawn as-is — card PNG sprites are pre-colored per type, no JS tinting.
     const layers: LayerSrc[] = layerResults.flatMap((r) => {
       if (r.status !== 'fulfilled' || r.value === null) return [];
       return [r.value];
@@ -4861,7 +4913,7 @@ export class App {
     this.refreshSlots();
   }
 
-  // â”€â”€ Categories & Sprites â”€â”€
+  // ── Categories & Sprites ──
 
   private populateOverlaySubcategorySelect(): void {
     const select = this.browserOverlaySubcategorySelect;
@@ -4918,7 +4970,7 @@ export class App {
       }
     }
 
-    // setItems fires onSelect (â†’ populateSprites) if it has to auto-select.
+    // setItems fires onSelect (→ populateSprites) if it has to auto-select.
     // We also call populateSprites() unconditionally to handle the silent-restore case.
     const selectedOverlaySubcategory = normalizeOverlayCategoryId(state.selectedCategory);
     if (isOverlayCategoryId(selectedOverlaySubcategory)) {
@@ -4971,7 +5023,7 @@ export class App {
       }
     }
 
-    // Card preset / Full Card categories â€” build layer URLs from ui atlas
+    // Card preset / Full Card categories — build layer URLs from ui atlas
     if (cat === 'cards' || cat === 'full-cards') {
       const version = this.getUiSpriteVersion();
       const v = version ? `?v=${version}` : '';
@@ -5060,7 +5112,7 @@ export class App {
         }
       }
 
-      // UI extras â€” assets outside the sprite atlas plus local custom UI files.
+      // UI extras — assets outside the sprite atlas plus local custom UI files.
       // The sprite-loader proxy handles magicgarden.gg URLs identically to cosmetics.
       if (cat === 'ui') {
         for (const extra of LOCAL_UI_EXTRAS) {
@@ -5121,7 +5173,7 @@ export class App {
     spriteLoader.preloadUrls(thumbUrls);
   }
 
-  // â”€â”€ Slots â”€â”€
+  // ── Slots ──
 
   private refreshSlots(): void {
     this.sanitizeSelection();
@@ -5251,7 +5303,7 @@ export class App {
     }
   }
 
-  // â”€â”€ Mutations â”€â”€
+  // ── Mutations ──
 
   private refreshMutations(): void {
     this.mutationList.innerHTML = '';
@@ -5286,7 +5338,7 @@ export class App {
     this.customOpacity.value = String(slot.customTint.opacity);
   }
 
-  // â”€â”€ Meta â”€â”€
+  // ── Meta ──
 
   private updateMeta(): void {
     const slot = getActiveSlot();
@@ -5295,36 +5347,46 @@ export class App {
       return;
     }
     const muts = slot.mutations.length > 0 ? slot.mutations.join(', ') : 'None';
+    const slotLabel = `Slot ${state.activeSlotIndex + 1}`;
     if (slot.type === 'text') {
       const td = slot.textData;
-      this.metaEl.innerHTML = `<strong>Text Layer</strong> &middot; Slot ${state.activeSlotIndex + 1} &middot; Font: ${td?.fontLabel ?? '-'} &middot; ${td?.fontSize ?? 0}px`;
+      setMetaLine(this.metaEl, 'Text Layer', [
+        slotLabel,
+        `Font: ${clampDisplayText(td?.fontLabel ?? '-', 80)}`,
+        `${Math.max(0, Math.round(td?.fontSize ?? 0))}px`,
+      ]);
     } else if (slot.type === 'full-card') {
       const fcd = slot.fullCardData;
-      this.metaEl.innerHTML = `<strong>Full Card</strong> &middot; ${fcd?.cardType ?? '?'} Card &middot; Slot ${state.activeSlotIndex + 1}`;
+      setMetaLine(this.metaEl, 'Full Card', [`${clampDisplayText(fcd?.cardType ?? '?', 30)} Card`, slotLabel]);
     } else if (slot.spriteUrl === 'pet-bar:' && slot.petBarData) {
       const kindLabel = slot.petBarData.kind === 'strength' ? 'Strength Bar' : 'Hunger Bar';
-      this.metaEl.innerHTML = `<strong>${kindLabel}</strong> &middot; Slot ${state.activeSlotIndex + 1}`;
+      setMetaLine(this.metaEl, kindLabel, [slotLabel]);
     } else if (slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:') {
       const layerCount = Object.keys(slot.cosmeticLayers ?? {}).length;
       const animName = slot.bloblingAnimId != null ? BLOBLING_ANIMATIONS[parseInt(slot.bloblingAnimId)]?.name : null;
-      const animLabel = animName ? ` &middot; ${animName}` : '';
-      this.metaEl.innerHTML = `<strong>Blobling Rig</strong> &middot; Slot ${state.activeSlotIndex + 1} &middot; ${layerCount} cosmetic${layerCount !== 1 ? 's' : ''}${animLabel}`;
+      const segments = [slotLabel, `${layerCount} cosmetic${layerCount !== 1 ? 's' : ''}`];
+      if (animName) segments.push(clampDisplayText(animName, 80));
+      setMetaLine(this.metaEl, 'Blobling Rig', segments);
     } else {
       const displayName = slot.spriteKey.split('/').pop() ?? slot.spriteKey;
-      this.metaEl.innerHTML = `<strong>${displayName}</strong> &middot; Slot ${state.activeSlotIndex + 1} &middot; Mutations: ${muts} &middot; Scale: ${slot.scale}x`;
+      setMetaLine(this.metaEl, clampDisplayText(displayName, 80) || '-', [
+        slotLabel,
+        `Mutations: ${clampDisplayText(muts, 120)}`,
+        `Scale: ${Math.max(0.1, Number(slot.scale) || 1)}x`,
+      ]);
     }
   }
 
-  // â”€â”€ Render â”€â”€
+  // ── Render ──
 
   private async render(): Promise<void> {
     await renderAll(this.previewCanvas);
     this.drawSnapGridOverlay();
   }
 
-  // â”€â”€ Canvas Drag â”€â”€
+  // ── Canvas Drag ──
 
-  // â”€â”€ Copy / paste / duplicate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Copy / paste / duplicate ──────────────────────────────────────────────
 
   private clampToolbarHeight(value: number): number {
     return Math.max(this.TOOLBAR_MIN_H, Math.min(this.TOOLBAR_MAX_H, Math.round(value)));
@@ -5850,14 +5912,14 @@ export class App {
     /**
      * Hit-test all visible slots (topmost first).
      *
-     * Stage 1 â€” tight bounding-box pre-filter:
+     * Stage 1 — tight bounding-box pre-filter:
      *   On first access, scanContentBounds() downsamples the rendered canvas to
-     *   â‰¤128Ã—128 and finds the pixel-accurate content bounds (ignoring transparent
+     *   ≤128×128 and finds the pixel-accurate content bounds (ignoring transparent
      *   padding). The result is cached in hitBoundsCache. A 8-px margin is added so
      *   the clickable region is slightly larger than the visible pixels.
      *   Fallback: full canvas bounds (if the canvas is tainted or not yet scanned).
      *
-     * Stage 2 â€” single-pixel alpha read:
+     * Stage 2 — single-pixel alpha read:
      *   Only fires for clicks that passed Stage 1. Catches SecurityError from tainted
      *   canvases and accepts the hit (Stage 1 already proved we're inside the content
      *   region in that case).
@@ -5900,7 +5962,7 @@ export class App {
               const chv = (hb.hv + MARGIN) * scale;
               if (Math.abs(localX - dx) > chw || Math.abs(localY - dy) > chv) continue;
             } else {
-              // Tainted or fully transparent â€” fall back to full canvas bounds
+              // Tainted or fully transparent — fall back to full canvas bounds
               if (Math.abs(localX) > (rendered.width / 2) * scale) continue;
               if (Math.abs(localY) > (rendered.height / 2) * scale) continue;
             }
@@ -5912,7 +5974,7 @@ export class App {
             try {
               if (ctx2d && ctx2d.getImageData(px, py, 1, 1).data[3] > 10) return i;
             } catch {
-              // Tainted canvas â€” bounds check passed, accept the hit
+              // Tainted canvas — bounds check passed, accept the hit
               return i;
             }
           } else {
@@ -5950,7 +6012,7 @@ export class App {
       const canvasY = (e.clientY - rect.top) / cssScale;
 
       const hitIdx = hitTestSlot(canvasX, canvasY);
-      if (hitIdx === null) return; // No sprite hit â€” don't start drag
+      if (hitIdx === null) return; // No sprite hit — don't start drag
       const hitWasSelected = this.isSlotSelected(hitIdx);
       if (!hitWasSelected) this.clearMultiSelection();
       if (hitIdx !== state.activeSlotIndex) setActiveSlot(hitIdx);
@@ -6002,7 +6064,7 @@ export class App {
 
     window.addEventListener('mouseup', finishDrag);
 
-    // â”€â”€ Touch: single-finger drag + two-finger pinch-scale / twist-rotate â”€â”€
+    // ── Touch: single-finger drag + two-finger pinch-scale / twist-rotate ──
 
     let pinchStartDist = 0;
     let pinchStartScale = 1;
@@ -6089,12 +6151,12 @@ export class App {
         const prevScale = slot.scale;
         const prevRotation = slot.rotation;
 
-        // Pinch â†’ scale (clamped to slider range)
+        // Pinch → scale (clamped to slider range)
         const dist = Math.hypot(dx, dy);
         slot.scale = this.clampScale(pinchStartScale * (dist / Math.max(pinchStartDist, 0.0001)));
         this.scaleInput.value = slot.scale.toFixed(3);
 
-        // Twist â†’ rotation
+        // Twist → rotation
         const angle = Math.atan2(dy, dx);
         slot.rotation = this.normalizeRotation(pinchStartRotation + (angle - pinchStartAngle) * (180 / Math.PI));
         this.rotationInput.value = slot.rotation.toFixed(1);
@@ -6116,7 +6178,7 @@ export class App {
     window.addEventListener('touchcancel', finishTouchGesture);
   }
 
-  // â”€â”€ Download â”€â”€
+  // ── Download ──
 
   private buildFxPreviewOverlay(): void {
     this.fxPreviewCanvas = document.createElement('canvas');
@@ -6863,7 +6925,7 @@ export class App {
     statusEl.textContent = '';
   }
 
-  // â”€â”€ GIF Preview â”€â”€
+  // ── GIF Preview ──
 
   private startGifPreview(): void {
     const slot = getActiveSlot();
@@ -6927,7 +6989,7 @@ export class App {
 
   /**
    * Asynchronously composite all card preset items and push the results into the
-   * dropdown list thumbnails. Runs in parallel â€” atlas is fetched once and cached.
+   * dropdown list thumbnails. Runs in parallel — atlas is fetched once and cached.
    */
   private async generateCardListThumbnails(items: DropdownItem[]): Promise<void> {
     type LayerSrc = HTMLImageElement | HTMLCanvasElement;
@@ -7064,7 +7126,7 @@ export class App {
     }
   }
 
-  // â”€â”€ Helpers â”€â”€
+  // ── Helpers ──
 
   private frameHasVisibleAlpha(canvas: HTMLCanvasElement): boolean {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -7304,7 +7366,7 @@ export class App {
     }
   }
 
-  // â”€â”€ Scenes section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Scenes section ──────────────────────────────────────────────────────────
 
   private refreshScenesList(): void {
     this.scenesListEl.innerHTML = '';
@@ -7326,6 +7388,7 @@ export class App {
           pushUndo();
           this.clearMultiSelection();
           state.slots = scene.slots;
+          refreshBlobUrlTracking();
           state.activeSlotIndex = Math.min(scene.activeSlotIndex, state.slots.length - 1);
           this.sceneGifTimeline = null;
           if (this.sceneGifSession) this.closeSceneGifEditor(false);
@@ -7374,7 +7437,7 @@ export class App {
     });
   }
 
-  // â”€â”€ End scenes section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── End scenes section ───────────────────────────────────────────────────────
 
   private makeCheckLabel(text: string, input: HTMLInputElement): HTMLLabelElement {
     const label = el('label', {}, []) as HTMLLabelElement;

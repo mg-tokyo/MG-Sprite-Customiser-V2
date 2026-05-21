@@ -3,6 +3,7 @@ import { el } from '../../utils/dom';
 
 export class ImportPanel {
   readonly element: HTMLElement;
+  private readonly MAX_IMPORT_BYTES = 15 * 1024 * 1024;
 
   constructor() {
     const fileInput = el('input', {
@@ -39,6 +40,10 @@ export class ImportPanel {
   }
 
   private importFile(file: File): void {
+    if (file.size > this.MAX_IMPORT_BYTES) {
+      alert('File is too large. Please use files smaller than 15 MB.');
+      return;
+    }
     const url = URL.createObjectURL(file);
     const name = file.name.replace(/\.[^.]+$/, '');
 

@@ -1,4 +1,4 @@
-import { state, type Slot } from './store';
+import { MAX_SLOTS, refreshBlobUrlTracking, state, type Slot } from './store';
 
 const STORAGE_KEY = 'mgsc_editor_state';
 const SCHEMA_VERSION = 5; // Bump to invalidate stale persisted data
@@ -70,7 +70,7 @@ function sanitizeSlots(slots: Slot[]): void {
 
 export function saveState(): void {
   // Strip non-serializable GIF data from slots before persisting
-  const cleanSlots = state.slots.map(s => {
+  const cleanSlots = state.slots.map((s) => {
     const { gifFrames, _gifFrameIdx, ...rest } = s;
     return { ...rest, isAnimated: false };
   });
@@ -102,6 +102,7 @@ export function restoreState(): void {
     if (data.slots) {
       sanitizeSlots(data.slots);
       state.slots = data.slots;
+      refreshBlobUrlTracking();
     }
     if (typeof data.activeSlotIndex === 'number') state.activeSlotIndex = data.activeSlotIndex;
     if (data.theme) state.theme = data.theme;
@@ -115,8 +116,16 @@ export function restoreState(): void {
 // ── Named scenes ─────────────────────────────────────────────────────────────
 
 const SCENES_KEY = 'mgsc_named_scenes';
-const SCENE_SCHEMA_VERSION = 1;
+const SCENE_SCHEMA_VERSION = 2;
+const SCENE_SCHEMA_VERSION_LEGACY = 1;
 const MAX_SCENES = 50;
+const MAX_SCENE_JSON_CHARS = 2_000_000;
+const MAX_SCENE_NAME_LENGTH = 80;
+const MAX_SLOT_STRING_LENGTH = 320;
+const MAX_CONTENT_STRING_LENGTH = 5000;
+const MAX_MUTATIONS_PER_SLOT = 64;
+const MAX_SCENE_THUMBNAIL_CHARS = 900_000;
+const MAX_COLOR_STRING_LENGTH = 32;
 
 export interface SavedScene {
   _v: number;
@@ -128,14 +137,254 @@ export interface SavedScene {
   thumbnail?: string;
 }
 
+export type SceneImportResult =
+  | { ok: true; scene: SavedScene }
+  | { ok: false; error: string };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
+}
+
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  return Math.round(clampNumber(value, min, max, fallback));
+}
+
+function clampText(value: unknown, maxLen: number, fallback = ''): string {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  return trimmed.slice(0, maxLen);
+}
+
+function isSafeSpriteUrl(raw: string): boolean {
+  if (!raw) return true;
+  if (/^[a-z0-9-]+:$/i.test(raw)) return true; // Internal sentinels like text:/blobling:
+  if (raw.startsWith('overlays/')) return true;
+  if (raw.startsWith('blob:')) return true;
+  if (raw.startsWith('data:image/')) return true;
+  if (raw.startsWith('/')) return true;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeColor(value: unknown, fallback: string): string {
+  const raw = clampText(value, MAX_COLOR_STRING_LENGTH, fallback);
+  if (!raw) return fallback;
+  if (/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(raw)) return raw;
+  return fallback;
+}
+
+function sanitizeJsonValue(value: unknown, depth = 0): unknown {
+  if (depth > 5) return undefined;
+  if (value == null) return value;
+  if (typeof value === 'string') return value.slice(0, MAX_CONTENT_STRING_LENGTH);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (typeof value === 'boolean') return value;
+  if (Array.isArray(value)) {
+    return value.slice(0, 120).map((entry) => sanitizeJsonValue(entry, depth + 1));
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    let count = 0;
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      if (count >= 160) break;
+      out[key.slice(0, 80)] = sanitizeJsonValue(entry, depth + 1);
+      count += 1;
+    }
+    return out;
+  }
+  return undefined;
+}
+
+function createDefaultSlot(index: number): Slot {
+  return {
+    id: `slot-${index}`,
+    type: 'sprite',
+    spriteKey: '',
+    spriteUrl: '',
+    mutations: [],
+    options: { icons: true, overlays: true },
+    customTint: { color: '#ffffff', opacity: 0 },
+    position: { x: 0, y: 0 },
+    scale: 1,
+    rotation: 0,
+    visible: true,
+    locked: false,
+  };
+}
+
+function normalizeSlot(rawSlot: unknown, index: number): Slot {
+  const raw = asRecord(rawSlot);
+  const base = createDefaultSlot(index);
+  if (!raw) return base;
+
+  const rawType = clampText(raw.type, 20, base.type);
+  if (rawType === 'sprite' || rawType === 'custom' || rawType === 'cosmetic' || rawType === 'text' || rawType === 'full-card') {
+    base.type = rawType;
+  }
+
+  base.id = clampText(raw.id, 64, base.id);
+  base.spriteKey = clampText(raw.spriteKey, MAX_SLOT_STRING_LENGTH, '');
+
+  const spriteUrl = clampText(raw.spriteUrl, MAX_CONTENT_STRING_LENGTH, '');
+  base.spriteUrl = isSafeSpriteUrl(spriteUrl) ? spriteUrl : '';
+
+  const rawMutations = Array.isArray(raw.mutations) ? raw.mutations : [];
+  base.mutations = rawMutations
+    .slice(0, MAX_MUTATIONS_PER_SLOT)
+    .map((entry) => clampText(entry, 80))
+    .filter(Boolean);
+
+  const options = asRecord(raw.options);
+  base.options = {
+    icons: typeof options?.icons === 'boolean' ? options.icons : true,
+    overlays: typeof options?.overlays === 'boolean' ? options.overlays : true,
+  };
+
+  const customTint = asRecord(raw.customTint);
+  base.customTint = {
+    color: sanitizeColor(customTint?.color, '#ffffff'),
+    opacity: clampNumber(customTint?.opacity, 0, 1, 0),
+  };
+
+  const position = asRecord(raw.position);
+  base.position = {
+    x: clampNumber(position?.x, -6000, 6000, 0),
+    y: clampNumber(position?.y, -6000, 6000, 0),
+  };
+
+  base.scale =
+    base.type === 'text'
+      ? clampNumber(raw.scale, 8, 200, 36)
+      : clampNumber(raw.scale, 0.1, 4, 1);
+  base.rotation = clampNumber(raw.rotation, -360, 360, 0);
+  base.visible = typeof raw.visible === 'boolean' ? raw.visible : true;
+  base.locked = typeof raw.locked === 'boolean' ? raw.locked : false;
+  base.isAnimated = typeof raw.isAnimated === 'boolean' ? raw.isAnimated : false;
+
+  if (raw.bloblingAnimId != null) {
+    base.bloblingAnimId = clampText(raw.bloblingAnimId, 40);
+  }
+
+  const cosmeticLayers = asRecord(raw.cosmeticLayers);
+  if (cosmeticLayers) {
+    const normalized: Record<string, string> = {};
+    let count = 0;
+    for (const [key, value] of Object.entries(cosmeticLayers)) {
+      if (count >= 16) break;
+      const sk = clampText(key, 40);
+      const sv = clampText(value, 120);
+      if (sk && sv) normalized[sk] = sv;
+      count += 1;
+    }
+    if (Object.keys(normalized).length > 0) base.cosmeticLayers = normalized;
+  }
+
+  const textData = asRecord(raw.textData);
+  if (textData) {
+    base.textData = {
+      content: clampText(textData.content, MAX_CONTENT_STRING_LENGTH),
+      fontFamily: clampText(textData.fontFamily, 120, 'Greycliff CF'),
+      fontLabel: clampText(textData.fontLabel, 120, 'Custom'),
+      fontWeight: clampText(textData.fontWeight, 20, '400'),
+      fontStyle: clampText(textData.fontStyle, 20, 'normal'),
+      fontSize: clampNumber(textData.fontSize, 8, 200, 36),
+      align:
+        textData.align === 'left' || textData.align === 'center' || textData.align === 'right'
+          ? textData.align
+          : 'center',
+      wordWrap: typeof textData.wordWrap === 'boolean' ? textData.wordWrap : true,
+      wordWrapWidth: clampNumber(textData.wordWrapWidth, 40, 2000, 520),
+      bold: !!textData.bold,
+      italic: !!textData.italic,
+      mgShadow: !!textData.mgShadow,
+      strokeEnabled: !!textData.strokeEnabled,
+      strokeColor: sanitizeColor(textData.strokeColor, '#000000'),
+      strokeWidth: clampNumber(textData.strokeWidth, 0, 40, 0),
+      unicodeStyle: clampText(textData.unicodeStyle, 60) || undefined,
+      gfFamily: clampText(textData.gfFamily, 120) || undefined,
+    };
+  }
+
+  const fullCardData = sanitizeJsonValue(raw.fullCardData);
+  if (asRecord(fullCardData)) base.fullCardData = fullCardData as Slot['fullCardData'];
+  const petBarData = sanitizeJsonValue(raw.petBarData);
+  if (asRecord(petBarData)) base.petBarData = petBarData as Slot['petBarData'];
+
+  sanitizeSlotAssets(base);
+  return base;
+}
+
+function normalizeSceneLike(parsed: unknown): SavedScene | null {
+  const raw = asRecord(parsed);
+  if (!raw) return null;
+
+  const version = clampInt(raw._v, 0, 999, 0);
+  if (version !== SCENE_SCHEMA_VERSION && version !== SCENE_SCHEMA_VERSION_LEGACY) return null;
+
+  const slotsRaw = Array.isArray(raw.slots) ? raw.slots : [];
+  const normalizedSlots = slotsRaw
+    .slice(0, MAX_SLOTS)
+    .map((entry, index) => normalizeSlot(entry, index));
+
+  if (normalizedSlots.length === 0) return null;
+
+  const normalized: SavedScene = {
+    _v: SCENE_SCHEMA_VERSION,
+    name: clampText(raw.name, MAX_SCENE_NAME_LENGTH, 'Untitled'),
+    savedAt: clampInt(raw.savedAt, 0, 9_999_999_999_999, Date.now()),
+    slots: normalizedSlots,
+    activeSlotIndex: clampInt(raw.activeSlotIndex, 0, normalizedSlots.length - 1, 0),
+  };
+
+  const thumbnail = clampText(raw.thumbnail, MAX_SCENE_THUMBNAIL_CHARS);
+  if (thumbnail.startsWith('data:image/')) normalized.thumbnail = thumbnail;
+  return normalized;
+}
+
+function parseSceneJson(rawJson: string): SceneImportResult {
+  if (rawJson.length > MAX_SCENE_JSON_CHARS) {
+    return { ok: false, error: 'Scene file is too large.' };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
+    return { ok: false, error: 'Scene file is not valid JSON.' };
+  }
+
+  const normalized = normalizeSceneLike(parsed);
+  if (!normalized) {
+    return { ok: false, error: 'Scene file has an unsupported or invalid structure.' };
+  }
+
+  return { ok: true, scene: normalized };
+}
+
 export function listSavedScenes(): SavedScene[] {
   try {
     const raw = localStorage.getItem(SCENES_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    const scenes = (parsed as SavedScene[]).filter(s => s._v === SCENE_SCHEMA_VERSION);
-    for (const scene of scenes) sanitizeSlots(scene.slots);
+    const scenes: SavedScene[] = [];
+    for (const sceneRaw of parsed) {
+      const normalized = normalizeSceneLike(sceneRaw);
+      if (!normalized) continue;
+      scenes.push(normalized);
+      if (scenes.length >= MAX_SCENES) break;
+    }
     return scenes;
   } catch {
     return [];
@@ -163,8 +412,9 @@ async function blobUrlToDataUrl(blobUrl: string): Promise<string | null> {
 
 async function cleanSlotsWithImages(slots: Slot[]): Promise<Slot[]> {
   return Promise.all(
-    slots.map(async s => {
-      const { gifFrames: _gf, _gifFrameIdx: _idx, ...rest } = s;
+    slots.map(async (s, index) => {
+      const normalized = normalizeSlot(s, index);
+      const { gifFrames: _gf, _gifFrameIdx: _idx, ...rest } = normalized;
       if (rest.spriteUrl?.startsWith('blob:')) {
         const dataUrl = await blobUrlToDataUrl(rest.spriteUrl);
         if (dataUrl && dataUrl.length < MAX_IMAGE_DATA_URL_BYTES) {
@@ -180,11 +430,13 @@ async function cleanSlotsWithImages(slots: Slot[]): Promise<Slot[]> {
 export async function saveNamedScene(name: string, thumbnail?: string): Promise<void> {
   const scene: SavedScene = {
     _v: SCENE_SCHEMA_VERSION,
-    name: name.trim() || 'Untitled',
+    name: clampText(name, MAX_SCENE_NAME_LENGTH, 'Untitled'),
     savedAt: Date.now(),
     slots: await cleanSlotsWithImages(state.slots),
-    activeSlotIndex: state.activeSlotIndex,
-    thumbnail,
+    activeSlotIndex: clampInt(state.activeSlotIndex, 0, Math.max(0, state.slots.length - 1), 0),
+    thumbnail: thumbnail?.startsWith('data:image/')
+      ? clampText(thumbnail, MAX_SCENE_THUMBNAIL_CHARS)
+      : undefined,
   };
   const scenes = listSavedScenes();
   scenes.unshift(scene); // newest first
@@ -212,15 +464,6 @@ export function exportSceneJson(sceneIndex: number): string {
   return JSON.stringify(scene, null, 2);
 }
 
-export function importSceneJson(json: string): SavedScene | null {
-  try {
-    const parsed = JSON.parse(json) as Record<string, unknown>;
-    if (parsed._v !== SCENE_SCHEMA_VERSION) return null;
-    if (!Array.isArray(parsed.slots)) return null;
-    const scene = parsed as unknown as SavedScene;
-    sanitizeSlots(scene.slots);
-    return scene;
-  } catch {
-    return null;
-  }
+export function importSceneJson(json: string): SceneImportResult {
+  return parseSceneJson(json);
 }

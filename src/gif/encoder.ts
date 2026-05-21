@@ -1,5 +1,5 @@
 /**
- * GIF encoder using gif.js (loaded from CDN).
+ * GIF encoder using gif.js (loaded from same-origin static assets).
  * gif.js requires a Web Worker, so we load it dynamically.
  */
 
@@ -24,17 +24,20 @@ interface GifJSConstructor {
 
 declare const GIF: GifJSConstructor | undefined;
 
-const GIF_JS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js';
-const GIF_WORKER_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js';
+const GIF_JS_LOCAL = `${import.meta.env.BASE_URL}vendor/gif.js`;
+const GIF_WORKER_LOCAL = `${import.meta.env.BASE_URL}vendor/gif.worker.js`;
 
 let gifJsLoaded = false;
-let workerBlobUrl: string | null = null;
 
 async function loadGifJs(): Promise<void> {
   if (gifJsLoaded) return;
+  if (typeof GIF !== 'undefined') {
+    gifJsLoaded = true;
+    return;
+  }
   return new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = GIF_JS_CDN;
+    script.src = GIF_JS_LOCAL;
     script.onload = () => {
       gifJsLoaded = true;
       resolve();
@@ -42,24 +45,6 @@ async function loadGifJs(): Promise<void> {
     script.onerror = () => reject(new Error('Failed to load gif.js'));
     document.head.append(script);
   });
-}
-
-/**
- * Fetch gif.worker.js from CDN and return a same-origin Blob URL.
- *
- * Browsers block `new Worker('https://...')` for cross-origin URLs (same-origin
- * policy for Workers). Fetching the script text and wrapping it in a Blob URL
- * gives the Worker a same-origin URL, bypassing that restriction.
- * The CDN serves the file with `Access-Control-Allow-Origin: *` so the fetch succeeds.
- */
-async function getWorkerBlobUrl(): Promise<string> {
-  if (workerBlobUrl) return workerBlobUrl;
-  const res = await fetch(GIF_WORKER_CDN);
-  if (!res.ok) throw new Error(`Failed to fetch gif worker: ${res.status}`);
-  const text = await res.text();
-  const blob = new Blob([text], { type: 'application/javascript' });
-  workerBlobUrl = URL.createObjectURL(blob);
-  return workerBlobUrl;
 }
 
 export interface EncodeOptions {
@@ -71,7 +56,7 @@ export interface EncodeOptions {
 }
 
 export async function encodeGif(options: EncodeOptions): Promise<Blob> {
-  const [, blobUrl] = await Promise.all([loadGifJs(), getWorkerBlobUrl()]);
+  await loadGifJs();
 
   if (typeof GIF === 'undefined') {
     throw new Error('gif.js not loaded');
@@ -84,7 +69,7 @@ export async function encodeGif(options: EncodeOptions): Promise<Blob> {
         quality: options.quality ?? 10,
         width: options.width,
         height: options.height,
-        workerScript: blobUrl,
+        workerScript: GIF_WORKER_LOCAL,
         transparent: 0x000000,
       });
 

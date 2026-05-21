@@ -4,6 +4,7 @@ import { restoreState, saveState } from './state/persistence';
 import { bus, Events } from './utils/events';
 import { App } from './editor/app';
 import { clearSpriteIdCache } from './renderer/icon-layout';
+import { clampDisplayText } from './utils/safe-text';
 
 async function init(): Promise<void> {
   restoreState();
@@ -47,7 +48,12 @@ async function init(): Promise<void> {
     bus.emit(Events.DATA_LOADED, null);
   } catch (err) {
     console.error('Failed to load game data:', err);
-    container.innerHTML = `<div class="error">Failed to load game data: ${err instanceof Error ? err.message : err}</div>`;
+    container.textContent = '';
+    const errorEl = document.createElement('div');
+    errorEl.className = 'error';
+    const message = err instanceof Error ? err.message : String(err);
+    errorEl.textContent = `Failed to load game data: ${clampDisplayText(message, 240)}`;
+    container.append(errorEl);
   }
 }
 

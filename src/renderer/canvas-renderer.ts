@@ -15,6 +15,7 @@ import {
   isTallKey,
 } from './icon-layout';
 import type { SpriteFrame } from '../api/types';
+import { mapWithConcurrency } from '../utils/async';
 
 /**
  * Render a single slot to a canvas, applying mutations, icons, and overlays.
@@ -319,18 +320,26 @@ export async function renderAll(output: HTMLCanvasElement): Promise<void> {
   ctx.imageSmoothingEnabled = true;
   ctx.clearRect(0, 0, output.width, output.height);
 
-  for (const slot of state.slots) {
-    if (!slot.visible) continue;
-    if (slot.type === 'text' || slot.type === 'full-card' || slot.spriteUrl === 'pet-bar:' ||
-        (slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:')) {
-      // These slot types render from gifFrames only — skip if not ready
-      if (!slot.gifFrames || slot.gifFrames.length === 0) continue;
-    } else {
-      if (!slot.spriteUrl) continue;
+  const drawableSlots = state.slots.filter((slot) => {
+    if (!slot.visible) return false;
+    if (
+      slot.type === 'text' ||
+      slot.type === 'full-card' ||
+      slot.spriteUrl === 'pet-bar:' ||
+      (slot.type === 'cosmetic' && slot.spriteUrl === 'blobling:')
+    ) {
+      return !!slot.gifFrames && slot.gifFrames.length > 0;
     }
+    return !!slot.spriteUrl;
+  });
 
+  const renderedSlots = await mapWithConcurrency(drawableSlots, 4, async (slot) => {
     const gifIdx = slot.isAnimated && slot.gifFrames ? (slot._gifFrameIdx ?? 0) : undefined;
     const rendered = await renderSlot(slot, gifIdx);
+    return { slot, rendered };
+  });
+
+  for (const { slot, rendered } of renderedSlots) {
     if (!rendered) continue;
 
     const scale = slot.type === 'text' ? 1 : slot.scale;

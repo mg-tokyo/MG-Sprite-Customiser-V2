@@ -1,5 +1,6 @@
 import type { GameData, SpriteDataResponse, CosmeticsResponse } from '../api/types';
 import { bus, Events } from '../utils/events';
+import { syncBlobUrlReferences } from '../utils/blob-url-manager';
 
 export type FullCardType   = 'Pet' | 'Plant' | 'Crop' | 'Seed' | 'Egg' | 'Tool' | 'Decor';
 export type FullCardRarity = 'Common' | 'Uncommon' | 'Rare' | 'Legendary' | 'Mythic' | 'Divine' | 'Celestial';
@@ -67,6 +68,10 @@ export interface FullCardData {
   /** Pet strength/hunger bar fill colors. */
   petStrColor?: string;
   petHungerColor?: string;
+  /** Whether the strength bar is visible on the card (default true). */
+  petStrBarVisible?: boolean;
+  /** Whether the hunger bar is visible on the card (default true). */
+  petHungerBarVisible?: boolean;
   /** Left padding between label area and bar track. */
   petStrLabelPadding?: number;
   petHungerLabelPadding?: number;
@@ -279,6 +284,30 @@ export const state: AppState = {
   previewZoom: 1,
 };
 
+function collectBlobUrlReferences(): string[] {
+  const urls: string[] = [];
+  const addFromSlots = (slots: Slot[]): void => {
+    for (const slot of slots) {
+      if (typeof slot.spriteUrl === 'string' && slot.spriteUrl.startsWith('blob:')) {
+        urls.push(slot.spriteUrl);
+      }
+    }
+  };
+
+  addFromSlots(state.slots);
+  for (const snap of state.undoStack) addFromSlots(snap.slots);
+  for (const snap of state.redoStack) addFromSlots(snap.slots);
+  return urls;
+}
+
+function syncBlobUrls(): void {
+  syncBlobUrlReferences(collectBlobUrlReferences());
+}
+
+export function refreshBlobUrlTracking(): void {
+  syncBlobUrls();
+}
+
 function clampActiveSlotIndex(index: number, slotsLength = state.slots.length): number {
   if (slotsLength <= 0) return 0;
   if (!Number.isFinite(index)) return 0;
@@ -312,6 +341,7 @@ function applyHistorySnapshot(snapshot: HistorySnapshot): void {
   state.slots = cloneSlots(snapshot.slots);
   if (state.slots.length === 0) state.slots = [createEmptySlot(0)];
   state.activeSlotIndex = clampActiveSlotIndex(snapshot.activeSlotIndex, state.slots.length);
+  syncBlobUrls();
   if (historyMetaRestore) {
     try {
       historyMetaRestore(snapshot.meta);
@@ -371,6 +401,7 @@ export function pushUndo(): void {
   state.undoStack.push(createHistorySnapshot());
   if (state.undoStack.length > MAX_UNDO) state.undoStack.shift();
   state.redoStack = [];
+  syncBlobUrls();
 }
 
 export function undo(): void {
@@ -379,6 +410,7 @@ export function undo(): void {
   state.redoStack.push(createHistorySnapshot());
   if (state.redoStack.length > MAX_UNDO) state.redoStack.shift();
   applyHistorySnapshot(prev);
+  syncBlobUrls();
   bus.emit(Events.SLOT_CHANGED, null);
   bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
   bus.emit(Events.RENDER_REQUEST, null);
@@ -390,6 +422,7 @@ export function redo(): void {
   state.undoStack.push(createHistorySnapshot());
   if (state.undoStack.length > MAX_UNDO) state.undoStack.shift();
   applyHistorySnapshot(next);
+  syncBlobUrls();
   bus.emit(Events.SLOT_CHANGED, null);
   bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
   bus.emit(Events.RENDER_REQUEST, null);
@@ -399,6 +432,7 @@ export function updateSlot(index: number, changes: Partial<Slot>): void {
   if (index < 0 || index >= state.slots.length) return;
   pushUndo();
   Object.assign(state.slots[index], changes);
+  syncBlobUrls();
   bus.emit(Events.SLOT_CHANGED, index);
   bus.emit(Events.RENDER_REQUEST, null);
 }
@@ -407,6 +441,7 @@ export function updateSlot(index: number, changes: Partial<Slot>): void {
 export function updateSlotSilent(index: number, changes: Partial<Slot>): void {
   if (index < 0 || index >= state.slots.length) return;
   Object.assign(state.slots[index], changes);
+  syncBlobUrls();
   bus.emit(Events.SLOT_CHANGED, index);
   bus.emit(Events.RENDER_REQUEST, null);
 }
@@ -443,6 +478,7 @@ export function reorderSlots(fromIndex: number, insertBefore: number): void {
   state.slots = newSlots;
   const nextActiveIndex = newSlots.indexOf(activeSlot);
   state.activeSlotIndex = nextActiveIndex >= 0 ? nextActiveIndex : clampActiveSlotIndex(state.activeSlotIndex, newSlots.length);
+  syncBlobUrls();
   bus.emit(Events.SLOT_CHANGED, null);
   bus.emit(Events.SLOT_SELECTED, state.activeSlotIndex);
   bus.emit(Events.RENDER_REQUEST, null);
@@ -452,6 +488,7 @@ export function clearSlot(index: number): void {
   if (index < 0 || index >= state.slots.length) return;
   pushUndo();
   state.slots[index] = createEmptySlot(index);
+  syncBlobUrls();
   bus.emit(Events.SLOT_CHANGED, index);
   bus.emit(Events.RENDER_REQUEST, null);
 }
@@ -465,6 +502,7 @@ export function clearSlots(indexes: number[]): void {
   for (const index of validIndexes) {
     state.slots[index] = createEmptySlot(index);
   }
+  syncBlobUrls();
   bus.emit(Events.SLOT_CHANGED, validIndexes.length === 1 ? validIndexes[0] : null);
   bus.emit(Events.RENDER_REQUEST, null);
 }
@@ -473,5 +511,6 @@ export function addSlot(): void {
   if (state.slots.length >= MAX_SLOTS) return;
   pushUndo();
   state.slots.push(createEmptySlot(state.slots.length));
+  syncBlobUrls();
   bus.emit(Events.SLOT_CHANGED, null);
 }

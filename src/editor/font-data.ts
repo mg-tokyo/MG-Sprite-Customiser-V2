@@ -8,48 +8,13 @@
  */
 
 import { state } from '../state/store';
+import { isLocalhostHost, resolveCorsProxy } from '../api/proxy-config';
 
 // ── MG font CDN base URL (Vite content-hashed filenames from magicgarden.gg build) ──
 // These are served as static Vite assets; the hash is baked into the filename.
 const MG_CDN_FALLBACK = 'https://magicgarden.gg/assets';
 
 const IS_DEV = import.meta.env.DEV;
-const BUILD_CORS_PROXY = import.meta.env.VITE_CORS_PROXY ?? '';
-
-function isLocalhostHost(hostname: string): boolean {
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return true;
-  return hostname.endsWith('.localhost');
-}
-
-function getRuntimeCorsProxy(): string {
-  if (typeof window === 'undefined') return '';
-
-  const params = new URLSearchParams(window.location.search);
-  const qp = params.get('proxy')?.trim() ?? '';
-  if (qp) {
-    try {
-      const parsed = new URL(qp);
-      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-        try {
-          localStorage.setItem('mg_sprite_proxy', qp);
-        } catch {
-          // ignore storage errors
-        }
-        return qp;
-      }
-    } catch {
-      // ignore invalid query param
-    }
-  }
-
-  try {
-    return localStorage.getItem('mg_sprite_proxy') ?? '';
-  } catch {
-    return '';
-  }
-}
-
-const RUNTIME_CORS_PROXY = getRuntimeCorsProxy();
 
 function buildProxyUrl(prefix: string, target: string): string {
   if (!prefix) return target;
@@ -72,7 +37,7 @@ function proxyUrl(url: string): string {
     return url.replace('https://magicgarden.gg/', '/mggg-proxy/');
   }
 
-  const corsProxy = RUNTIME_CORS_PROXY || BUILD_CORS_PROXY;
+  const corsProxy = resolveCorsProxy();
   if (corsProxy && url.startsWith('https://magicgarden.gg/')) {
     return buildProxyUrl(corsProxy, url);
   }
