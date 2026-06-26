@@ -24,6 +24,15 @@ import { MG_FONTS, SYSTEM_FONTS, GOOGLE_FONTS_CURATED, UNICODE_STYLES, ensureFon
 import { getRiveFileUrl, getBloblingAnimations, renderBloblingFrames, BLOBLING_ANIMATIONS, getExpressionIndex } from './blobling-rive';
 import { buildToolbar } from './toolbar';
 import { buildAssetBrowser, populateBrowserTabs, populateBrowserGrid } from './panels/asset-browser';
+import { ExportControls } from './export-controls';
+import {
+  exportSettings,
+  buildExportCanvas,
+  isExportSettingsValid,
+  applyPersistedExportSettings,
+  serializeExportSettings,
+  type ExportSettings,
+} from './export-settings';
 import { Drawer } from './drawers/drawer';
 import { BLOBLING_LAYER_ORDER } from './drawers/blobling-drawer';
 import type { BloblingLayerKey } from './drawers/blobling-drawer';
@@ -291,6 +300,7 @@ export class App {
   private assetsWidth = 260;
   private assetsThumbZoom = 1;
   private renderSize = 1024;
+  private exportControls!: ExportControls;
   private appRootEl: HTMLElement | null = null;
   private mobileModeQuery: MediaQueryList | null = null;
   private mobileModeChangeHandler: ((e: MediaQueryListEvent) => void) | null = null;
@@ -823,8 +833,14 @@ export class App {
       this.applyRenderSize(next);
       renderSizeSelect.value = String(this.renderSize);
     });
+    this.exportControls = new ExportControls({
+      onChange: () => {
+        this.saveLayoutSettings();
+        this.syncDownloadBtn();
+      },
+    });
     const previewStage = el('div', { className: 'preview-stage' }, [
-      el('div', { className: 'preview-controls' }, [renderSizeSelect]),
+      el('div', { className: 'preview-controls' }, [renderSizeSelect, this.exportControls.element]),
       this.previewCanvas,
     ]);
     this.metaEl = el('div', { className: 'meta', id: 'meta' });
@@ -1471,16 +1487,48 @@ export class App {
     disableToolbarBtn = true,
   ): Promise<void> {
     if (frames.length === 0) return;
+    if (!isExportSettingsValid()) {
+      statusEl.textContent = 'Invalid export size — fix the custom width/height first.';
+      return;
+    }
     if (disableToolbarBtn) this.downloadBtn.disabled = true;
     statusEl.textContent = 'Rendering...';
 
     const prevSlots = this.cloneSlotsForSceneFrame(state.slots);
     const prevActive = state.activeSlotIndex;
     const FULL = this.renderSize;
-    const EXPORT_MAX = 512;
+    const SAFE_PAD = 24;
     const renderedFrames: { canvas: HTMLCanvasElement; delay: number }[] = [];
 
     try {
+      // Auto-fit needs a single output dimension across all frames, so compute the
+      // union bounds across every frame's slot snapshot before rendering.
+      let unionBounds: { x: number; y: number; w: number; h: number };
+      if (exportSettings.autoFit) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (let i = 0; i < frames.length; i++) {
+          statusEl.textContent = `Measuring frame ${i + 1}/${frames.length}...`;
+          this.suppressSceneGifFrameAutosave = true;
+          state.slots = this.cloneSlotsForSceneFrame(frames[i].sceneSlotsSnapshot);
+          refreshBlobUrlTracking();
+          state.activeSlotIndex = Math.min(frames[i].activeSlotIndex, state.slots.length - 1);
+          this.suppressSceneGifFrameAutosave = false;
+          const sizeMap = await this.buildCompositeSizeMap();
+          const b = this.computeCompositeBounds(sizeMap, FULL, SAFE_PAD);
+          if (b.x < minX) minX = b.x;
+          if (b.y < minY) minY = b.y;
+          if (b.x + b.w > maxX) maxX = b.x + b.w;
+          if (b.y + b.h > maxY) maxY = b.y + b.h;
+        }
+        if (!Number.isFinite(minX)) {
+          unionBounds = { x: 0, y: 0, w: FULL, h: FULL };
+        } else {
+          unionBounds = { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
+        }
+      } else {
+        unionBounds = { x: 0, y: 0, w: FULL, h: FULL };
+      }
+
       for (let i = 0; i < frames.length; i++) {
         const frame = frames[i];
         statusEl.textContent = `Rendering frame ${i + 1}/${frames.length}...`;
@@ -1495,13 +1543,7 @@ export class App {
         frameCanvas.height = FULL;
         await renderAll(frameCanvas);
 
-        let outCanvas = frameCanvas;
-        if (FULL > EXPORT_MAX) {
-          outCanvas = document.createElement('canvas');
-          outCanvas.width = EXPORT_MAX;
-          outCanvas.height = EXPORT_MAX;
-          outCanvas.getContext('2d')!.drawImage(frameCanvas, 0, 0, EXPORT_MAX, EXPORT_MAX);
-        }
+        const outCanvas = buildExportCanvas(frameCanvas, unionBounds, FULL);
 
         renderedFrames.push({
           canvas: outCanvas,
@@ -1522,7 +1564,7 @@ export class App {
       });
 
       const link = document.createElement('a');
-      link.download = 'scene-timeline.gif';
+      link.download = `scene-timeline-${width}x${height}.gif`;
       link.href = URL.createObjectURL(blob);
       link.click();
       URL.revokeObjectURL(link.href);
@@ -5488,12 +5530,14 @@ export class App {
         assetsWidth?: number;
         assetsThumbZoom?: number;
         renderSize?: number;
+        exportSettings?: Partial<ExportSettings>;
       };
       if (typeof parsed.toolbarHeight === 'number') this.toolbarHeight = this.clampToolbarHeight(parsed.toolbarHeight);
       if (typeof parsed.layersWidth === 'number') this.layersWidth = this.clampLayersWidth(parsed.layersWidth);
       if (typeof parsed.assetsWidth === 'number') this.assetsWidth = this.clampAssetsWidth(parsed.assetsWidth);
       if (typeof parsed.assetsThumbZoom === 'number') this.assetsThumbZoom = this.clampAssetsThumbZoom(parsed.assetsThumbZoom);
       if (typeof parsed.renderSize === 'number') this.renderSize = this.normalizeRenderSize(parsed.renderSize);
+      applyPersistedExportSettings(parsed.exportSettings);
     } catch {
       // Ignore invalid persisted layout payloads
     }
@@ -5507,6 +5551,7 @@ export class App {
         assetsWidth: this.assetsWidth,
         assetsThumbZoom: this.assetsThumbZoom,
         renderSize: this.renderSize,
+        exportSettings: serializeExportSettings(),
       }));
     } catch {
       // Ignore storage failures
@@ -6761,17 +6806,40 @@ export class App {
       return out;
     }
 
+    /** Render the full composition and produce the final export canvas honoring user settings. */
+    private async buildExportCompositeCanvas(): Promise<HTMLCanvasElement> {
+      const FULL = this.renderSize;
+      const SAFE_PAD = 24;
+      const source = document.createElement('canvas');
+      source.width = FULL;
+      source.height = FULL;
+      await renderAll(source);
+
+      const sizeMap = await this.buildCompositeSizeMap();
+      const bounds = this.computeCompositeBounds(sizeMap, FULL, SAFE_PAD);
+      return buildExportCanvas(source, bounds, FULL);
+    }
+
     private async downloadPNG(statusEl: HTMLElement = this.downloadProgress): Promise<void> {
+      if (!isExportSettingsValid()) {
+        statusEl.textContent = 'Invalid export size — fix the custom width/height first.';
+        return;
+      }
       statusEl.textContent = 'Rendering...';
-      const out = await this.buildCroppedCompositeCanvas();
+      const out = await this.buildExportCompositeCanvas();
+      const baseName = getActiveSlot().spriteKey.split('/').pop() || 'sprite';
       const link = document.createElement('a');
-      link.download = `${getActiveSlot().spriteKey.split('/').pop() || 'sprite'}.png`;
+      link.download = `${baseName}-${out.width}x${out.height}.png`;
       link.href = out.toDataURL('image/png');
       link.click();
       statusEl.textContent = '';
     }
 
   private async downloadGIF(statusEl: HTMLElement = this.downloadProgress, disableToolbarBtn = true): Promise<void> {
+      if (!isExportSettingsValid()) {
+        statusEl.textContent = 'Invalid export size — fix the custom width/height first.';
+        return;
+      }
       statusEl.textContent = 'Rendering...';
       if (disableToolbarBtn) this.downloadBtn.disabled = true;
 
@@ -6798,10 +6866,10 @@ export class App {
       return;
     }
 
-      // Composite is built at the selected square render size, then cropped to bounds with padding.
-      // If the result is larger than EXPORT_MAX, it is scaled down preserving aspect.
+      // Composite is built at the selected square render size, then handed to
+      // buildExportCanvas which applies the user's export-size + auto-fit settings
+      // (crop to bounds + scale to fit, or scale the full square to the target).
       const FULL = this.renderSize;
-      const EXPORT_MAX = 512;
       const SAFE_PAD = 24;
 
     // Pre-render all static (non-animated) slots once before the frame loop.
@@ -6836,9 +6904,6 @@ export class App {
       }
 
       const bounds = this.computeCompositeBounds(sizeMap, FULL, SAFE_PAD);
-      const scaleDown = Math.min(1, EXPORT_MAX / Math.max(bounds.w, bounds.h));
-      const outW = Math.max(1, Math.round(bounds.w * scaleDown));
-      const outH = Math.max(1, Math.round(bounds.h * scaleDown));
 
     const renderedFrames: { canvas: HTMLCanvasElement; delay: number }[] = [];
 
@@ -6881,29 +6946,13 @@ export class App {
           }
         }
 
-        // Crop to bounds and scale down if needed.
-        const cropped = document.createElement('canvas');
-        cropped.width = bounds.w;
-        cropped.height = bounds.h;
-        cropped.getContext('2d')!.drawImage(
-          outCanvas,
-          bounds.x,
-          bounds.y,
-          bounds.w,
-          bounds.h,
-          0,
-          0,
-          bounds.w,
-          bounds.h,
-        );
-
-        const frameOut = document.createElement('canvas');
-        frameOut.width = outW;
-        frameOut.height = outH;
-        frameOut.getContext('2d')!.drawImage(cropped, 0, 0, outW, outH);
+        const frameOut = buildExportCanvas(outCanvas, bounds, FULL);
         const frameDelay = Number.isFinite(primaryFrames[i]?.delay) ? primaryFrames[i].delay : this.DEFAULT_ANIM_FRAME_DELAY;
         renderedFrames.push({ canvas: frameOut, delay: frameDelay });
       }
+
+    const outW = renderedFrames[0].canvas.width;
+    const outH = renderedFrames[0].canvas.height;
 
     try {
       statusEl.textContent = 'Encoding GIF...';
@@ -6915,8 +6964,9 @@ export class App {
           statusEl.textContent = `Encoding GIF... ${Math.round(p * 100)}%`;
         },
       });
+      const baseName = getActiveSlot().spriteKey.split('/').pop() || 'sprite';
       const link = document.createElement('a');
-      link.download = `${getActiveSlot().spriteKey.split('/').pop() || 'sprite'}.gif`;
+      link.download = `${baseName}-${outW}x${outH}.gif`;
       link.href = URL.createObjectURL(blob);
       link.click();
       URL.revokeObjectURL(link.href);
@@ -7240,11 +7290,15 @@ export class App {
     };
   }
 
-  /** Set download button label based on whether any visible slot has an animated GIF. */
+  /** Set download button label and disable it when export settings are invalid. */
   private syncDownloadBtn(): void {
     const hasSceneGif = (this.sceneGifSession?.frames.length ?? this.sceneGifTimeline?.frames.length ?? 0) > 1;
     const hasGif = state.slots.some(s => s.visible && s.isAnimated && s.gifFrames && s.gifFrames.length > 1);
-    this.downloadBtn.textContent = hasSceneGif || hasGif ? 'Download GIF' : 'Download PNG';
+    const label = hasSceneGif || hasGif ? 'Download GIF' : 'Download PNG';
+    this.downloadBtn.textContent = label;
+    const valid = isExportSettingsValid();
+    this.downloadBtn.disabled = !valid;
+    this.downloadBtn.title = valid ? label : 'Invalid export size — fix the custom width/height first.';
   }
 
   /**

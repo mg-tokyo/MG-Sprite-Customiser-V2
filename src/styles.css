@@ -695,10 +695,18 @@ body {
   right: 8px;
   z-index: 2;
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  background: color-mix(in srgb, var(--surface-1) 85%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 8px;
 }
-.preview-controls .preview-size-select {
+.preview-controls .preview-size-select,
+.preview-controls .preview-export-select {
   width: auto;
-  min-width: 86px;
+  min-width: 110px;
   padding: 4px 8px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -706,6 +714,67 @@ body {
   color: var(--ink);
   font-size: 12px;
   cursor: pointer;
+}
+.preview-export-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink);
+}
+.preview-export-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.preview-export-field-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.preview-export-custom {
+  display: flex;
+  gap: 6px;
+}
+.preview-export-custom-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.preview-export-custom-field span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.preview-export-custom-input {
+  width: 60px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--ink);
+  font-size: 12px;
+}
+.preview-export-autofit-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.preview-export-autofit {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.preview-export-hint {
+  font-size: 11px;
+  color: #ff4d4d;
+  min-height: 0;
+}
+.preview-export-hint:empty {
+  display: none;
 }
 
 #previewCanvas {
