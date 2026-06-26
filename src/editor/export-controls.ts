@@ -1,11 +1,11 @@
 import { el } from '../utils/dom';
 import {
   exportSettings,
-  EXPORT_SIZE_PRESETS,
-  EXPORT_MIN_DIM,
-  EXPORT_MAX_DIM,
+  SIZE_PRESETS,
+  SIZE_MIN_DIM,
+  SIZE_MAX_DIM,
   isExportSettingsValid,
-  type ExportSizeMode,
+  type SizeMode,
 } from './export-settings';
 
 export interface ExportControlsOptions {
@@ -14,8 +14,8 @@ export interface ExportControlsOptions {
 }
 
 /**
- * Inline controls for export output size + auto-fit, rendered next to the
- * render-size dropdown in the preview-controls bar.
+ * Unified size + auto-fit controls. The chosen size drives BOTH the editor
+ * preview canvas and the export output dimensions.
  */
 export class ExportControls {
   readonly element: HTMLElement;
@@ -32,12 +32,11 @@ export class ExportControls {
 
     this.sizeSelect = el('select', {
       className: 'preview-export-select',
-      title: 'Export output size',
+      title: 'Canvas + export size',
     }) as HTMLSelectElement;
-    for (const s of EXPORT_SIZE_PRESETS) {
+    for (const s of SIZE_PRESETS) {
       this.sizeSelect.append(el('option', { value: `preset:${s}`, textContent: `${s}px` }));
     }
-    this.sizeSelect.append(el('option', { value: 'match', textContent: 'Match canvas' }));
     this.sizeSelect.append(el('option', { value: 'custom', textContent: 'Custom' }));
     this.sizeSelect.addEventListener('change', () => this.onSizeModeChange());
 
@@ -67,7 +66,7 @@ export class ExportControls {
 
     this.element = el('div', { className: 'preview-export-controls' }, [
       el('label', { className: 'preview-export-field' }, [
-        el('span', { className: 'preview-export-field-label', textContent: 'Export' }),
+        el('span', { className: 'preview-export-field-label', textContent: 'Size' }),
         this.sizeSelect,
       ]),
       this.customRow,
@@ -83,19 +82,18 @@ export class ExportControls {
 
   /** Re-read exportSettings (e.g. after loading from localStorage) and update UI. */
   syncFromState(): void {
-    if (exportSettings.sizeMode === 'preset') {
-      this.sizeSelect.value = `preset:${exportSettings.sizePreset}`;
+    if (exportSettings.mode === 'custom') {
+      this.sizeSelect.value = 'custom';
     } else {
-      this.sizeSelect.value = exportSettings.sizeMode;
+      this.sizeSelect.value = `preset:${exportSettings.preset}`;
     }
     this.customWInput.value = String(exportSettings.customW);
     this.customHInput.value = String(exportSettings.customH);
     this.autoFitInput.checked = exportSettings.autoFit;
-    this.customRow.style.display = exportSettings.sizeMode === 'custom' ? 'flex' : 'none';
+    this.customRow.style.display = exportSettings.mode === 'custom' ? 'flex' : 'none';
     this.updateValidityHint();
   }
 
-  /** Latest validity, mirrors `isExportSettingsValid()`. */
   isValid(): boolean {
     return isExportSettingsValid();
   }
@@ -104,8 +102,8 @@ export class ExportControls {
     return el('input', {
       type: 'number',
       value,
-      min: String(EXPORT_MIN_DIM),
-      max: String(EXPORT_MAX_DIM),
+      min: String(SIZE_MIN_DIM),
+      max: String(SIZE_MAX_DIM),
       step: '1',
       className: 'preview-export-custom-input',
     }) as HTMLInputElement;
@@ -113,13 +111,13 @@ export class ExportControls {
 
   private onSizeModeChange(): void {
     const v = this.sizeSelect.value;
-    if (v === 'match' || v === 'custom') {
-      exportSettings.sizeMode = v as ExportSizeMode;
+    if (v === 'custom') {
+      exportSettings.mode = 'custom' satisfies SizeMode;
     } else if (v.startsWith('preset:')) {
-      exportSettings.sizeMode = 'preset';
-      exportSettings.sizePreset = parseInt(v.split(':')[1], 10);
+      exportSettings.mode = 'preset' satisfies SizeMode;
+      exportSettings.preset = parseInt(v.split(':')[1], 10);
     }
-    this.customRow.style.display = exportSettings.sizeMode === 'custom' ? 'flex' : 'none';
+    this.customRow.style.display = exportSettings.mode === 'custom' ? 'flex' : 'none';
     this.updateValidityHint();
     this.opts.onChange();
   }
@@ -138,6 +136,6 @@ export class ExportControls {
       this.validityHint.textContent = '';
       return;
     }
-    this.validityHint.textContent = `W/H must be integers ${EXPORT_MIN_DIM}–${EXPORT_MAX_DIM}.`;
+    this.validityHint.textContent = `W/H must be integers ${SIZE_MIN_DIM}-${SIZE_MAX_DIM}.`;
   }
 }

@@ -31,6 +31,7 @@ import {
   isExportSettingsValid,
   applyPersistedExportSettings,
   serializeExportSettings,
+  getRenderSize,
   type ExportSettings,
 } from './export-settings';
 import { Drawer } from './drawers/drawer';
@@ -284,7 +285,6 @@ export class App {
   private readonly ASSETS_ZOOM_MAX = 2;
   private readonly TOOLBAR_MIN_H = 44;
   private readonly TOOLBAR_MAX_H = 140;
-  private readonly RENDER_SIZE_PRESETS = [1024, 1536, 2048, 3072, 4096] as const;
   private readonly SCENE_GIF_AUTO_MAX_DURATION_MS = 12000;
   private readonly SCENE_GIF_AUTO_MAX_FRAMES = 180;
   private readonly WEATHER_STRIP_FRAME_WIDTH = 256;
@@ -299,7 +299,7 @@ export class App {
   private layersWidth = 280;
   private assetsWidth = 260;
   private assetsThumbZoom = 1;
-  private renderSize = 1024;
+  private get renderSize(): number { return getRenderSize(); }
   private exportControls!: ExportControls;
   private appRootEl: HTMLElement | null = null;
   private mobileModeQuery: MediaQueryList | null = null;
@@ -820,27 +820,20 @@ export class App {
     this.previewCanvas.id     = 'previewCanvas';
     this.previewCanvas.width  = this.renderSize;
     this.previewCanvas.height = this.renderSize;
-    const renderSizeSelect = el('select', {
-      className: 'preview-size-select',
-      title: 'Internal render size',
-    }) as HTMLSelectElement;
-    for (const size of this.RENDER_SIZE_PRESETS) {
-      renderSizeSelect.append(el('option', { value: String(size), textContent: `${size}px` }));
-    }
-    renderSizeSelect.value = String(this.renderSize);
-    renderSizeSelect.addEventListener('change', () => {
-      const next = parseInt(renderSizeSelect.value, 10);
-      this.applyRenderSize(next);
-      renderSizeSelect.value = String(this.renderSize);
-    });
     this.exportControls = new ExportControls({
       onChange: () => {
+        const size = this.renderSize;
+        if (this.previewCanvas.width !== size || this.previewCanvas.height !== size) {
+          this.previewCanvas.width = size;
+          this.previewCanvas.height = size;
+          bus.emit(Events.RENDER_REQUEST, null);
+        }
         this.saveLayoutSettings();
         this.syncDownloadBtn();
       },
     });
     const previewStage = el('div', { className: 'preview-stage' }, [
-      el('div', { className: 'preview-controls' }, [renderSizeSelect, this.exportControls.element]),
+      el('div', { className: 'preview-controls' }, [this.exportControls.element]),
       this.previewCanvas,
     ]);
     this.metaEl = el('div', { className: 'meta', id: 'meta' });
@@ -1543,7 +1536,7 @@ export class App {
         frameCanvas.height = FULL;
         await renderAll(frameCanvas);
 
-        const outCanvas = buildExportCanvas(frameCanvas, unionBounds, FULL);
+        const outCanvas = buildExportCanvas(frameCanvas, unionBounds);
 
         renderedFrames.push({
           canvas: outCanvas,
@@ -5464,36 +5457,11 @@ export class App {
     }
   }
 
-  private normalizeRenderSize(value: number): number {
-    if (!Number.isFinite(value)) return this.RENDER_SIZE_PRESETS[0];
-    let closest: number = this.RENDER_SIZE_PRESETS[0];
-    let bestDelta = Math.abs(value - closest);
-    for (const preset of this.RENDER_SIZE_PRESETS) {
-      const delta = Math.abs(value - preset);
-      if (delta < bestDelta) {
-        bestDelta = delta;
-        closest = preset;
-      }
-    }
-    return closest;
-  }
-
   private applyLayoutCssVars(): void {
     const root = document.documentElement.style;
     root.setProperty('--toolbar-h', `${this.toolbarHeight}px`);
     root.setProperty('--col-layers-w', `${this.layersWidth}px`);
     root.setProperty('--col-browser-w', `${this.assetsWidth}px`);
-  }
-
-  private applyRenderSize(size: number): void {
-    const next = this.normalizeRenderSize(size);
-    this.renderSize = next;
-    if (this.previewCanvas) {
-      this.previewCanvas.width = next;
-      this.previewCanvas.height = next;
-      bus.emit(Events.RENDER_REQUEST, null);
-    }
-    this.saveLayoutSettings();
   }
 
   private isMobileMode(): boolean {
@@ -5530,14 +5498,13 @@ export class App {
         assetsWidth?: number;
         assetsThumbZoom?: number;
         renderSize?: number;
-        exportSettings?: Partial<ExportSettings>;
+        exportSettings?: Partial<ExportSettings> & { sizeMode?: string; sizePreset?: number };
       };
       if (typeof parsed.toolbarHeight === 'number') this.toolbarHeight = this.clampToolbarHeight(parsed.toolbarHeight);
       if (typeof parsed.layersWidth === 'number') this.layersWidth = this.clampLayersWidth(parsed.layersWidth);
       if (typeof parsed.assetsWidth === 'number') this.assetsWidth = this.clampAssetsWidth(parsed.assetsWidth);
       if (typeof parsed.assetsThumbZoom === 'number') this.assetsThumbZoom = this.clampAssetsThumbZoom(parsed.assetsThumbZoom);
-      if (typeof parsed.renderSize === 'number') this.renderSize = this.normalizeRenderSize(parsed.renderSize);
-      applyPersistedExportSettings(parsed.exportSettings);
+      applyPersistedExportSettings(parsed.exportSettings, parsed.renderSize);
     } catch {
       // Ignore invalid persisted layout payloads
     }
@@ -5550,7 +5517,6 @@ export class App {
         layersWidth: this.layersWidth,
         assetsWidth: this.assetsWidth,
         assetsThumbZoom: this.assetsThumbZoom,
-        renderSize: this.renderSize,
         exportSettings: serializeExportSettings(),
       }));
     } catch {
@@ -6817,7 +6783,7 @@ export class App {
 
       const sizeMap = await this.buildCompositeSizeMap();
       const bounds = this.computeCompositeBounds(sizeMap, FULL, SAFE_PAD);
-      return buildExportCanvas(source, bounds, FULL);
+      return buildExportCanvas(source, bounds);
     }
 
     private async downloadPNG(statusEl: HTMLElement = this.downloadProgress): Promise<void> {
@@ -6946,7 +6912,7 @@ export class App {
           }
         }
 
-        const frameOut = buildExportCanvas(outCanvas, bounds, FULL);
+        const frameOut = buildExportCanvas(outCanvas, bounds);
         const frameDelay = Number.isFinite(primaryFrames[i]?.delay) ? primaryFrames[i].delay : this.DEFAULT_ANIM_FRAME_DELAY;
         renderedFrames.push({ canvas: frameOut, delay: frameDelay });
       }
