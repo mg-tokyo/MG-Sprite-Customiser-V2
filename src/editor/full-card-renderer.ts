@@ -4,7 +4,7 @@ import { state } from '../state/store';
 import { spriteLoader } from '../api/sprite-loader';
 import type { SpriteFrame } from '../api/types';
 import { ensureFontLoaded, MG_FONTS } from './font-data';
-import { applyMutations, spriteToCanvas } from '../renderer/mutation-engine';
+import { applyMutations, spriteToCanvas } from '../../mg-sprite-render/src';
 
 // ---- Layout constants (from live bundle: main.txt) ----
 const RH = 88;

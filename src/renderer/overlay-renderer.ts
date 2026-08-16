@@ -1,4 +1,4 @@
-import { calcOverlayPosition } from './icon-layout';
+import { calcOverlayPosition } from '../../mg-sprite-render/src';
 
 /**
  * Composite a tall plant overlay onto the base sprite canvas.

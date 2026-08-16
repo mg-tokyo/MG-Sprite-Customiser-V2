@@ -4,16 +4,18 @@ import { state } from '../state/store';
 // Set window.__MG_DEBUG_RENDER = true in the browser console to enable positioning logs.
 declare global { interface Window { __MG_DEBUG_RENDER?: boolean; } }
 import { spriteLoader } from '../api/sprite-loader';
-import { spriteToCanvas, applyMutations } from './mutation-engine';
-import { renderCache, RenderCache } from './render-cache';
-import { MUTATION_META, FILTERS } from './mutation-defs';
-import { resolveActiveMutations } from './mutation-defs';
 import {
+  spriteToCanvas,
+  applyMutations,
+  MUTATION_META,
+  FILTERS,
+  resolveActiveMutations,
   computeIconLayout,
   findIconKey,
   getIconAnchor,
   isTallKey,
-} from './icon-layout';
+} from '../../mg-sprite-render/src';
+import { renderCache, RenderCache } from './render-cache';
 import type { SpriteFrame } from '../api/types';
 import { mapWithConcurrency } from '../utils/async';
 

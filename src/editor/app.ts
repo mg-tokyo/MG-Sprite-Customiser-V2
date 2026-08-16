@@ -1,8 +1,8 @@
 import { state, undo, redo, setActiveSlot, updateSlot, updateSlotSilent, beginBatchUpdate, getActiveSlot, clearSlots, reorderSlots, pushUndo, addSlot, MAX_SLOTS, runWithSingleUndo, setHistoryMetaHandlers, refreshBlobUrlTracking } from '../state/store';
-import { listSavedScenes, saveNamedScene, deleteNamedScene, exportSceneJson, importSceneJson } from '../state/persistence';
+import { listSavedScenes, saveNamedScene, deleteNamedScene, exportSceneJson, importSceneJson, getFilteredSlotSummary } from '../state/persistence';
 import type { Slot, TextData, FullCardData, FullCardType, FullCardRarity, FullCardAbilityEntry, FullCardSpriteSlot, PetBarData, PetBarKind } from '../state/store';
 import { initTheme, toggleTheme } from './theme';
-import { FILTERS } from '../renderer/mutation-defs';
+import { FILTERS } from '../../mg-sprite-render/src';
 import { renderAll, renderSlot } from '../renderer/canvas-renderer';
 import { renderCache, RenderCache } from '../renderer/render-cache';
 import { bus, Events } from '../utils/events';
@@ -11,7 +11,7 @@ import { decodeGif } from '../gif/decoder';
 import { FrameScheduler } from '../gif/frame-scheduler';
 import { encodeGif } from '../gif/encoder';
 import { clampDisplayText, setMetaLine } from '../utils/safe-text';
-import { applyMutations } from '../renderer/mutation-engine';
+import { applyMutations } from '../../mg-sprite-render/src';
 import { CustomDropdown } from './custom-dropdown';
 import { renderThumb } from './thumbnail';
 import type { DropdownItem } from './custom-dropdown';
@@ -7435,6 +7435,39 @@ export class App {
         URL.revokeObjectURL(url);
       });
 
+      const exportQpmBtn = el('button', { className: 'btn-sm', textContent: 'Export (QPM v1)' }) as HTMLButtonElement;
+      exportQpmBtn.title = 'Export sprite-only slots for QPM Tower Defense custom designs';
+      exportQpmBtn.addEventListener('click', () => {
+        const summary = getFilteredSlotSummary(scene);
+        if (summary.keptSpriteCount === 0) {
+          alert('No sprite slots to export. QPM v1 only accepts sprite slots.');
+          return;
+        }
+        const s = summary.skipped;
+        const skippedTotal = s.text + s.fullCard + s.cosmetic + s.custom;
+        if (skippedTotal > 0) {
+          const parts: string[] = [];
+          if (s.text) parts.push(`${s.text} text`);
+          if (s.fullCard) parts.push(`${s.fullCard} full-card`);
+          if (s.cosmetic) parts.push(`${s.cosmetic} cosmetic`);
+          if (s.custom) parts.push(`${s.custom} custom`);
+          const proceed = confirm(
+            `Exporting ${summary.keptSpriteCount} sprite slot(s) for QPM.\n` +
+            `Skipping ${parts.join(' + ')} slot(s) (QPM v1 accepts sprite slots only).\n\n` +
+            `Continue?`,
+          );
+          if (!proceed) return;
+        }
+        const json = exportSceneJson(index, { forQpmV1: true });
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${scene.name.replace(/[^a-z0-9_-]/gi, '_')}.mgscene.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+
       const deleteBtn = el('button', { className: 'btn-sm danger-sm', textContent: '\u00d7' }) as HTMLButtonElement;
       deleteBtn.addEventListener('click', () => {
         deleteNamedScene(index);
@@ -7455,7 +7488,7 @@ export class App {
           el('span', { className: 'scene-item-name', textContent: scene.name }),
           el('span', { className: 'scene-item-date', textContent: dateStr }),
         ]),
-        el('div', { className: 'scene-item-actions' }, [loadBtn, exportBtn, deleteBtn]),
+        el('div', { className: 'scene-item-actions' }, [loadBtn, exportBtn, exportQpmBtn, deleteBtn]),
       ]);
       this.scenesListEl.append(item);
     });

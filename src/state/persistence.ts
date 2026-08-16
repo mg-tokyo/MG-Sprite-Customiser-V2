@@ -1,4 +1,5 @@
 import { MAX_SLOTS, refreshBlobUrlTracking, state, type Slot } from './store';
+import { RENDERER_VERSION } from '../../mg-sprite-render/src';
 
 const STORAGE_KEY = 'mgsc_editor_state';
 const SCHEMA_VERSION = 5; // Bump to invalidate stale persisted data
@@ -457,11 +458,62 @@ export function deleteNamedScene(index: number): void {
   }
 }
 
-export function exportSceneJson(sceneIndex: number): string {
+export interface FilteredSlotSummary {
+  keptSpriteCount: number;
+  skipped: { text: number; fullCard: number; cosmetic: number; custom: number };
+}
+
+export function getFilteredSlotSummary(scene: SavedScene): FilteredSlotSummary {
+  const skipped = { text: 0, fullCard: 0, cosmetic: 0, custom: 0 };
+  let kept = 0;
+  for (const s of scene.slots) {
+    if (s.type === 'sprite') { kept += 1; continue; }
+    if (s.type === 'text') skipped.text += 1;
+    else if (s.type === 'full-card') skipped.fullCard += 1;
+    else if (s.type === 'cosmetic') skipped.cosmetic += 1;
+    else if (s.type === 'custom') skipped.custom += 1;
+  }
+  return { keptSpriteCount: kept, skipped };
+}
+
+// Pure so the QPM v1 serialization can be unit-tested without a localStorage stub.
+export function serializeSceneAsQpmV1(scene: SavedScene): string {
+  const spriteSlots = scene.slots.filter((s) => s.type === 'sprite' && s.visible !== false);
+  const normalized = spriteSlots.map((s, i) => ({
+    id: s.id,
+    type: 'sprite' as const,
+    spriteKey: s.spriteKey,
+    mutations: s.mutations ?? [],
+    tint: { color: s.customTint?.color ?? '#ffffff', opacity: s.customTint?.opacity ?? 0 },
+    transform: {
+      x: s.position?.x ?? 0,
+      y: s.position?.y ?? 0,
+      scale: s.scale ?? 1,
+      rotation: (s.rotation ?? 0) * (Math.PI / 180),
+      anchor: 'auto' as const,
+    },
+    options: { icons: s.options?.icons ?? true, overlays: s.options?.overlays ?? true },
+    visible: true,
+    zIndex: i,
+  }));
+
+  return JSON.stringify({
+    $schema: 'mgscene/v1',
+    name: scene.name,
+    createdAt: new Date().toISOString(),
+    rendererVersion: RENDERER_VERSION,
+    capabilities: ['sprite'],
+    canvas: { width: 256, height: 256, originAnchor: 'top-left' },
+    slots: normalized,
+  }, null, 2);
+}
+
+export function exportSceneJson(sceneIndex: number, opts?: { forQpmV1?: boolean }): string {
   const scenes = listSavedScenes();
   const scene = scenes[sceneIndex];
   if (!scene) return '{}';
-  return JSON.stringify(scene, null, 2);
+  if (!opts?.forQpmV1) return JSON.stringify(scene, null, 2);
+  return serializeSceneAsQpmV1(scene);
 }
 
 export function importSceneJson(json: string): SceneImportResult {

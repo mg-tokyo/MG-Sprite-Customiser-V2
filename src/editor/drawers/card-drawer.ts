@@ -1,5 +1,5 @@
 import { el } from '../../utils/dom';
-import { FILTERS } from '../../renderer/mutation-defs';
+import { FILTERS } from '../../../mg-sprite-render/src';
 import type { FullCardRarity } from '../../state/store';
 
 // ── Mutation chip colors (exported so app.ts and inspector can reuse) ──────────

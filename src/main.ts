@@ -3,7 +3,8 @@ import { state } from './state/store';
 import { restoreState, saveState } from './state/persistence';
 import { bus, Events } from './utils/events';
 import { App } from './editor/app';
-import { clearSpriteIdCache } from './renderer/icon-layout';
+import { clearSpriteIdCache, setSpriteCatalogProvider } from '../mg-sprite-render/src';
+import type { SpriteFrame } from './api/types';
 import { clampDisplayText } from './utils/safe-text';
 
 async function init(): Promise<void> {
@@ -22,7 +23,20 @@ async function init(): Promise<void> {
     state.gameData = gameData;
     state.spriteData = spriteData;
     state.cosmeticsData = cosmeticsData;
-    clearSpriteIdCache(); // Rebuild icon lookup set from new data
+
+    // Wire sprite catalog provider so mg-sprite-render's findIconKey/getIconAnchor
+    // can resolve sprite ids against loaded spriteData without depending on customiser state.
+    const spriteIndex = new Map<string, SpriteFrame>();
+    for (const cat of spriteData.categories) {
+      for (const entry of cat.items) {
+        if (entry.type === 'frame') spriteIndex.set(entry.id, entry);
+      }
+    }
+    setSpriteCatalogProvider({
+      has: (id) => spriteIndex.has(id),
+      getAnchor: (id) => spriteIndex.get(id)?.anchor ?? null,
+    });
+    clearSpriteIdCache();
 
     // Extract version
     for (const m of Object.values(gameData.mutations)) {
