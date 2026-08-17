@@ -271,6 +271,7 @@ function normalizeSlot(rawSlot: unknown, index: number): Slot {
   base.rotation = clampNumber(raw.rotation, -360, 360, 0);
   base.visible = typeof raw.visible === 'boolean' ? raw.visible : true;
   base.locked = typeof raw.locked === 'boolean' ? raw.locked : false;
+  if (raw.role === 'base') base.role = 'base';
   base.isAnimated = typeof raw.isAnimated === 'boolean' ? raw.isAnimated : false;
 
   if (raw.bloblingAnimId != null) {
@@ -484,6 +485,8 @@ export function serializeSceneAsQpmV1(scene: SavedScene): string {
   const normalized = spriteSlots.map((s, i) => ({
     id: s.id,
     type: 'sprite' as const,
+    // QPM TD reads `role: 'base'` as the tower footing (anchor) slot.
+    ...(s.role === 'base' ? { role: 'base' as const } : {}),
     spriteKey: s.spriteKey,
     mutations: s.mutations ?? [],
     tint: { color: s.customTint?.color ?? '#ffffff', opacity: s.customTint?.opacity ?? 0 },

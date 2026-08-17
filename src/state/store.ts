@@ -150,6 +150,8 @@ export interface Slot {
   rotation: number;
   visible: boolean;
   locked: boolean;
+  /** 'base' marks the tower footing for QPM Tower Defense custom designs (at most one per scene). */
+  role?: 'base';
   cosmeticLayers?: Record<string, string>;
   /** Blobling rig: animation ID to apply (e.g. 'animation/Blobling/Walk'). */
   bloblingAnimId?: string;

@@ -29,6 +29,17 @@ function makeBaseScene() {
 }
 
 describe('scene import hardening', () => {
+  it('preserves role:"base" and drops any other role value', () => {
+    const scene = makeBaseScene();
+    (scene.slots[0] as Slot & { role?: unknown }).role = 'base';
+    const withBad = { ...scene, slots: [scene.slots[0], { ...scene.slots[0], role: 'evil' }] };
+    const result = importSceneJson(JSON.stringify(withBad));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.slots[0].role).toBe('base');
+    expect(result.scene.slots[1]).not.toHaveProperty('role');
+  });
+
   it('accepts legacy v1 scenes and normalizes to v2', () => {
     const scene = makeBaseScene();
     const result = importSceneJson(JSON.stringify(scene));
@@ -105,6 +116,22 @@ describe('serializeSceneAsQpmV1', () => {
     expect(parsed.slots).toHaveLength(2);
     expect(parsed.slots.every((s: { type: string }) => s.type === 'sprite')).toBe(true);
     expect(parsed.slots.map((s: { id: string }) => s.id)).toEqual(['s1', 's2']);
+  });
+
+  it('emits role:"base" only on the flagged slot', () => {
+    const scene: SavedScene = {
+      _v: 2,
+      name: 'Base',
+      savedAt: 0,
+      activeSlotIndex: 0,
+      slots: [
+        makeSlot({ id: 'ammo', spriteKey: 'sprite/decor/MarbleKnight', rotation: 90, scale: 0.4 }),
+        makeSlot({ id: 'foot', spriteKey: 'sprite/decor/MarbleKnight', role: 'base' }),
+      ],
+    };
+    const parsed = JSON.parse(serializeSceneAsQpmV1(scene));
+    expect(parsed.slots[0]).not.toHaveProperty('role');
+    expect(parsed.slots[1].role).toBe('base');
   });
 
   it('converts rotation from degrees to radians', () => {

@@ -645,9 +645,13 @@ export class App {
     optIcons.checked = true;
     const optOverlays = el('input', { type: 'checkbox', id: 'optOverlays' }) as HTMLInputElement;
     optOverlays.checked = true;
+    const optTdBase = el('input', { type: 'checkbox', id: 'optTdBase' }) as HTMLInputElement;
+    const tdBaseLabel = this.makeCheckLabel('TD tower base', optTdBase);
+    tdBaseLabel.title = 'Marks this layer as the tower footing for QPM Tower Defense custom designs (one per scene). Exported as role:"base".';
     this.optionsDiv = el('div', { className: 'toggles' }, [
       this.makeCheckLabel('Icons', optIcons),
       this.makeCheckLabel('Tall overlays', optOverlays),
+      tdBaseLabel,
     ]);
     const applySharedOptions = (): void => {
       beginBatchUpdate();
@@ -660,6 +664,16 @@ export class App {
     };
     optIcons.addEventListener('change', applySharedOptions);
     optOverlays.addEventListener('change', applySharedOptions);
+    // Radio semantics: at most one base slot per scene, always the active slot.
+    optTdBase.addEventListener('change', () => {
+      beginBatchUpdate();
+      const active = state.activeSlotIndex;
+      state.slots.forEach((slot, i) => {
+        if (optTdBase.checked && i === active) slot.role = 'base';
+        else delete slot.role;
+      });
+      bus.emit(Events.SLOT_CHANGED, null);
+    });
 
     this.scaleLabel = el('label', { textContent: 'Scale' });
     this.scaleInput = el('input', {
@@ -757,6 +771,7 @@ export class App {
       const slot = getActiveSlot();
       optIcons.checked = slot.options.icons;
       optOverlays.checked = slot.options.overlays;
+      optTdBase.checked = slot.role === 'base';
       this.rotationInput.value = String(slot.rotation);
       this.customColor.value = slot.customTint.color;
       this.customOpacity.value = String(slot.customTint.opacity);
@@ -5258,6 +5273,9 @@ export class App {
 
       // Slot number
       const numEl = el('span', { className: 'slot-num', textContent: String(i + 1) });
+      const baseEl = slot.role === 'base'
+        ? el('span', { className: 'slot-base-badge', textContent: 'B', title: 'TD tower base (anchor)' })
+        : null;
 
       // Delete button
       const delBtn = el('button', { className: 'slot-delete', textContent: '\u00D7', title: 'Remove slot' }) as HTMLButtonElement;
@@ -5273,6 +5291,7 @@ export class App {
         title: hasContent ? (slot.spriteKey.split('/').pop() ?? String(i + 1)) : String(i + 1),
       });
       tile.append(thumb, badge, numEl, delBtn);
+      if (baseEl) tile.append(baseEl);
       if (!hasContent) {
         const plus = el('span', { className: 'slot-empty-plus', textContent: '+' });
         tile.append(plus);

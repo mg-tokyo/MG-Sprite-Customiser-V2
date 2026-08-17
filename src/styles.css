@@ -369,6 +369,19 @@ body {
   pointer-events: none;
   line-height: 1;
 }
+.slot-base-badge {
+  position: absolute;
+  bottom: 2px;
+  right: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 3px;
+  color: #fff;
+  background: var(--accent);
+  pointer-events: none;
+}
 .slot-delete {
   display: none;
   position: absolute;
