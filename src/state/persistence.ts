@@ -478,7 +478,9 @@ export function getFilteredSlotSummary(scene: SavedScene): FilteredSlotSummary {
 
 // Pure so the QPM v1 serialization can be unit-tested without a localStorage stub.
 export function serializeSceneAsQpmV1(scene: SavedScene): string {
-  const spriteSlots = scene.slots.filter((s) => s.type === 'sprite' && s.visible !== false);
+  const spriteSlots = scene.slots.filter(
+    (s) => s.type === 'sprite' && s.visible !== false && typeof s.spriteKey === 'string' && s.spriteKey !== '',
+  );
   const normalized = spriteSlots.map((s, i) => ({
     id: s.id,
     type: 'sprite' as const,

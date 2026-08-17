@@ -125,6 +125,23 @@ describe('serializeSceneAsQpmV1', () => {
     expect(parsed.slots[0].zIndex).toBe(0);
     expect(parsed.slots[1].zIndex).toBe(1);
   });
+
+  it('filters out placeholder slots with empty spriteKey', () => {
+    const scene: SavedScene = {
+      _v: 2,
+      name: 'WithEmpties',
+      savedAt: 0,
+      activeSlotIndex: 0,
+      slots: [
+        makeSlot({ id: 'real', spriteKey: 'sprite/plants/Carrot' }),
+        makeSlot({ id: 'empty', spriteKey: '' }),
+        makeSlot({ id: 'real2', spriteKey: 'sprite/pets/Cat' }),
+      ],
+    };
+    const parsed = JSON.parse(serializeSceneAsQpmV1(scene));
+    expect(parsed.slots).toHaveLength(2);
+    expect(parsed.slots.map((s: { id: string }) => s.id)).toEqual(['real', 'real2']);
+  });
 });
 
 describe('getFilteredSlotSummary', () => {
